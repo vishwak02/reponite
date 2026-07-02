@@ -63,3 +63,7 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ✓ `query.GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, error)`
 - ✓ `query.SearchName(s Store, repo, ref, substr string) []SearchHit`
 - ✓ types `RepoRef`, `Meta`, `CompatReport`, `DiffReport`, `SearchHit`
+
+## interfaces — output (✓)
+- ✓ `interfaces.CompatJSON / DiffJSON / RootCauseJSON / GrepJSON / SearchJSON` — JSON envelope (§10.3) with lowercase keys + `_meta`, decoupled from internal types
+- ✓ `cmd/reponite demo` — in-memory end-to-end run of compat/rootcause/grep

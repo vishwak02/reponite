@@ -5,7 +5,7 @@ interface index pointer, session log. Resume from here — do not re-read the re
 
 ## Cursor
 - Milestone: **M1 — structural core (in progress)**. Pure moat kernel done.
-- Last completed: **query coordinators** — CompatSymbol/DiffRefsBy/RootCauseBy/GrepRepo/SearchName over Store, with _meta; end-to-end vs storage.Mem. Full command logic verified in-sandbox (86 tests).
+- Last completed: **CLI + JSON output** — interfaces/output.go envelopes + working `reponite demo` (compat/rootcause/grep end-to-end from the binary). 89 tests; demo smoke-verified.
 - **Next: M1 adapters (compiled on-machine).** SQLite `Store` (schema/migrate/nodes/edges/paths) + tree-sitter parser + resolver — written in-sandbox, compiled on a real machine / CI (module proxy blocked here). Then delta wiring (S1.6) and grep (S1.7). The pure moat path is complete and in-sandbox-verified end to end: canon + hashes + behavior pass + compat/diff verdicts (50 tests). Remaining work is the external-dependency adapters that feed these with real data.
 
 ## Session protocol (fixed)
@@ -70,3 +70,4 @@ See `docs/adr/ADR-000-interface-index.md`. Adapter contract: `docs/adapters/tree
 | M2-pure | content/manifest.go: Manifest + DiffManifests (set-op), Dedup/UniqueBlobs (storage ∝ unique content), UnreferencedBlobs (GC mark); 7 tests | green |
 | Store seam | query/store.go (Store interface) + storage/mem.go (pure in-memory impl, SymbolRecord, Put*); end-to-end tests feed store -> Compat/Diff/RootCause; 6 tests | green |
 | coordinators | query/coordinator.go: CompatSymbol/DiffRefsBy/RootCauseBy/GrepRepo/SearchName over Store + Meta envelope; end-to-end query_test vs storage.Mem; 6 tests | green |
+| CLI+output | interfaces/output.go (CompatJSON/DiffJSON/RootCauseJSON/GrepJSON/SearchJSON) + cmd/reponite demo; 3 tests + demo smoke | green |

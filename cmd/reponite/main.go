@@ -1,7 +1,7 @@
 // Command reponite is the CLI entry point for the ref-aware code intelligence
-// server. This is the S0.1 scaffold: the command router exists and `version`
-// works; every other subcommand is a placeholder wired up in a later build
-// session. See PROGRESS.md for the session map.
+// server. `version` and `demo` work today; the index-backed commands light up
+// once the SQLite store + tree-sitter parser adapters are compiled in. See
+// PROGRESS.md for the session map.
 package main
 
 import (
@@ -22,6 +22,8 @@ func main() {
 			version.Version, version.NormVer, version.GoTarget)
 	case "help", "-h", "--help":
 		usage()
+	case "demo":
+		runDemo()
 	case "init", "index", "search", "diff", "compat", "brief", "rootcause",
 		"impact", "ximpact", "why", "arch", "refs", "sync", "status", "gc",
 		"watch", "mcp", "serve", "setup":
@@ -34,8 +36,8 @@ func main() {
 }
 
 func notImplemented(cmd string) {
-	fmt.Fprintf(os.Stderr, "reponite %s: not yet implemented (scaffold stage S0.1).\n", cmd)
-	fmt.Fprintln(os.Stderr, "See PROGRESS.md for the build session map.")
+	fmt.Fprintf(os.Stderr, "reponite %s: needs an index backend (SQLite store + tree-sitter parser), not in this build.\n", cmd)
+	fmt.Fprintln(os.Stderr, "Try `reponite demo` for an in-memory end-to-end run. See PROGRESS.md.")
 	os.Exit(3)
 }
 
@@ -46,6 +48,7 @@ usage: reponite <command> [flags]
 
 available now:
   version              print version and identity constants
+  demo                 in-memory end-to-end run (compat / rootcause / grep as JSON)
 
 planned (see PROGRESS.md build map):
   init index search    structural core         (M1)
