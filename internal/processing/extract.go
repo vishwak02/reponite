@@ -87,6 +87,21 @@ func extractTypes(decl content.AST, normVer int, doc []byte) []Symbol {
 	return out
 }
 
+// goBuiltins are Go predeclared functions and type-conversion identifiers that
+// look like calls but are not repo symbols; excluding them keeps the call graph
+// (and thus context and behavior_hash) focused on real dependencies. min/max are
+// omitted deliberately — they were ordinary function names before Go 1.21, so
+// filtering them could drop real calls.
+var goBuiltins = map[string]bool{
+	"append": true, "cap": true, "clear": true, "close": true, "complex": true,
+	"copy": true, "delete": true, "imag": true, "len": true, "make": true,
+	"new": true, "panic": true, "print": true, "println": true, "real": true, "recover": true,
+	"bool": true, "string": true, "error": true, "any": true, "rune": true, "byte": true,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true, "uintptr": true,
+	"float32": true, "float64": true, "complex64": true, "complex128": true,
+}
+
 // extractCallees returns the deduped, source-ordered names invoked in a body,
 // via name-based resolution (last identifier of each call's function expr).
 func extractCallees(body content.AST) []string {
@@ -97,7 +112,7 @@ func extractCallees(body content.AST) []string {
 		if len(kids) == 0 {
 			continue
 		}
-		if name := trailingIdent(kids[0]); name != "" && !seen[name] {
+		if name := trailingIdent(kids[0]); name != "" && !goBuiltins[name] && !seen[name] {
 			seen[name] = true
 			out = append(out, name)
 		}

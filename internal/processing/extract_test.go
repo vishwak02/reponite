@@ -121,3 +121,15 @@ func TestExtractDocResetsOnNonComment(t *testing.T) {
 		t.Fatalf("doc must reset after a non-comment sibling: %+v", f)
 	}
 }
+
+func TestExtractCalleesFiltersBuiltins(t *testing.T) {
+	body := comp("block",
+		comp("expression_statement", call("append")),
+		comp("expression_statement", call("len")),
+		comp("expression_statement", call("int")),
+		comp("expression_statement", call("validateCard")),
+	)
+	if got := extractCallees(body); len(got) != 1 || got[0] != "validateCard" {
+		t.Fatalf("builtins/conversions must be filtered, kept: %v", got)
+	}
+}
