@@ -15,7 +15,7 @@ clean:
 
 # Full CLI with all adapters (-mod=mod self-heals go.sum for tag-gated deps):
 cli:
-	go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/mark3labs/mcp-go
+	go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/mark3labs/mcp-go github.com/fsnotify/fsnotify
 	go build -mod=mod -tags "sqlite treesitter mcp" -o bin/reponite ./cmd/reponite
 
 # Individual adapter checks (mirror CI):
@@ -29,5 +29,5 @@ mcp:
 	go get modernc.org/sqlite github.com/mark3labs/mcp-go
 	go build -mod=mod -tags "sqlite mcp" ./...
 e2e:
-	go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
+	go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/fsnotify/fsnotify
 	go test -mod=mod -tags "sqlite treesitter" ./internal/e2e/

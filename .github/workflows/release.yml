@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/mark3labs/mcp-go
+      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/mark3labs/mcp-go github.com/fsnotify/fsnotify
       - name: build
         env:
           CGO_ENABLED: '1'
