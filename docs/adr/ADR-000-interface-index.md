@@ -42,3 +42,24 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ✓ `query.DiffRefs(a, b map[string]SymbolRef) []SymbolChange` — added/removed/shape/behavior/unchanged, sorted
 - ✓ `query.RootCause(target string, from, to RefSnapshot) RootCauseResult` — drill-down to the mutation-site frontier (ext §8A); types SymbolFacts/Callee/RefSnapshot/Origin/OriginKind
 - ✓ `query.BuildTrigramIndex(files []File) *TrigramIndex` + `(*TrigramIndex).Grep(pattern string, opt GrepOptions) (GrepResult, error)` — trigram-prefiltered literal/regex search with enclosing-symbol fusion (ext §10A); types File/SymbolSpan/Match/GrepResult/GrepOptions
+
+## content — content-addressing set logic  (✓ M2-pure)
+- ✓ `content.Manifest{Ref, Commit string; Blobs []Hash}` + `.Hash()`
+- ✓ `content.DiffManifests(a, b Manifest) ManifestDiff` — diff as a set operation (§4.1)
+- ✓ `content.UniqueBlobs([]Manifest) []Hash` / `content.Dedup([]Manifest) DedupStats` — storage ∝ unique content
+- ✓ `content.UnreferencedBlobs(live []Manifest, stored []Hash) []Hash` — GC mark phase (§11.4)
+
+## query — Store seam (✓)
+- ✓ `query.Store` interface { Repos; Refs(repo); SymbolAt(repo,symbol,ref); SymbolsAt(repo,ref); Snapshot(repo,ref); Files(repo,ref); Manifest(repo,ref) } — read surface for the query layer
+
+## storage  (✓ in-memory; ⟳ sqlite adapter on-machine)
+- ✓ `storage.Mem` implements `query.Store`; `storage.SymbolRecord`; Put/PutFile/PutManifest population API
+- ⟳ `storage/sqlite` — SQLite adapter implementing `query.Store` (compiled on-machine)
+
+## query — coordinators (✓)
+- ✓ `query.CompatSymbol(s Store, origin RepoRef, symbol string, targets []RepoRef) (CompatReport, error)`
+- ✓ `query.DiffRefsBy(s Store, repo, from, to string) DiffReport`
+- ✓ `query.RootCauseBy(s Store, repo, target, from, to string) RootCauseResult`
+- ✓ `query.GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, error)`
+- ✓ `query.SearchName(s Store, repo, ref, substr string) []SearchHit`
+- ✓ types `RepoRef`, `Meta`, `CompatReport`, `DiffReport`, `SearchHit`

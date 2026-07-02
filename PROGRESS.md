@@ -5,7 +5,7 @@ interface index pointer, session log. Resume from here — do not re-read the re
 
 ## Cursor
 - Milestone: **M1 — structural core (in progress)**. Pure moat kernel done.
-- Last completed: **S1.7-pure** — grep matcher (trigram prefilter + regex + enclosing-symbol fusion), the retrieval-ladder base; query 24 tests green.
+- Last completed: **query coordinators** — CompatSymbol/DiffRefsBy/RootCauseBy/GrepRepo/SearchName over Store, with _meta; end-to-end vs storage.Mem. Full command logic verified in-sandbox (86 tests).
 - **Next: M1 adapters (compiled on-machine).** SQLite `Store` (schema/migrate/nodes/edges/paths) + tree-sitter parser + resolver — written in-sandbox, compiled on a real machine / CI (module proxy blocked here). Then delta wiring (S1.6) and grep (S1.7). The pure moat path is complete and in-sandbox-verified end to end: canon + hashes + behavior pass + compat/diff verdicts (50 tests). Remaining work is the external-dependency adapters that feed these with real data.
 
 ## Session protocol (fixed)
@@ -67,3 +67,6 @@ See `docs/adr/ADR-000-interface-index.md`. Adapter contract: `docs/adapters/tree
 | S3-pure | query/compat.go + query/diff.go: Oracle verdicts (absent/shape/behavior/compatible, confidence=min) + ref diff (added/removed/shape/behavior/unchanged, sorted); 9 tests | green |
 | S3-rootcause | query/rootcause.go: walk behavior-changed target to mutation-site frontier (text/signature/edge-set = origin vs propagation), confidence=min along path, external-callee note; 7 tests | green |
 | S1.7-pure | query/grep.go: trigram index + literal/regex search (trigram prefilter, no-atom full-scan fallback), enclosing-symbol fusion, limit truncation; 8 tests | green |
+| M2-pure | content/manifest.go: Manifest + DiffManifests (set-op), Dedup/UniqueBlobs (storage ∝ unique content), UnreferencedBlobs (GC mark); 7 tests | green |
+| Store seam | query/store.go (Store interface) + storage/mem.go (pure in-memory impl, SymbolRecord, Put*); end-to-end tests feed store -> Compat/Diff/RootCause; 6 tests | green |
+| coordinators | query/coordinator.go: CompatSymbol/DiffRefsBy/RootCauseBy/GrepRepo/SearchName over Store + Meta envelope; end-to-end query_test vs storage.Mem; 6 tests | green |
