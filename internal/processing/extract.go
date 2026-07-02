@@ -8,6 +8,7 @@ package processing
 
 import (
 	"bytes"
+	"strings"
 
 	"github.com/reponite/reponite/internal/content"
 )
@@ -23,7 +24,7 @@ type Symbol struct {
 }
 
 func isCommentType(t string) bool {
-	return t == "comment" || t == "line_comment" || t == "block_comment"
+	return strings.Contains(t, "comment")
 }
 
 // ExtractGo returns the top-level symbols of a Go source_file AST. Doc comments

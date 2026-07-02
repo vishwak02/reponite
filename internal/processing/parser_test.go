@@ -8,32 +8,34 @@ import (
 	"github.com/reponite/reponite/internal/content"
 )
 
-// Validates the adapter + canon() end to end on real tree-sitter Go trees.
-func TestParseGoCanonIntegration(t *testing.T) {
-	withCommentSpaces := []byte("package p\n\n// Add sums two ints.\nfunc Add(a, b int) int { return a + b }\n")
-	reformatted := []byte("package p\nfunc Add(a,b int) int{return a+b}\n")
-	opChanged := []byte("package p\nfunc Add(a, b int) int { return a - b }\n")
-
-	root, err := ParseGo(withCommentSpaces)
+func canonOf(t *testing.T, src string) string {
+	root, err := ParseGo([]byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if root.Type() != "source_file" {
-		t.Fatalf("root type = %q, want source_file", root.Type())
-	}
+	return string(content.Canon(root, 1))
+}
 
-	c1 := content.Canon(root, 1)
-	if len(c1) == 0 {
+// Validates the adapter + canon() on real tree-sitter Go trees, one property per
+// assertion so a CI failure pinpoints the cause and prints the canon bytes.
+func TestParseGoCanonIntegration(t *testing.T) {
+	base := canonOf(t, "package p\nfunc Add(a, b int) int { return a + b }\n")
+	if len(base) == 0 {
 		t.Fatal("canon produced empty output")
 	}
 
-	r2, _ := ParseGo(reformatted)
-	if string(c1) != string(content.Canon(r2, 1)) {
-		t.Fatal("reformatting + comment removal must not change canon (reformat-invariance on real trees)")
+	// (1) whitespace-only reformat must not change canon (whitespace is not a node).
+	if got := canonOf(t, "package p\nfunc Add( a,b  int ) int {return a+b}\n"); got != base {
+		t.Fatalf("whitespace-only reformat changed canon:\n base=%q\n got =%q", base, got)
 	}
 
-	r3, _ := ParseGo(opChanged)
-	if string(c1) == string(content.Canon(r3, 1)) {
-		t.Fatal("operator change (+ -> -) must change canon")
+	// (2) a doc comment must be dropped from canon (differs from base only by the comment).
+	if got := canonOf(t, "package p\n// Add sums two ints.\nfunc Add(a, b int) int { return a + b }\n"); got != base {
+		t.Fatalf("doc comment leaked into canon (not dropped):\n base=%q\n got =%q", base, got)
+	}
+
+	// (3) an operator change must change canon.
+	if got := canonOf(t, "package p\nfunc Add(a, b int) int { return a - b }\n"); got == base {
+		t.Fatalf("operator change (+ -> -) did not change canon: %q", got)
 	}
 }

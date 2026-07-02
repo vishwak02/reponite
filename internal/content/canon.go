@@ -18,6 +18,7 @@ package content
 import (
 	"bytes"
 	"sort"
+	"strings"
 )
 
 // AST is the language-agnostic syntax node that canon() consumes. It never
@@ -35,7 +36,9 @@ type AST interface {
 const unitSep = 0x1f
 
 func isComment(t string) bool {
-	return t == "comment" || t == "line_comment" || t == "block_comment"
+	// Match any grammar comment node type (comment, line_comment, block_comment,
+	// doc_comment, …) so canon drops docs regardless of the language label.
+	return strings.Contains(t, "comment")
 }
 
 // Canon returns the canonical byte string for a node under ruleset norm_ver.
