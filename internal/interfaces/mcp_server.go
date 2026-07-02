@@ -20,7 +20,7 @@ func ServeStdio(ts *ToolServer) error {
 	add := func(tool mcp.Tool) {
 		s.AddTool(tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			args := map[string]string{}
-			if m, ok := req.Params.Arguments.(map[string]interface{}); ok {
+			if m, ok := any(req.Params.Arguments).(map[string]interface{}); ok {
 				for k, v := range m {
 					if sv, ok := v.(string); ok {
 						args[k] = sv
