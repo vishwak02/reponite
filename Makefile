@@ -13,3 +13,9 @@ tidy:
 	go mod tidy
 clean:
 	rm -rf bin
+
+# Build/test the SQLite adapter (needs network for the module once):
+sqlite:
+	go get modernc.org/sqlite
+	go build -tags sqlite ./...
+	go test -tags sqlite ./internal/storage/sqlite/

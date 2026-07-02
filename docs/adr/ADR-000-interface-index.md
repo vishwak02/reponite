@@ -67,3 +67,6 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 ## interfaces — output (✓)
 - ✓ `interfaces.CompatJSON / DiffJSON / RootCauseJSON / GrepJSON / SearchJSON` — JSON envelope (§10.3) with lowercase keys + `_meta`, decoupled from internal types
 - ✓ `cmd/reponite demo` — in-memory end-to-end run of compat/rootcause/grep
+
+## storage/sqlite  (⟳ on-machine, `-tags sqlite`)
+- ⟳ `sqlite.Open(path string) (*Store, error)` — implements query.Store over modernc.org/sqlite (WAL); write API Put/PutFile/PutManifest/AddRef; behind `//go:build sqlite`. Default build excludes it (doc.go only). Verify: `make sqlite`.
