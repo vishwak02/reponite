@@ -16,6 +16,8 @@ jobs:
   sqlite:
     name: sqlite adapter (-tags sqlite)
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -28,6 +30,8 @@ jobs:
   treesitter:
     name: tree-sitter parser (-tags treesitter, CGO)
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -40,6 +44,8 @@ jobs:
   mcp:
     name: mcp server (-tags "sqlite mcp")
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -51,6 +57,8 @@ jobs:
   e2e:
     name: end-to-end (-tags "sqlite treesitter", CGO)
     runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

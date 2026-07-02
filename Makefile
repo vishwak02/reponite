@@ -13,21 +13,21 @@ tidy:
 clean:
 	rm -rf bin
 
-# Full CLI with all adapters (fetches modules once; needs a C toolchain for tree-sitter):
+# Full CLI with all adapters (-mod=mod self-heals go.sum for tag-gated deps):
 cli:
 	go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/mark3labs/mcp-go
-	go build -tags "sqlite treesitter mcp" -o bin/reponite ./cmd/reponite
+	go build -mod=mod -tags "sqlite treesitter mcp" -o bin/reponite ./cmd/reponite
 
 # Individual adapter checks (mirror CI):
 sqlite:
 	go get modernc.org/sqlite
-	go build -tags sqlite ./... && go test -tags sqlite ./internal/storage/sqlite/
+	go build -mod=mod -tags sqlite ./... && go test -mod=mod -tags sqlite ./internal/storage/sqlite/
 treesitter:
 	go get github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
-	go build -tags treesitter ./... && go test -tags treesitter ./internal/processing/
+	go build -mod=mod -tags treesitter ./... && go test -mod=mod -tags treesitter ./internal/processing/
 mcp:
 	go get modernc.org/sqlite github.com/mark3labs/mcp-go
-	go build -tags "sqlite mcp" ./...
+	go build -mod=mod -tags "sqlite mcp" ./...
 e2e:
 	go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
-	go test -tags "sqlite treesitter" ./internal/e2e/
+	go test -mod=mod -tags "sqlite treesitter" ./internal/e2e/
