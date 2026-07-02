@@ -22,16 +22,21 @@ That third tier is the whole point, and nothing else computes it. It falls out o
 ## Quickstart
 
 ```sh
-# from source (needs Go 1.22+):
-make cli                               # builds bin/reponite (sqlite + tree-sitter adapters)
-# or, once a release is tagged:
-go install github.com/vishwak02/reponite/cmd/reponite@latest
+# download a prebuilt binary from the Releases page (no Go needed), e.g. Linux:
+#   curl -L -o reponite https://github.com/vishwak02/reponite/releases/latest/download/reponite-linux-amd64
+#   chmod +x reponite && sudo mv reponite /usr/local/bin/
+# or build from source (needs Go 1.22+ and a C toolchain):
+make cli                               # builds bin/reponite (all adapters)
 
 reponite demo                          # in-memory end-to-end run — no repo needed
 reponite index .                       # index this repo's Go files at HEAD
 reponite index . v2.3.0                # index another ref
 reponite compat Charge                 # Charge's compatibility across indexed refs
 reponite grep validateCard             # trigram search; each hit fused with its symbol
+
+# use it from an AI agent (dogfooding):
+reponite setup .                       # register reponite as an MCP server for your agent
+reponite mcp .                         # (what the agent runs) serve the tools over stdio
 ```
 
 `reponite demo` prints the flagship verdict as JSON:

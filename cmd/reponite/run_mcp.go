@@ -5,9 +5,13 @@ package main
 import "github.com/vishwak02/reponite/internal/interfaces"
 
 func mcpCommand(args []string) {
-	st := openStore(".")
+	dir := "."
+	if len(args) > 0 {
+		dir = args[0]
+	}
+	st := openStore(dir)
 	defer st.Close()
-	ts := &interfaces.ToolServer{Store: st, Repo: repoName(".")}
+	ts := &interfaces.ToolServer{Store: st, Repo: repoName(dir)}
 	if err := interfaces.ServeStdio(ts); err != nil {
 		fail(err)
 	}

@@ -24,12 +24,14 @@ func main() {
 		usage()
 	case "demo":
 		runDemo()
+	case "setup":
+		setupCommand(os.Args[2:])
 	case "mcp":
 		mcpCommand(os.Args[2:])
 	case "index", "compat", "diff", "grep", "search":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "brief", "rootcause", "impact", "ximpact", "why", "arch",
-		"refs", "sync", "status", "gc", "watch", "serve", "setup":
+		"refs", "sync", "status", "gc", "watch", "serve":
 		notImplemented(os.Args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "reponite: unknown command %q\n\n", os.Args[1])
@@ -59,6 +61,7 @@ index-backed (build with `+"`make cli`"+`):
   diff <from> <to>     symbol delta between two refs
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
-  mcp                  serve the tools over MCP (stdio) for an AI agent
+  mcp [dir]            serve the tools over MCP (stdio) for an AI agent
+  setup [dir]         register reponite as an MCP server in your agent config
 `)
 }

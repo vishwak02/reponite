@@ -1,0 +1,31 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/mark3labs/mcp-go
+      - name: build
+        env:
+          CGO_ENABLED: '1'
+        run: go build -tags "sqlite treesitter mcp" -o "reponite-${{ matrix.goos }}-${{ matrix.goarch }}" ./cmd/reponite
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: reponite-${{ matrix.goos }}-${{ matrix.goarch }}
