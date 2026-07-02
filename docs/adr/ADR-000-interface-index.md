@@ -99,3 +99,9 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ✓ `interfaces.ContextJSON / RefsJSON`
 - ⟳ `interfaces.ServeStdio(*ToolServer) error` (`//go:build mcp`, github.com/mark3labs/mcp-go) — stdio MCP glue
 - ⟳ `reponite mcp` command (`//go:build sqlite && mcp`): open sqlite store → ToolServer → ServeStdio. cmd sqlite helpers in store_sqlite.go (`//go:build sqlite`). CI job `mcp` (-tags "sqlite mcp").
+
+## processing — multi-language engine (✓ pure)
+- ✓ `processing.LangRules` + `processing.RulesForExt(ext) (LangRules, bool)` — per-language node-type rules; registry keyed by file extension
+- ✓ rule tables: `GoRules`, `PythonRules`, `JavaScriptRules`, `TypeScriptRules`, `JavaRules`
+- ✓ `processing.Extract(root content.AST, r LangRules, normVer int) []Symbol` — generic engine (recurses into classes for nested methods); `ExtractGo` now wraps `Extract(…, GoRules, …)`
+- ⟳ grammar binding per language (parser layer, tagged) + IndexDir multi-extension + per-language CI parse tests; C/C++ (declarator names, NameByDesc) and HTML (structural tier) to follow

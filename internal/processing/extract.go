@@ -1,9 +1,9 @@
-// extract.go walks a parsed file's AST to produce top-level symbols with their
-// canonical signature/body forms and heuristic (name-based) callees — the input
-// to hashing and the behavior pass. It is PURE over the content.AST interface,
-// so it is unit-tested in-sandbox against a fake AST (ADR-018); the real tree is
-// produced by ParseGo (build tag treesitter). Name-based callee resolution is
-// the tree-sitter tier (medium confidence, §7); SCIP upgrades it later.
+// extract.go is the language-agnostic symbol/edge extractor. Extract walks a
+// content.AST per a LangRules table (lang.go): it collects function/method/type
+// declarations (descending into classes for nested methods), a body-independent
+// signature, canonical body, associated doc comments, and heuristic name-based
+// callees. Pure over content.AST, so it is unit-tested in-sandbox against fake
+// ASTs for each language; real grammars are bound in the parser layer (ADR-018).
 package processing
 
 import (
@@ -13,40 +13,50 @@ import (
 	"github.com/vishwak02/reponite/internal/content"
 )
 
-// Symbol is a top-level symbol extracted from a file, pre-hashing.
+// Symbol is a top-level (or nested) symbol extracted from a file, pre-hashing.
 type Symbol struct {
 	Name      string
 	Kind      string // function|method|type
-	Signature string // canonical, body-independent shape
-	CanonBody []byte // canonical body (nil for types)
-	Doc       []byte // associated doc comment(s)
+	Signature string
+	CanonBody []byte
+	Doc       []byte
 	Callees   []string
 }
 
-func isCommentType(t string) bool {
-	return strings.Contains(t, "comment")
-}
+func isCommentType(t string) bool { return strings.Contains(t, "comment") }
 
-// ExtractGo returns the top-level symbols of a Go source_file AST. Doc comments
-// are associated with the following declaration; a non-comment sibling resets
-// the pending doc (standard Go doc association).
-func ExtractGo(root content.AST, normVer int) []Symbol {
+// ExtractGo extracts Go symbols; delegates to the generic engine with GoRules.
+func ExtractGo(root content.AST, normVer int) []Symbol { return Extract(root, GoRules, normVer) }
+
+// Extract returns the symbols of an AST per the language rules. Declarations
+// nested in classes/types are found by descending into them; a doc comment is
+// associated with the declaration that immediately follows it.
+func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 	var out []Symbol
-	var doc [][]byte
-	for _, child := range root.Children() {
-		switch t := child.Type(); {
-		case isCommentType(t):
-			doc = append(doc, []byte(child.Text()))
-			continue
-		case t == "function_declaration":
-			out = append(out, extractFunc(child, "function", "identifier", normVer, joinDoc(doc)))
-		case t == "method_declaration":
-			out = append(out, extractFunc(child, "method", "field_identifier", normVer, joinDoc(doc)))
-		case t == "type_declaration":
-			out = append(out, extractTypes(child, normVer, joinDoc(doc))...)
+	var walk func(n content.AST)
+	walk = func(n content.AST) {
+		var doc [][]byte
+		for _, child := range n.Children() {
+			t := child.Type()
+			if isCommentType(t) {
+				doc = append(doc, []byte(child.Text()))
+				continue
+			}
+			switch {
+			case containsStr(r.FuncDecl, t):
+				out = append(out, extractCallable(child, "function", r, normVer, joinDoc(doc)))
+			case containsStr(r.MethodDecl, t):
+				out = append(out, extractCallable(child, "method", r, normVer, joinDoc(doc)))
+			case containsStr(r.TypeDecl, t):
+				out = append(out, typeSymbols(child, r, normVer, joinDoc(doc))...)
+				walk(child) // descend for nested methods (class/type bodies)
+			default:
+				walk(child)
+			}
+			doc = nil
 		}
-		doc = nil
 	}
+	walk(root)
 	return out
 }
 
@@ -57,62 +67,50 @@ func joinDoc(doc [][]byte) []byte {
 	return bytes.Join(doc, []byte("\n"))
 }
 
-func extractFunc(fn content.AST, kind, nameType string, normVer int, doc []byte) Symbol {
+func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte) Symbol {
 	var canonBody []byte
 	var callees []string
-	if body := firstChild(fn, "block"); body != nil {
+	if body := firstChildAny(fn, r.BodyTypes); body != nil {
 		canonBody = content.Canon(body, normVer)
-		callees = extractCallees(body)
+		callees = calleesWithRules(body, r)
 	}
 	return Symbol{
-		Name:      firstChildText(fn, nameType),
+		Name:      nameOf(fn, r),
 		Kind:      kind,
-		Signature: string(content.Canon(withoutChildType(fn, "block"), normVer)),
+		Signature: string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
 		CanonBody: canonBody,
 		Doc:       doc,
 		Callees:   callees,
 	}
 }
 
-func extractTypes(decl content.AST, normVer int, doc []byte) []Symbol {
-	var out []Symbol
-	for _, spec := range descendants(decl, "type_spec") {
-		out = append(out, Symbol{
-			Name:      firstChildText(spec, "type_identifier"),
-			Kind:      "type",
-			Signature: string(content.Canon(spec, normVer)),
-			Doc:       doc,
-		})
+func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbol {
+	if len(r.TypeSpec) > 0 {
+		var out []Symbol
+		for _, spec := range descendantsAny(decl, r.TypeSpec) {
+			out = append(out, Symbol{
+				Name: nameOfNode(spec, r.NameTypes, false), Kind: "type",
+				Signature: string(content.Canon(spec, normVer)), Doc: doc,
+			})
+		}
+		return out
 	}
-	return out
+	return []Symbol{{
+		Name: nameOf(decl, r), Kind: "type",
+		Signature: string(content.Canon(withoutChildTypes(decl, r.BodyTypes), normVer)), Doc: doc,
+	}}
 }
 
-// goBuiltins are Go predeclared functions and type-conversion identifiers that
-// look like calls but are not repo symbols; excluding them keeps the call graph
-// (and thus context and behavior_hash) focused on real dependencies. min/max are
-// omitted deliberately — they were ordinary function names before Go 1.21, so
-// filtering them could drop real calls.
-var goBuiltins = map[string]bool{
-	"append": true, "cap": true, "clear": true, "close": true, "complex": true,
-	"copy": true, "delete": true, "imag": true, "len": true, "make": true,
-	"new": true, "panic": true, "print": true, "println": true, "real": true, "recover": true,
-	"bool": true, "string": true, "error": true, "any": true, "rune": true, "byte": true,
-	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
-	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true, "uintptr": true,
-	"float32": true, "float64": true, "complex64": true, "complex128": true,
-}
-
-// extractCallees returns the deduped, source-ordered names invoked in a body,
-// via name-based resolution (last identifier of each call's function expr).
-func extractCallees(body content.AST) []string {
+// calleesWithRules returns deduped callee names invoked in a body (name-based).
+func calleesWithRules(body content.AST, r LangRules) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, call := range descendants(body, "call_expression") {
+	for _, call := range descendantsAny(body, r.CallTypes) {
 		kids := call.Children()
 		if len(kids) == 0 {
 			continue
 		}
-		if name := trailingIdent(kids[0]); name != "" && !goBuiltins[name] && !seen[name] {
+		if name := trailingIdent(kids[0], r.NameTypes); name != "" && !r.Builtins[name] && !seen[name] {
 			seen[name] = true
 			out = append(out, name)
 		}
@@ -120,30 +118,62 @@ func extractCallees(body content.AST) []string {
 	return out
 }
 
-// --- AST helpers (pure) ---
+// extractCallees is the Go-specific callee helper kept for existing tests.
+func extractCallees(body content.AST) []string { return calleesWithRules(body, GoRules) }
 
-func firstChild(n content.AST, typ string) content.AST {
+// --- generic AST helpers ---
+
+func containsStr(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func firstChildAny(n content.AST, types []string) content.AST {
 	for _, c := range n.Children() {
-		if c.Type() == typ {
+		if containsStr(types, c.Type()) {
 			return c
 		}
 	}
 	return nil
 }
 
-func firstChildText(n content.AST, typ string) string {
-	if c := firstChild(n, typ); c != nil {
-		return c.Text()
+func firstDescAny(n content.AST, types []string) content.AST {
+	for _, c := range n.Children() {
+		if containsStr(types, c.Type()) {
+			return c
+		}
+		if d := firstDescAny(c, types); d != nil {
+			return d
+		}
 	}
-	return ""
+	return nil
 }
 
-func descendants(n content.AST, typ string) []content.AST {
+func nameOf(n content.AST, r LangRules) string { return nameOfNode(n, r.NameTypes, r.NameByDesc) }
+
+func nameOfNode(n content.AST, types []string, byDesc bool) string {
+	var node content.AST
+	if byDesc {
+		node = firstDescAny(n, types)
+	} else {
+		node = firstChildAny(n, types)
+	}
+	if node == nil {
+		return ""
+	}
+	return node.Text()
+}
+
+func descendantsAny(n content.AST, types []string) []content.AST {
 	var out []content.AST
 	var walk func(content.AST)
 	walk = func(x content.AST) {
 		for _, c := range x.Children() {
-			if c.Type() == typ {
+			if containsStr(types, c.Type()) {
 				out = append(out, c)
 			}
 			walk(c)
@@ -153,19 +183,19 @@ func descendants(n content.AST, typ string) []content.AST {
 	return out
 }
 
-func trailingIdent(n content.AST) string {
-	ids := identLeaves(n)
+func trailingIdent(n content.AST, nameTypes []string) string {
+	ids := identLeaves(n, nameTypes)
 	if len(ids) == 0 {
 		return ""
 	}
 	return ids[len(ids)-1]
 }
 
-func identLeaves(n content.AST) []string {
+func identLeaves(n content.AST, nameTypes []string) []string {
 	var out []string
 	var walk func(content.AST)
 	walk = func(x content.AST) {
-		if t := x.Type(); t == "identifier" || t == "field_identifier" {
+		if containsStr(nameTypes, x.Type()) {
 			out = append(out, x.Text())
 			return
 		}
@@ -177,23 +207,25 @@ func identLeaves(n content.AST) []string {
 	return out
 }
 
-// filteredNode is a content.AST view that drops top-level children of one type,
-// used to canonicalize a declaration's signature independently of its body.
 type filteredNode struct {
 	content.AST
-	drop string
+	drop map[string]bool
 }
 
 func (f filteredNode) Children() []content.AST {
 	var out []content.AST
 	for _, c := range f.AST.Children() {
-		if c.Type() != f.drop {
+		if !f.drop[c.Type()] {
 			out = append(out, c)
 		}
 	}
 	return out
 }
 
-func withoutChildType(n content.AST, typ string) content.AST {
-	return filteredNode{AST: n, drop: typ}
+func withoutChildTypes(n content.AST, types []string) content.AST {
+	drop := make(map[string]bool, len(types))
+	for _, t := range types {
+		drop[t] = true
+	}
+	return filteredNode{AST: n, drop: drop}
 }
