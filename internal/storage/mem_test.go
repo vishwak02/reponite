@@ -3,8 +3,8 @@ package storage
 import (
 	"testing"
 
-	"github.com/reponite/reponite/internal/content"
-	"github.com/reponite/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 func rec(sym, sig, beh string, conf float64, callees ...string) SymbolRecord {

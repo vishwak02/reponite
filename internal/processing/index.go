@@ -7,9 +7,9 @@
 package processing
 
 import (
-	"github.com/reponite/reponite/internal/content"
-	"github.com/reponite/reponite/internal/query"
-	"github.com/reponite/reponite/internal/storage"
+	"github.com/vishwak02/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
 )
 
 // tsEdgeConfidence is the confidence of a name-based (tree-sitter tier) CALLS

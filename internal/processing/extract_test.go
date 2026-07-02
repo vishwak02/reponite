@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 type fakeNode struct {

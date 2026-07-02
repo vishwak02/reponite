@@ -6,7 +6,7 @@
 // on-machine). See ADR-018.
 package query
 
-import "github.com/reponite/reponite/internal/content"
+import "github.com/vishwak02/reponite/internal/content"
 
 // Store is the read surface the query layer needs.
 type Store interface {

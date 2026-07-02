@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"github.com/reponite/reponite/internal/interfaces"
-	"github.com/reponite/reponite/internal/query"
-	"github.com/reponite/reponite/internal/storage"
+	"github.com/vishwak02/reponite/internal/interfaces"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
 )
 
 // runDemo loads an in-memory index with the canonical scenario and runs the

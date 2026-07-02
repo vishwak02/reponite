@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reponite/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 func TestCompatJSON(t *testing.T) {

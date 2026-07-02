@@ -6,7 +6,7 @@ package interfaces
 import (
 	"encoding/json"
 
-	"github.com/reponite/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 func marshal(v interface{}) (string, error) {

@@ -3,7 +3,7 @@ package query
 import (
 	"testing"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 func ref(present bool, sig, beh string, conf float64) SymbolRef {

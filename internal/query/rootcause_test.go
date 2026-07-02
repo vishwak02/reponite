@@ -3,7 +3,7 @@ package query
 import (
 	"testing"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 func facts(sym, sig, beh string) SymbolFacts {

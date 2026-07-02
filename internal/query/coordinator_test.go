@@ -3,9 +3,9 @@ package query_test
 import (
 	"testing"
 
-	"github.com/reponite/reponite/internal/content"
-	"github.com/reponite/reponite/internal/query"
-	"github.com/reponite/reponite/internal/storage"
+	"github.com/vishwak02/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
 )
 
 func rc(sym, sig, beh string, conf float64, callees ...string) storage.SymbolRecord {

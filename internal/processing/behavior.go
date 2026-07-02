@@ -6,7 +6,7 @@
 // is fully unit-tested in-sandbox (ADR-018), independent of parser/store.
 package processing
 
-import "github.com/reponite/reponite/internal/content"
+import "github.com/vishwak02/reponite/internal/content"
 
 // Node is a symbol participating in the call graph.
 type Node struct {

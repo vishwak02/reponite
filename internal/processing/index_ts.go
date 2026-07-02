@@ -15,8 +15,8 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	golang "github.com/smacker/go-tree-sitter/golang"
 
-	"github.com/reponite/reponite/internal/content"
-	"github.com/reponite/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 // IndexDir indexes every .go file under dir as one repo ref.

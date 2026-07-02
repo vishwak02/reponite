@@ -3,8 +3,8 @@ package processing
 import (
 	"testing"
 
-	"github.com/reponite/reponite/internal/query"
-	"github.com/reponite/reponite/internal/storage"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
 )
 
 func sym(name, kind, sig, body string, callees ...string) Symbol {

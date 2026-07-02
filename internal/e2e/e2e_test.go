@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/reponite/reponite/internal/processing"
-	"github.com/reponite/reponite/internal/query"
-	"github.com/reponite/reponite/internal/storage/sqlite"
-	"github.com/reponite/reponite/internal/version"
+	"github.com/vishwak02/reponite/internal/processing"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage/sqlite"
+	"github.com/vishwak02/reponite/internal/version"
 )
 
 func write(t *testing.T, path, content string) {

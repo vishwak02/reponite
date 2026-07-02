@@ -3,7 +3,7 @@ package processing
 import (
 	"testing"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 func h(s string) content.Hash { return content.Hash("sha256:" + s) }

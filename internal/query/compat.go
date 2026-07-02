@@ -7,7 +7,7 @@
 // of the two snapshots and is never asserted as more certain than computed.
 package query
 
-import "github.com/reponite/reponite/internal/content"
+import "github.com/vishwak02/reponite/internal/content"
 
 // Verdict is one of the three-tier compatibility outcomes (architecture §8.1).
 type Verdict string

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/reponite/reponite/internal/version"
+	"github.com/vishwak02/reponite/internal/version"
 )
 
 func main() {

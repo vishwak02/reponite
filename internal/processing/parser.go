@@ -15,7 +15,7 @@ import (
 	sitter "github.com/smacker/go-tree-sitter"
 	golang "github.com/smacker/go-tree-sitter/golang"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 // tsNode wraps a tree-sitter node + source to satisfy content.AST.

@@ -11,7 +11,7 @@ package query
 import (
 	"sort"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 // SymbolFacts is a symbol's identity at one ref for root-cause purposes.

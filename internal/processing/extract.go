@@ -10,7 +10,7 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/reponite/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/content"
 )
 
 // Symbol is a top-level symbol extracted from a file, pre-hashing.

@@ -8,8 +8,8 @@ package storage
 import (
 	"sort"
 
-	"github.com/reponite/reponite/internal/content"
-	"github.com/reponite/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 var _ query.Store = (*Mem)(nil)

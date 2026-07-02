@@ -14,9 +14,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/reponite/reponite/internal/content"
-	"github.com/reponite/reponite/internal/query"
-	"github.com/reponite/reponite/internal/storage"
+	"github.com/vishwak02/reponite/internal/content"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
 )
 
 var _ query.Store = (*Store)(nil)
