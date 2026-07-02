@@ -5,7 +5,7 @@ interface index pointer, session log. Resume from here — do not re-read the re
 
 ## Cursor
 - Milestone: **M1 — structural core (in progress)**. Pure moat kernel done.
-- Last completed: **symbol/edge extractor** — processing/extract.go: ExtractGo over content.AST (functions/methods/types, doc association, body-independent signature, heuristic callees). PURE + in-sandbox tested (4 tests) + treesitter-tagged real-tree test for CI.
+- Last completed: **indexer core (pure IndexFiles)** — hash symbols -> tree-sitter-tier edges -> behavior pass -> write to Store. Verified in-sandbox vs Mem incl. FULL moat end-to-end (Charge behavior_changed via callee), diff, grep. storage.Mem writes now return error.
 - **Next: M1 adapters (compiled on-machine).** SQLite `Store` (schema/migrate/nodes/edges/paths) + tree-sitter parser + resolver — written in-sandbox, compiled on a real machine / CI (module proxy blocked here). Then delta wiring (S1.6) and grep (S1.7). The pure moat path is complete and in-sandbox-verified end to end: canon + hashes + behavior pass + compat/diff verdicts (50 tests). Remaining work is the external-dependency adapters that feed these with real data.
 
 ## Session protocol (fixed)
@@ -74,3 +74,4 @@ See `docs/adr/ADR-000-interface-index.md`. Adapter contract: `docs/adapters/tree
 | sqlite-adapter | internal/storage/sqlite: query.Store over modernc SQLite (WAL; ref_history/callees/files/manifest_blobs) + write API; //go:build sqlite + integration test; Makefile `sqlite` target. Default build green (doc.go only); on-machine type-check pending. | green (default) |
 | ci+treesitter | .github CI core/sqlite/treesitter jobs; processing/parser.go tsNode->content.AST + ParseGo (//go:build treesitter) + integration test (canon reformat-invariance on real trees); Makefile treesitter target. Default build green. | green (default) |
 | extractor | processing/extract.go: ExtractGo over content.AST (funcs/methods/types, doc assoc, body-independent signature, heuristic callees incl selector/dedup); 4 pure tests + treesitter real-tree test | green (default) |
+| indexer-core | processing/index.go: Indexer iface + IndexFiles (hash->edges->behavior->store); storage.Mem writes return error; 2 end-to-end tests (moat, diff+grep) vs Mem | green (default) |

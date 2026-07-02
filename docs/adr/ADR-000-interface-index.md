@@ -80,3 +80,9 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 ## processing — extractor (✓ pure)
 - ✓ `processing.ExtractGo(root content.AST, normVer int) []Symbol` — top-level symbols (function/method/type) with body-independent Signature (via child filtering), CanonBody, associated Doc, and heuristic name-based Callees (tree-sitter tier). Pure over content.AST; tested in-sandbox + a treesitter-tagged real-tree test.
 - ✓ `processing.Symbol{Name, Kind, Signature string; CanonBody, Doc []byte; Callees []string}`
+
+## processing — indexer core (✓ pure)
+- ✓ `processing.Indexer` interface { Put(repo,ref,name, storage.SymbolRecord) error; PutFile(repo,ref, query.File) error } — satisfied by storage.Mem and storage/sqlite
+- ✓ `processing.IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error` — hash symbols, resolve callees to tree-sitter-tier edges (0.6), ComputeBehavior over whole-ref graph, write records + files
+- ✓ `processing.ParsedFile{Path, Content string; Symbols []Symbol; Spans []query.SymbolSpan}`
+- storage.Mem write methods (Put/PutFile/PutManifest) now return error (share the Indexer/SQLite interface)

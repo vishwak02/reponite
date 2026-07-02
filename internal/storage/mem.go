@@ -1,8 +1,8 @@
-// mem.go is a pure, in-memory implementation of query.Store for tests and dev
-// (and the default backend until the SQLite adapter lands in storage/sqlite). It
-// holds the same records the SQLite store will persist, so the query logic can
-// be exercised end-to-end in-sandbox (ADR-018). No external dependencies, so
-// this package stays compilable/testable in the build sandbox.
+// mem.go is a pure, in-memory implementation of query.Store (and the indexer's
+// write interface) for tests and dev, until the SQLite adapter lands. No
+// external dependencies, so this package stays compilable/testable in the build
+// sandbox (ADR-018). Write methods return error (always nil) to share one
+// interface with the SQLite adapter.
 package storage
 
 import (
@@ -57,22 +57,25 @@ func (m *Mem) touch(repo, ref string) {
 }
 
 // Put records a symbol at a ref (also registering the repo and ref).
-func (m *Mem) Put(repo, ref, name string, rec SymbolRecord) {
+func (m *Mem) Put(repo, ref, name string, rec SymbolRecord) error {
 	m.touch(repo, ref)
 	m.syms[refKey{repo, ref}][name] = rec
+	return nil
 }
 
 // PutFile records a file at a ref.
-func (m *Mem) PutFile(repo, ref string, f query.File) {
+func (m *Mem) PutFile(repo, ref string, f query.File) error {
 	m.touch(repo, ref)
 	k := refKey{repo, ref}
 	m.files[k] = append(m.files[k], f)
+	return nil
 }
 
 // PutManifest records a ref's manifest.
-func (m *Mem) PutManifest(repo, ref string, man content.Manifest) {
+func (m *Mem) PutManifest(repo, ref string, man content.Manifest) error {
 	m.touch(repo, ref)
 	m.mans[refKey{repo, ref}] = man
+	return nil
 }
 
 func (m *Mem) Repos() []string { return sortedKeys(m.repos) }
