@@ -19,3 +19,9 @@ sqlite:
 	go get modernc.org/sqlite
 	go build -tags sqlite ./...
 	go test -tags sqlite ./internal/storage/sqlite/
+
+# Build/test the tree-sitter parser adapter (CGO; needs network for the module once):
+treesitter:
+	go get github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
+	go build -tags treesitter ./...
+	go test -tags treesitter ./internal/processing/

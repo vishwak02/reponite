@@ -70,3 +70,9 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 
 ## storage/sqlite  (⟳ on-machine, `-tags sqlite`)
 - ⟳ `sqlite.Open(path string) (*Store, error)` — implements query.Store over modernc.org/sqlite (WAL); write API Put/PutFile/PutManifest/AddRef; behind `//go:build sqlite`. Default build excludes it (doc.go only). Verify: `make sqlite`.
+
+## processing/parser  (⟳ on-machine, `-tags treesitter`, CGO)
+- ⟳ `processing.ParseGo(src []byte) (content.AST, error)` — tree-sitter (smacker/go-tree-sitter) → content.AST adapter; `tsNode` exposes Type/Text/Children(all)/IsNamed per the contract doc. Behind `//go:build treesitter`. Verify in CI (treesitter job) or `make treesitter`.
+
+## Verification (no local Go on the dev machine)
+- GitHub Actions `.github/workflows/go.yml` runs 3 jobs on every push: `core` (default, pure packages), `sqlite` (`-tags sqlite`), `treesitter` (`-tags treesitter`, CGO). Adapter correctness is confirmed by CI, not locally.

@@ -1,7 +1,8 @@
 name: go
 on: [push, pull_request]
 jobs:
-  build-test:
+  core:
+    name: pure core (default build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -11,3 +12,27 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
+
+  sqlite:
+    name: sqlite adapter (-tags sqlite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go get modernc.org/sqlite
+      - run: go build -tags sqlite ./...
+      - run: go test -tags sqlite ./internal/storage/sqlite/
+
+  treesitter:
+    name: tree-sitter parser (-tags treesitter, CGO)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go get github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
+      - run: go build -tags treesitter ./...
+      - run: go test -tags treesitter ./internal/processing/
