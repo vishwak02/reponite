@@ -36,3 +36,15 @@ jobs:
       - run: go get github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
       - run: go build -tags treesitter ./...
       - run: go test -tags treesitter ./internal/processing/
+
+  e2e:
+    name: end-to-end (-tags "sqlite treesitter", CGO)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
+      - run: go build -tags "sqlite treesitter" ./...
+      - run: go test -tags "sqlite treesitter" ./internal/e2e/

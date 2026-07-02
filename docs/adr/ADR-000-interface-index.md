@@ -86,3 +86,9 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ✓ `processing.IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error` — hash symbols, resolve callees to tree-sitter-tier edges (0.6), ComputeBehavior over whole-ref graph, write records + files
 - ✓ `processing.ParsedFile{Path, Content string; Symbols []Symbol; Spans []query.SymbolSpan}`
 - storage.Mem write methods (Put/PutFile/PutManifest) now return error (share the Indexer/SQLite interface)
+
+## finish line — indexer + CLI (⟳ on-machine / CI)
+- ⟳ `processing.IndexDir(w Indexer, repo, ref, dir string, normVer int) error` (`-tags treesitter`) — walk *.go → parse → ExtractGo → line spans → IndexFiles.
+- ⟳ `cmd/reponite` index/compat/diff/grep/search wired to sqlite.Open + coordinators + JSON (`-tags "sqlite treesitter"`, run_full.go); default build uses run_stub.go → notImplemented.
+- ⟳ `internal/e2e` both-tags integration test: index 2 refs of a temp repo, assert Charge behavior_changed. CI job `e2e`.
+- CI jobs: core / sqlite / treesitter / e2e. Build the CLI with `make cli`.

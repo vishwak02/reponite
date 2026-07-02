@@ -5,7 +5,7 @@ interface index pointer, session log. Resume from here — do not re-read the re
 
 ## Cursor
 - Milestone: **M1 — structural core (in progress)**. Pure moat kernel done.
-- Last completed: **indexer core (pure IndexFiles)** — hash symbols -> tree-sitter-tier edges -> behavior pass -> write to Store. Verified in-sandbox vs Mem incl. FULL moat end-to-end (Charge behavior_changed via callee), diff, grep. storage.Mem writes now return error.
+- Last completed: **finish line — IndexDir + CLI wiring + e2e** — processing/index_ts.go (walk->parse->extract->spans->IndexFiles, -tags treesitter); cmd/reponite index/compat/diff/grep/search wired to sqlite (run_full.go) with default stub; internal/e2e both-tags integration test; CI e2e job. Default build green; adapters+CLI+e2e verified in CI.
 - **Next: M1 adapters (compiled on-machine).** SQLite `Store` (schema/migrate/nodes/edges/paths) + tree-sitter parser + resolver — written in-sandbox, compiled on a real machine / CI (module proxy blocked here). Then delta wiring (S1.6) and grep (S1.7). The pure moat path is complete and in-sandbox-verified end to end: canon + hashes + behavior pass + compat/diff verdicts (50 tests). Remaining work is the external-dependency adapters that feed these with real data.
 
 ## Session protocol (fixed)
@@ -76,3 +76,4 @@ See `docs/adr/ADR-000-interface-index.md`. Adapter contract: `docs/adapters/tree
 | extractor | processing/extract.go: ExtractGo over content.AST (funcs/methods/types, doc assoc, body-independent signature, heuristic callees incl selector/dedup); 4 pure tests + treesitter real-tree test | green (default) |
 | indexer-core | processing/index.go: Indexer iface + IndexFiles (hash->edges->behavior->store); storage.Mem writes return error; 2 end-to-end tests (moat, diff+grep) vs Mem | green (default) |
 | fix-canon-comments | broadened comment detection (canon.isComment / extract.isCommentType -> strings.Contains(t,"comment")) after treesitter CI caught reformat-invariance fail; parser_test.go split into isolated whitespace/comment/operator assertions with %q diagnostics | green (default) |
+| finish-line | index_ts.go (IndexDir, -tags treesitter) + cmd/reponite run_full/run_stub + main routing + internal/e2e both-tags integration test + CI e2e job + make cli/e2e. Default build green (cmd: demo/main/run_stub). Adapters+CLI+e2e type-checked in CI. |
