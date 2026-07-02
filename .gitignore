@@ -5,3 +5,6 @@
 .reponite/
 *.uidx
 gc.log
+
+# gofmt backup temp files (build-sandbox mount cannot unlink them)
+*.go.[0-9]*

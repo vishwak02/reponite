@@ -76,3 +76,7 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 
 ## Verification (no local Go on the dev machine)
 - GitHub Actions `.github/workflows/go.yml` runs 3 jobs on every push: `core` (default, pure packages), `sqlite` (`-tags sqlite`), `treesitter` (`-tags treesitter`, CGO). Adapter correctness is confirmed by CI, not locally.
+
+## processing — extractor (✓ pure)
+- ✓ `processing.ExtractGo(root content.AST, normVer int) []Symbol` — top-level symbols (function/method/type) with body-independent Signature (via child filtering), CanonBody, associated Doc, and heuristic name-based Callees (tree-sitter tier). Pure over content.AST; tested in-sandbox + a treesitter-tagged real-tree test.
+- ✓ `processing.Symbol{Name, Kind, Signature string; CanonBody, Doc []byte; Callees []string}`
