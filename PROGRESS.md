@@ -5,7 +5,7 @@ interface index pointer, session log. Resume from here — do not re-read the re
 
 ## Cursor
 - Milestone: **M1 — structural core (in progress)**. Pure moat kernel done.
-- Last completed: **S3-rootcause** — root-cause drill-down (mutation-site frontier via three-hash model); query 16 tests green.
+- Last completed: **S1.7-pure** — grep matcher (trigram prefilter + regex + enclosing-symbol fusion), the retrieval-ladder base; query 24 tests green.
 - **Next: M1 adapters (compiled on-machine).** SQLite `Store` (schema/migrate/nodes/edges/paths) + tree-sitter parser + resolver — written in-sandbox, compiled on a real machine / CI (module proxy blocked here). Then delta wiring (S1.6) and grep (S1.7). The pure moat path is complete and in-sandbox-verified end to end: canon + hashes + behavior pass + compat/diff verdicts (50 tests). Remaining work is the external-dependency adapters that feed these with real data.
 
 ## Session protocol (fixed)
@@ -66,3 +66,4 @@ See `docs/adr/ADR-000-interface-index.md`. Adapter contract: `docs/adapters/tree
 | S1.5-pure | processing/behavior.go: pure call-graph behavior-hash — Tarjan SCC condensation, reverse-topological Merkle, behavior_conf=min, cross-repo callee as leaf; content.GroupHash; processing 7 tests, content +2 | green |
 | S3-pure | query/compat.go + query/diff.go: Oracle verdicts (absent/shape/behavior/compatible, confidence=min) + ref diff (added/removed/shape/behavior/unchanged, sorted); 9 tests | green |
 | S3-rootcause | query/rootcause.go: walk behavior-changed target to mutation-site frontier (text/signature/edge-set = origin vs propagation), confidence=min along path, external-callee note; 7 tests | green |
+| S1.7-pure | query/grep.go: trigram index + literal/regex search (trigram prefilter, no-atom full-scan fallback), enclosing-symbol fusion, limit truncation; 8 tests | green |

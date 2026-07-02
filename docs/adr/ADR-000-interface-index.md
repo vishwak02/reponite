@@ -41,3 +41,4 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ✓ `query.CompatAcross(origin SymbolRef, targets []Target) []CompatVerdict` — fleet-wide (§8.3)
 - ✓ `query.DiffRefs(a, b map[string]SymbolRef) []SymbolChange` — added/removed/shape/behavior/unchanged, sorted
 - ✓ `query.RootCause(target string, from, to RefSnapshot) RootCauseResult` — drill-down to the mutation-site frontier (ext §8A); types SymbolFacts/Callee/RefSnapshot/Origin/OriginKind
+- ✓ `query.BuildTrigramIndex(files []File) *TrigramIndex` + `(*TrigramIndex).Grep(pattern string, opt GrepOptions) (GrepResult, error)` — trigram-prefiltered literal/regex search with enclosing-symbol fusion (ext §10A); types File/SymbolSpan/Match/GrepResult/GrepOptions
