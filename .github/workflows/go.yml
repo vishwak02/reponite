@@ -37,6 +37,17 @@ jobs:
       - run: go build -tags treesitter ./...
       - run: go test -tags treesitter ./internal/processing/
 
+  mcp:
+    name: mcp server (-tags "sqlite mcp")
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - run: go get modernc.org/sqlite github.com/mark3labs/mcp-go
+      - run: go build -tags "sqlite mcp" ./...
+
   e2e:
     name: end-to-end (-tags "sqlite treesitter", CGO)
     runs-on: ubuntu-latest

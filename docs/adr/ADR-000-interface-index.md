@@ -92,3 +92,10 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ⟳ `cmd/reponite` index/compat/diff/grep/search wired to sqlite.Open + coordinators + JSON (`-tags "sqlite treesitter"`, run_full.go); default build uses run_stub.go → notImplemented.
 - ⟳ `internal/e2e` both-tags integration test: index 2 refs of a temp repo, assert Charge behavior_changed. CI job `e2e`.
 - CI jobs: core / sqlite / treesitter / e2e. Build the CLI with `make cli`.
+
+## MCP server (dogfooding) — ✓ pure dispatch, ⟳ SDK glue on-machine
+- ✓ `query.Context(s Store, repo, ref, symbol string) ContextResult` — direct callers+callees
+- ✓ `interfaces.ToolServer{Store, Repo}` + `.Call(tool string, args map[string]string) (string, error)` — pure dispatch to search/grep/compat/context/diff/rootcause/refs → JSON (tested vs Mem)
+- ✓ `interfaces.ContextJSON / RefsJSON`
+- ⟳ `interfaces.ServeStdio(*ToolServer) error` (`//go:build mcp`, github.com/mark3labs/mcp-go) — stdio MCP glue
+- ⟳ `reponite mcp` command (`//go:build sqlite && mcp`): open sqlite store → ToolServer → ServeStdio. cmd sqlite helpers in store_sqlite.go (`//go:build sqlite`). CI job `mcp` (-tags "sqlite mcp").
