@@ -21,10 +21,13 @@ type SymbolFacts struct {
 	BehaviorHash  content.Hash
 }
 
-// Callee is a resolved CALLS edge target with its confidence.
+// Callee is a resolved CALLS edge target with its resolution provenance and
+// confidence (invariant 5): ResolutionMethod records HOW the edge was resolved
+// (see processing.Method*), so a verdict can state its basis, not just a number.
 type Callee struct {
-	Name       string
-	Confidence float64
+	Name             string
+	ResolutionMethod string
+	Confidence       float64
 }
 
 // RefSnapshot is one ref's call graph keyed by symbol name.

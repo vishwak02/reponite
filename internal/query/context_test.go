@@ -24,3 +24,23 @@ func TestContextCallersCallees(t *testing.T) {
 		t.Fatalf("A callees = %v (want B)", a.Callees)
 	}
 }
+
+// Callee edges carry resolution provenance, not just names (invariant 5).
+func TestContextCalleeEdgesProvenance(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "A", storage.SymbolRecord{Callees: []query.Callee{
+		{Name: "B", ResolutionMethod: "name-resolved", Confidence: 0.9},
+		{Name: "log", ResolutionMethod: "unresolved-external", Confidence: 0.6},
+	}})
+	a := query.Context(m, "r", "HEAD", "A")
+	if len(a.CalleeEdges) != 2 {
+		t.Fatalf("want 2 callee edges, got %+v", a.CalleeEdges)
+	}
+	// sorted by name: B, log
+	if e := a.CalleeEdges[0]; e.Name != "B" || e.ResolutionMethod != "name-resolved" || e.Confidence != 0.9 {
+		t.Fatalf("resolved edge provenance wrong: %+v", e)
+	}
+	if e := a.CalleeEdges[1]; e.Name != "log" || e.ResolutionMethod != "unresolved-external" || e.Confidence != 0.6 {
+		t.Fatalf("external edge provenance wrong: %+v", e)
+	}
+}

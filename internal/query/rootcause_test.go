@@ -69,11 +69,11 @@ func TestRootCauseEdgesKind(t *testing.T) {
 func TestRootCauseConfidenceMinAlongPath(t *testing.T) {
 	from := RefSnapshot{
 		Symbols: map[string]SymbolFacts{"A": facts("A", "s", "A0"), "B": facts("B", "s", "B0"), "C": facts("C0", "s", "C0")},
-		Callees: map[string][]Callee{"A": {{"B", 1.0}}, "B": {{"C", 0.5}}},
+		Callees: map[string][]Callee{"A": {{Name: "B", Confidence: 1.0}}, "B": {{Name: "C", Confidence: 0.5}}},
 	}
 	to := RefSnapshot{
 		Symbols: map[string]SymbolFacts{"A": facts("A", "s", "A1"), "B": facts("B", "s", "B1"), "C": facts("C1", "s", "C1")},
-		Callees: map[string][]Callee{"A": {{"B", 1.0}}, "B": {{"C", 0.5}}},
+		Callees: map[string][]Callee{"A": {{Name: "B", Confidence: 1.0}}, "B": {{Name: "C", Confidence: 0.5}}},
 	}
 	r := RootCause("A", from, to)
 	if len(r.Origins) != 1 || r.Origins[0].Name != "C" || r.Origins[0].Confidence != 0.5 {
