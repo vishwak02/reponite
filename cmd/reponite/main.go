@@ -59,7 +59,8 @@ available in any build:
   demo                 in-memory end-to-end run (compat / rootcause / grep as JSON)
 
 index-backed (build with `+"`make cli`"+`):
-  index <dir> [ref]    index a repo's Go files at a ref
+  index <dir> [ref]    index a repo's Go files at a ref (working tree)
+  index --git <rev> [dir]   index a git revision's tree (tag/branch/SHA/HEAD~3) with its real commit
   compat <symbol> [ref]   compatibility verdicts across the repo's other refs
   diff <from> <to>     symbol delta between two refs
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion

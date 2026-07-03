@@ -35,6 +35,7 @@ func indexBackedCommand(cmd string, args []string) {
 }
 
 func cmdIndex(args []string) {
+	gitRev, args := popValue(args, "--git")
 	dir := "."
 	if len(args) > 0 {
 		dir = args[0]
@@ -42,14 +43,50 @@ func cmdIndex(args []string) {
 	ref := "HEAD"
 	if len(args) > 1 {
 		ref = args[1]
+	} else if gitRev != "" {
+		ref = gitRev // default the ref label to the revision
 	}
 	repo := repoName(dir)
 	st := openStore(dir)
 	defer st.Close()
+
+	if gitRev != "" {
+		commit, err := processing.IndexGitRef(st, repo, ref, dir, gitRev, version.NormVer)
+		if err != nil {
+			fail(err)
+		}
+		if err := st.AddRef(repo, ref, commit, ""); err != nil {
+			fail(err)
+		}
+		fmt.Printf("indexed %s@%s (git %s @ %s) — refs now: %v\n", repo, ref, gitRev, shortHash(commit), st.Refs(repo))
+		return
+	}
 	if err := processing.IndexDir(st, repo, ref, dir, version.NormVer); err != nil {
 		fail(err)
 	}
 	fmt.Printf("indexed %s@%s — refs now: %v\n", repo, ref, st.Refs(repo))
+}
+
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
+
+// popValue removes "flag value" from args, returning the value ("" if absent).
+func popValue(args []string, flag string) (string, []string) {
+	rest := make([]string, 0, len(args))
+	val := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag && i+1 < len(args) {
+			val = args[i+1]
+			i++
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	return val, rest
 }
 
 func cmdCompat(args []string) {
