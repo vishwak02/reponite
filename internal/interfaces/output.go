@@ -131,12 +131,13 @@ func GrepJSON(r query.GrepResult) (string, error) {
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {
-		Name string `json:"name"`
-		Ref  string `json:"ref"`
+		Name   string `json:"name"`
+		Ref    string `json:"ref"`
+		IsTest bool   `json:"is_test"`
 	}
 	out := make([]hitDTO, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, hitDTO{Name: h.Name, Ref: h.Ref})
+		out = append(out, hitDTO{Name: h.Name, Ref: h.Ref, IsTest: h.IsTest})
 	}
 	return marshal(out)
 }

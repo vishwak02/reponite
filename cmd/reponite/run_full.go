@@ -103,8 +103,9 @@ func cmdGrep(args []string) {
 }
 
 func cmdSearch(args []string) {
+	tests, args := popFlag(args, "--tests")
 	if len(args) < 1 {
-		fail(fmt.Errorf("usage: reponite search <substr> [ref]"))
+		fail(fmt.Errorf("usage: reponite search <substr> [ref] [--tests]"))
 	}
 	ref := "HEAD"
 	if len(args) > 1 {
@@ -112,7 +113,7 @@ func cmdSearch(args []string) {
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.SearchJSON(query.SearchName(st, repoName("."), ref, args[0])))
+	printJSON(interfaces.SearchJSON(query.SearchName(st, repoName("."), ref, args[0], tests)))
 }
 
 func cmdRootCause(args []string) {
@@ -125,8 +126,9 @@ func cmdRootCause(args []string) {
 }
 
 func cmdContext(args []string) {
+	tests, args := popFlag(args, "--tests")
 	if len(args) < 1 {
-		fail(fmt.Errorf("usage: reponite context <symbol> [ref]"))
+		fail(fmt.Errorf("usage: reponite context <symbol> [ref] [--tests]"))
 	}
 	ref := "HEAD"
 	if len(args) > 1 {
@@ -134,7 +136,21 @@ func cmdContext(args []string) {
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.ContextJSON(query.Context(st, repoName("."), ref, args[0])))
+	printJSON(interfaces.ContextJSON(query.Context(st, repoName("."), ref, args[0], tests)))
+}
+
+// popFlag removes flag from args, reporting whether it was present.
+func popFlag(args []string, flag string) (bool, []string) {
+	rest := make([]string, 0, len(args))
+	found := false
+	for _, a := range args {
+		if a == flag {
+			found = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return found, rest
 }
 
 func cmdRefs(args []string) {

@@ -22,9 +22,10 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
+	includeTests := args["tests"] == "true"
 	switch tool {
 	case "reponite_search":
-		return SearchJSON(query.SearchName(t.Store, t.Repo, ref, args["query"]))
+		return SearchJSON(query.SearchName(t.Store, t.Repo, ref, args["query"], includeTests))
 	case "reponite_grep":
 		res, err := query.GrepRepo(t.Store, t.Repo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] != "false"})
 		if err != nil {
@@ -44,7 +45,7 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		}
 		return CompatJSON(rep)
 	case "reponite_context":
-		return ContextJSON(query.Context(t.Store, t.Repo, ref, args["symbol"]))
+		return ContextJSON(query.Context(t.Store, t.Repo, ref, args["symbol"], includeTests))
 	case "reponite_diff":
 		return DiffJSON(query.DiffRefsBy(t.Store, t.Repo, args["from"], args["to"]))
 	case "reponite_rootcause":

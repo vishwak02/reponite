@@ -38,7 +38,8 @@ func ServeStdio(ts *ToolServer) error {
 	add(mcp.NewTool("reponite_search",
 		mcp.WithDescription("Structural symbol-name search at a ref."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("substring of the symbol name")),
-		mcp.WithString("ref", mcp.Description("ref to search (default HEAD)"))))
+		mcp.WithString("ref", mcp.Description("ref to search (default HEAD)")),
+		mcp.WithString("tests", mcp.Description(`"true" to include Test*/Benchmark*/Example*/Fuzz* symbols (default excluded)`))))
 	add(mcp.NewTool("reponite_grep",
 		mcp.WithDescription("Trigram-prefiltered literal/regex search; each hit fused with its enclosing symbol."),
 		mcp.WithString("pattern", mcp.Required()),
@@ -51,7 +52,8 @@ func ServeStdio(ts *ToolServer) error {
 	add(mcp.NewTool("reponite_context",
 		mcp.WithDescription("Direct callers and callees of a symbol at a ref."),
 		mcp.WithString("symbol", mcp.Required()),
-		mcp.WithString("ref", mcp.Description("default HEAD"))))
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("tests", mcp.Description(`"true" to include test callers/callees (default excluded)`))))
 	add(mcp.NewTool("reponite_diff",
 		mcp.WithDescription("Per-symbol delta between two refs (added/removed/shape/behavior/unchanged)."),
 		mcp.WithString("from", mcp.Required()),

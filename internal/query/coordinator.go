@@ -97,20 +97,46 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 
 // SearchHit is a structural name-search result.
 type SearchHit struct {
-	Name string
-	Ref  string
+	Name   string
+	Ref    string
+	IsTest bool
 }
 
-// SearchName returns symbols whose name contains substr, sorted.
-func SearchName(s Store, repo, ref, substr string) []SearchHit {
-	var hits []SearchHit
+// SearchName returns symbols whose name contains substr, sorted. Go test entry
+// points (Test*/Benchmark*/Example*/Fuzz*) are excluded unless includeTests, so
+// code-intelligence queries aren't drowned in test noise.
+func SearchName(s Store, repo, ref, substr string, includeTests bool) []SearchHit {
+	hits := []SearchHit{}
 	for name := range s.SymbolsAt(repo, ref) {
-		if strings.Contains(name, substr) {
-			hits = append(hits, SearchHit{Name: name, Ref: ref})
+		if !strings.Contains(name, substr) {
+			continue
 		}
+		test := IsTestName(name)
+		if test && !includeTests {
+			continue
+		}
+		hits = append(hits, SearchHit{Name: name, Ref: ref, IsTest: test})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Name < hits[j].Name })
 	return hits
+}
+
+// IsTestName reports whether name is a Go test entry point by the testing
+// package's convention: a Test/Benchmark/Example/Fuzz prefix not immediately
+// followed by a lowercase letter (so "TestMain" and "Test" qualify, "Testable"
+// does not). This is a name heuristic — it does not catch lowercase test helpers
+// (a limitation the package-qualified rework addresses).
+func IsTestName(name string) bool {
+	for _, p := range []string{"Test", "Benchmark", "Example", "Fuzz"} {
+		if !strings.HasPrefix(name, p) {
+			continue
+		}
+		rest := name[len(p):]
+		if rest == "" || rest[0] < 'a' || rest[0] > 'z' {
+			return true
+		}
+	}
+	return false
 }
 
 func refIndexed(s Store, repo, ref string) bool {

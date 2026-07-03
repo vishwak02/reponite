@@ -25,19 +25,27 @@ type ContextResult struct {
 	Meta        Meta
 }
 
-// Context computes the direct callers and callees of symbol at a ref.
-func Context(s Store, repo, ref, symbol string) ContextResult {
+// Context computes the direct callers and callees of symbol at a ref. Test entry
+// points (IsTestName) are excluded from callers/callees unless includeTests, so
+// production navigation isn't cluttered with test functions.
+func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult {
 	snap := s.Snapshot(repo, ref)
 	// Non-nil empty slices so absent neighbors marshal as [] not null (consistent
 	// JSON for agents).
 	callees := []string{}
 	edges := []CalleeEdge{}
 	for _, c := range snap.Callees[symbol] {
+		if IsTestName(c.Name) && !includeTests {
+			continue
+		}
 		callees = append(callees, c.Name)
 		edges = append(edges, CalleeEdge{Name: c.Name, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
 	}
 	callers := []string{}
 	for name, cs := range snap.Callees {
+		if IsTestName(name) && !includeTests {
+			continue
+		}
 		for _, c := range cs {
 			if c.Name == symbol {
 				callers = append(callers, name)

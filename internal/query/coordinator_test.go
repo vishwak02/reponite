@@ -104,8 +104,20 @@ func TestSearchName(t *testing.T) {
 	m.Put("r", "HEAD", "GetUser", rc("a", "s", "b", 1))
 	m.Put("r", "HEAD", "GetOrder", rc("b", "s", "b", 1))
 	m.Put("r", "HEAD", "helper", rc("c", "s", "b", 1))
-	hits := query.SearchName(m, "r", "HEAD", "Get")
+	hits := query.SearchName(m, "r", "HEAD", "Get", false)
 	if len(hits) != 2 || hits[0].Name != "GetOrder" || hits[1].Name != "GetUser" {
 		t.Fatalf("search: %+v", hits)
+	}
+}
+
+func TestSearchNameExcludesTestsByDefault(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "GetUser", rc("a", "s", "b", 1))
+	m.Put("r", "HEAD", "TestGetUser", rc("t", "s", "b", 1))
+	if hits := query.SearchName(m, "r", "HEAD", "GetUser", false); len(hits) != 1 || hits[0].Name != "GetUser" {
+		t.Fatalf("default search must exclude TestGetUser: %+v", hits)
+	}
+	if hits := query.SearchName(m, "r", "HEAD", "GetUser", true); len(hits) != 2 {
+		t.Fatalf("includeTests must return both: %+v", hits)
 	}
 }
