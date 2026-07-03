@@ -56,6 +56,14 @@ func (m *Mem) touch(repo, ref string) {
 	}
 }
 
+// ClearRef drops a ref's symbols and files so a reindex replaces them.
+func (m *Mem) ClearRef(repo, ref string) error {
+	k := refKey{repo, ref}
+	delete(m.syms, k)
+	delete(m.files, k)
+	return nil
+}
+
 // Put records a symbol at a ref (also registering the repo and ref).
 func (m *Mem) Put(repo, ref, name string, rec SymbolRecord) error {
 	m.touch(repo, ref)

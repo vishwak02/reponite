@@ -123,6 +123,27 @@ func TestIndexFilesPackageQualifiedNoCollision(t *testing.T) {
 	}
 }
 
+// Reindexing a ref replaces its symbols; a symbol that vanished must not linger.
+func TestIndexFilesReindexReplaces(t *testing.T) {
+	m := storage.NewMem()
+	if err := IndexFiles(m, "r", "HEAD", 1, []ParsedFile{{Path: "p/a.go", Content: "x", Symbols: []Symbol{
+		sym("A", "function", "func A()", "b"), sym("B", "function", "func B()", "b"),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := IndexFiles(m, "r", "HEAD", 1, []ParsedFile{{Path: "p/a.go", Content: "x", Symbols: []Symbol{
+		sym("A", "function", "func A()", "b2"),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.SymbolAt("r", "p.B", "HEAD"); ok {
+		t.Fatal("reindex must drop the vanished symbol p.B (no stale rows)")
+	}
+	if _, ok := m.SymbolAt("r", "p.A", "HEAD"); !ok {
+		t.Fatal("reindex must keep p.A")
+	}
+}
+
 func TestIndexFilesDiffAndGrep(t *testing.T) {
 	m := storage.NewMem()
 	_ = IndexFiles(m, "r", "a", 1, []ParsedFile{{

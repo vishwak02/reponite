@@ -15,6 +15,9 @@ import (
 // Indexer is the write surface the indexer needs; satisfied by storage.Mem and
 // the SQLite adapter (storage/sqlite).
 type Indexer interface {
+	// ClearRef drops a ref's existing symbols/files so a reindex replaces rather
+	// than accumulates (symbols that vanished must not linger as stale rows).
+	ClearRef(repo, ref string) error
 	Put(repo, ref, name string, rec storage.SymbolRecord) error
 	PutFile(repo, ref string, f query.File) error
 }
@@ -77,6 +80,10 @@ func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) er
 	}
 	beh := ComputeBehavior(nodes, edges, normVer)
 
+	// Replace, don't accumulate: drop the ref's prior records before rewriting.
+	if err := w.ClearRef(repo, ref); err != nil {
+		return err
+	}
 	for _, qid := range order {
 		c := byQID[qid]
 		if err := w.Put(repo, ref, qid, storage.SymbolRecord{

@@ -123,6 +123,28 @@ func (s *Store) AddRef(repo, ref, commit, manifestHash string) error {
 	return err
 }
 
+// ClearRef drops a ref's symbols, callee edges, and file references so a reindex
+// replaces rather than accumulates. Content-addressed file_blobs are left intact
+// (shared across refs; reclaimed by GC), as is the refs row (reindex updates it).
+func (s *Store) ClearRef(repo, ref string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`DELETE FROM ref_history WHERE repo=? AND ref=?`,
+		`DELETE FROM callees WHERE repo=? AND ref=?`,
+		`DELETE FROM ref_files WHERE repo=? AND ref=?`,
+		`DELETE FROM file_symbols WHERE repo=? AND ref=?`,
+	} {
+		if _, err := tx.Exec(q, repo, ref); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Put stores a symbol at a ref (ref_history + its callees).
 func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 	if err := s.upsertRef(repo, ref); err != nil {
