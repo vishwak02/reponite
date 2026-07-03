@@ -36,8 +36,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
-      - run: go get github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang
+          go-version: 'stable' # go/types resolver pulls a current golang.org/x/tools
+      - run: go get github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/go-git/go-git/v5 golang.org/x/tools
       - run: go build -tags treesitter ./...
       - run: go test -tags treesitter ./internal/processing/
 
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
-      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/fsnotify/fsnotify
+          go-version: 'stable' # go/types resolver pulls a current golang.org/x/tools
+      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
       - run: go build -tags "sqlite treesitter" ./...
       - run: go test -tags "sqlite treesitter" ./internal/e2e/
