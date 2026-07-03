@@ -22,9 +22,8 @@ That third tier is the whole point, and nothing else computes it. It falls out o
 ## Quickstart
 
 ```sh
-# download a prebuilt binary from the Releases page (no Go needed), e.g. Linux:
-#   curl -L -o reponite https://github.com/vishwak02/reponite/releases/latest/download/reponite-linux-amd64
-#   chmod +x reponite && sudo mv reponite /usr/local/bin/
+# one-line install (Linux/macOS, no Go needed):
+curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh | sh
 # or build from source (needs Go 1.22+ and a C toolchain):
 make cli                               # builds bin/reponite (all adapters)
 
