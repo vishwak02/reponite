@@ -26,11 +26,12 @@ type metaDTO struct {
 }
 
 type verdictDTO struct {
-	Repo       string  `json:"repo"`
-	Ref        string  `json:"ref"`
-	Verdict    string  `json:"verdict"`
-	Confidence float64 `json:"confidence"`
-	Detail     string  `json:"detail,omitempty"`
+	Repo             string  `json:"repo"`
+	Ref              string  `json:"ref"`
+	Verdict          string  `json:"verdict"`
+	Confidence       float64 `json:"confidence"`
+	DirectConfidence float64 `json:"direct_confidence,omitempty"`
+	Detail           string  `json:"detail,omitempty"`
 }
 
 type compatDTO struct {
@@ -49,7 +50,8 @@ func CompatJSON(r query.CompatReport) (string, error) {
 	}
 	for _, v := range r.Verdicts {
 		dto.Verdicts = append(dto.Verdicts, verdictDTO{
-			Repo: v.Repo, Ref: v.Ref, Verdict: string(v.Verdict), Confidence: v.Confidence, Detail: v.Detail,
+			Repo: v.Repo, Ref: v.Ref, Verdict: string(v.Verdict), Confidence: v.Confidence,
+			DirectConfidence: v.DirectConfidence, Detail: v.Detail,
 		})
 	}
 	return marshal(dto)

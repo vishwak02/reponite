@@ -10,6 +10,20 @@ func ref(present bool, sig, beh string, conf float64) SymbolRef {
 	return SymbolRef{Present: present, SignatureHash: content.Hash(sig), BehaviorHash: content.Hash(beh), BehaviorConf: conf}
 }
 
+// A behavior_changed verdict reports the honest transitive floor as Confidence
+// and the (often higher) direct-edge confidence separately (#3).
+func TestCompatDirectVsTransitiveConfidence(t *testing.T) {
+	o := SymbolRef{Present: true, SignatureHash: "s", BehaviorHash: "h1", BehaviorConf: 0.6, DirectConf: 0.9}
+	tgt := SymbolRef{Present: true, SignatureHash: "s", BehaviorHash: "h2", BehaviorConf: 0.6, DirectConf: 0.9}
+	r := Compat(o, tgt)
+	if r.Verdict != BehaviorChanged {
+		t.Fatalf("want behavior_changed, got %s", r.Verdict)
+	}
+	if r.Confidence != 0.6 || r.DirectConfidence != 0.9 {
+		t.Fatalf("want transitive floor 0.6 + direct 0.9, got conf=%v direct=%v", r.Confidence, r.DirectConfidence)
+	}
+}
+
 func TestCompatAbsent(t *testing.T) {
 	if Compat(ref(true, "sig", "beh", 1), SymbolRef{Present: false}).Verdict != Absent {
 		t.Fatal("want absent")

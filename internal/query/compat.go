@@ -24,14 +24,19 @@ type SymbolRef struct {
 	Present       bool
 	SignatureHash content.Hash
 	BehaviorHash  content.Hash
-	BehaviorConf  float64
+	BehaviorConf  float64 // transitive-subgraph minimum
+	DirectConf    float64 // this symbol's own direct edges only
 }
 
-// CompatResult is the verdict for one target ref.
+// CompatResult is the verdict for one target ref. Confidence is the honest
+// transitive floor (behavior_conf minimum); DirectConfidence reports the
+// confidence of the symbols' own direct edges, which is often higher — a change
+// may be well-resolved directly even when a deep stdlib call caps the floor.
 type CompatResult struct {
-	Verdict    Verdict
-	Confidence float64
-	Detail     string
+	Verdict          Verdict
+	Confidence       float64
+	DirectConfidence float64
+	Detail           string
 }
 
 // Compat compares an origin snapshot against a target snapshot (§8.1). The
@@ -46,9 +51,10 @@ func Compat(origin, target SymbolRef) CompatResult {
 	}
 	if origin.BehaviorHash != target.BehaviorHash {
 		return CompatResult{
-			Verdict:    BehaviorChanged,
-			Confidence: minConf(origin.BehaviorConf, target.BehaviorConf),
-			Detail:     "identical signature; resolved call graph differs",
+			Verdict:          BehaviorChanged,
+			Confidence:       minConf(origin.BehaviorConf, target.BehaviorConf),
+			DirectConfidence: minConf(origin.DirectConf, target.DirectConf),
+			Detail:           "identical signature; resolved call graph differs",
 		}
 	}
 	return CompatResult{Verdict: Compatible, Confidence: 1.0}

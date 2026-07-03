@@ -86,11 +86,18 @@ func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) er
 	}
 	for _, qid := range order {
 		c := byQID[qid]
+		directConf := 1.0 // min confidence over this symbol's own direct edges
+		for _, ce := range resolved[qid] {
+			if ce.Confidence < directConf {
+				directConf = ce.Confidence
+			}
+		}
 		if err := w.Put(repo, ref, qid, storage.SymbolRecord{
 			SymbolHash:    c.symbolHash,
 			SignatureHash: c.sigHash,
 			BehaviorHash:  beh.BehaviorHash[qid],
 			BehaviorConf:  beh.BehaviorConf[qid],
+			DirectConf:    directConf,
 			Callees:       resolved[qid],
 		}); err != nil {
 			return err

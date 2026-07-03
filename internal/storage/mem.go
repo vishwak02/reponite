@@ -19,7 +19,8 @@ type SymbolRecord struct {
 	SymbolHash    content.Hash
 	SignatureHash content.Hash
 	BehaviorHash  content.Hash
-	BehaviorConf  float64
+	BehaviorConf  float64 // min confidence over the transitive subgraph (invariant 5)
+	DirectConf    float64 // min confidence over this symbol's own direct edges
 	Callees       []query.Callee
 }
 
@@ -135,6 +136,7 @@ func asRef(rec SymbolRecord) query.SymbolRef {
 		SignatureHash: rec.SignatureHash,
 		BehaviorHash:  rec.BehaviorHash,
 		BehaviorConf:  rec.BehaviorConf,
+		DirectConf:    rec.DirectConf,
 	}
 }
 
