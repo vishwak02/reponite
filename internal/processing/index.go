@@ -33,12 +33,18 @@ type ParsedFile struct {
 	Spans   []query.SymbolSpan
 }
 
-// IndexFiles indexes all files of one repo ref. Symbols are keyed by a
-// package-qualified id (pkg.name, pkg = the file's directory) so distinct
-// definitions that share a bare name (e.g. storage.Mem.Put vs sqlite.Store.Put)
-// are distinct nodes and never conflated (correctness). Callee edges are then
-// resolved against those ids (resolve.go).
+// IndexFiles indexes all files of one repo ref with name-based edge resolution.
+// Symbols are keyed by a package-qualified id (pkg.name, pkg = the file's
+// directory) so distinct definitions sharing a bare name (e.g. storage.Mem.Put
+// vs sqlite.Store.Put) are distinct nodes and never conflated (correctness).
 func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error {
+	return indexFiles(w, repo, ref, normVer, files, nil)
+}
+
+// indexFiles is IndexFiles with an optional precise edge map (callerQID -> base
+// callee name -> type-checker-proven callee QID) that upgrades matching edges to
+// go-types confidence; nil precise means pure name-based resolution.
+func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string]string) error {
 	type computed struct {
 		sym        Symbol
 		pkg        string
@@ -79,7 +85,7 @@ func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) er
 	for _, qid := range order {
 		c := byQID[qid]
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
-		callees := resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase)
+		callees := resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, precise[qid])
 		resolved[qid] = callees
 		for _, ce := range callees {
 			edges = append(edges, Edge{From: qid, To: ce.Name, Confidence: ce.Confidence})

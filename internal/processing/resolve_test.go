@@ -40,7 +40,7 @@ func TestResolveEdgesScoping(t *testing.T) {
 		"Mem":        {"internal/storage.Mem"},
 	}
 	got := resolveEdges("internal/storage",
-		[]string{"Put", "SymbolHash", "Println"}, nodeSet, byBase)
+		[]string{"Put", "SymbolHash", "Println"}, nodeSet, byBase, nil)
 
 	// In-package Put resolves to the caller's own package definition.
 	if got[0].Name != "internal/storage.Put" || got[0].ResolutionMethod != MethodResolved || got[0].Confidence != ConfResolved {
@@ -60,9 +60,21 @@ func TestResolveEdgesAmbiguous(t *testing.T) {
 	nodeSet := map[string]bool{"a.Put": true, "b.Put": true}
 	byBase := map[string][]string{"Put": {"a.Put", "b.Put"}}
 	// Caller in a third package calling Put: two candidates, no in-package match.
-	got := resolveEdges("c", []string{"Put"}, nodeSet, byBase)
+	got := resolveEdges("c", []string{"Put"}, nodeSet, byBase, nil)
 	if got[0].ResolutionMethod != MethodAmbiguous || got[0].Confidence != ConfAmbiguous || got[0].Name != "Put" {
 		t.Fatalf("cross-pkg ambiguous call must be flagged, not silently picked: %+v", got[0])
+	}
+}
+
+// A type-checker-proven target overrides the name-based fallback: an otherwise
+// ambiguous base name resolves precisely at full confidence.
+func TestResolveEdgesPreciseWins(t *testing.T) {
+	nodeSet := map[string]bool{"a.Put": true, "b.Put": true}
+	byBase := map[string][]string{"Put": {"a.Put", "b.Put"}}
+	precise := map[string]string{"Put": "b.Put"} // type checker pinned it to b.Put
+	got := resolveEdges("c", []string{"Put"}, nodeSet, byBase, precise)
+	if got[0].Name != "b.Put" || got[0].ResolutionMethod != MethodTypes || got[0].Confidence != ConfTypes {
+		t.Fatalf("precise edge must win at full confidence: %+v", got[0])
 	}
 }
 

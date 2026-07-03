@@ -69,16 +69,21 @@ func BaseName(qid string) string {
 	return qid
 }
 
-// resolveEdges resolves each base callee name for a caller in package callerPkg
-// against the ref's symbol tables. Scoping follows Go's rules as closely as a
-// name heuristic can: a definition in the caller's own package wins (an
-// unqualified call resolves there); otherwise a repo-wide unique base name wins;
-// a base name with several definitions is honestly ambiguous (we can't choose
-// without type info); an unknown one is external. nodeSet holds every qualified
-// id in the ref; byBase maps a base name to the qualified ids that define it.
-func resolveEdges(callerPkg string, callees []string, nodeSet map[string]bool, byBase map[string][]string) []query.Callee {
+// resolveEdges resolves each base callee name for a caller in package callerPkg.
+// A type-checker-proven target (precise[base], supplied by the Go resolver) wins
+// at full confidence. Otherwise it falls back to name scoping, as close to Go's
+// rules as a heuristic allows: a definition in the caller's own package wins (an
+// unqualified call resolves there); then a repo-wide unique base name; a base
+// name with several definitions is honestly ambiguous (can't choose without type
+// info); an unknown one is external. nodeSet holds every qualified id in the ref;
+// byBase maps a base name to the qualified ids that define it; precise may be nil.
+func resolveEdges(callerPkg string, callees []string, nodeSet map[string]bool, byBase map[string][]string, precise map[string]string) []query.Callee {
 	out := make([]query.Callee, 0, len(callees))
 	for _, base := range callees {
+		if q, ok := precise[base]; ok && nodeSet[q] {
+			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTypes, Confidence: ConfTypes})
+			continue
+		}
 		if q := qualify(callerPkg, base); nodeSet[q] {
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 			continue

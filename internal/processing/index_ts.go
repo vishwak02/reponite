@@ -55,7 +55,9 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 	if err != nil {
 		return err
 	}
-	return IndexFiles(w, repo, ref, normVer, files)
+	// Refine edges with the Go type checker where it can prove a concrete target
+	// (best-effort; empty on load failure -> pure name-based resolution).
+	return indexFiles(w, repo, ref, normVer, files, TypeResolvedEdges(dir))
 }
 
 // parseFile parses Go source, returning the content.AST (for ExtractGo) and the
