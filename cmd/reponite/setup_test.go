@@ -31,6 +31,30 @@ func TestMergeMCPServerPreservesAndCreates(t *testing.T) {
 	}
 }
 
+func TestParseSetupArgsFlagOrder(t *testing.T) {
+	cases := []struct {
+		name   string
+		args   []string
+		repo   string
+		config string
+		print  bool
+	}{
+		{"flags first", []string{"--config", "x.json", "."}, ".", "x.json", false},
+		{"positional first (regression)", []string{".", "--config", "x.json"}, ".", "x.json", false},
+		{"print after positional", []string{"myrepo", "--print"}, "myrepo", "", true},
+		{"no args -> defaults", nil, ".", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo, config, printOnly, ok := parseSetupArgs(c.args)
+			if !ok || repo != c.repo || config != c.config || printOnly != c.print {
+				t.Fatalf("parseSetupArgs(%v) = (%q,%q,%v,%v); want (%q,%q,%v,true)",
+					c.args, repo, config, printOnly, ok, c.repo, c.config, c.print)
+			}
+		})
+	}
+}
+
 func TestDefaultClaudeConfigPath(t *testing.T) {
 	if p := defaultClaudeConfigPath(); p != "" && !strings.Contains(p, "Claude") {
 		t.Fatalf("unexpected config path: %s", p)

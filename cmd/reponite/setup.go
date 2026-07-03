@@ -14,15 +14,9 @@ import (
 )
 
 func setupCommand(args []string) {
-	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-	configPath := fs.String("config", "", "MCP client config file (default: Claude Desktop for this OS)")
-	printOnly := fs.Bool("print", false, "print the config entry instead of writing it")
-	if err := fs.Parse(args); err != nil {
+	repo, configPath, printOnly, ok := parseSetupArgs(args)
+	if !ok {
 		os.Exit(2)
-	}
-	repo := "."
-	if fs.NArg() > 0 {
-		repo = fs.Arg(0)
 	}
 	absRepo, err := filepath.Abs(repo)
 	if err != nil {
@@ -34,7 +28,7 @@ func setupCommand(args []string) {
 	}
 	entry := map[string]interface{}{"command": exe, "args": []interface{}{"mcp", absRepo}}
 
-	if *printOnly {
+	if printOnly {
 		out, _ := json.MarshalIndent(map[string]interface{}{
 			"mcpServers": map[string]interface{}{"reponite": entry},
 		}, "", "  ")
@@ -42,7 +36,7 @@ func setupCommand(args []string) {
 		return
 	}
 
-	path := *configPath
+	path := configPath
 	if path == "" {
 		path = defaultClaudeConfigPath()
 		if path == "" {
@@ -55,6 +49,30 @@ func setupCommand(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("added the 'reponite' MCP server to %s\nrepo: %s\nRestart your agent to pick it up.\n", path, absRepo)
+}
+
+// parseSetupArgs parses `setup [dir] [--config path] [--print]`, allowing the
+// positional dir and the flags in any order (Go's flag package stops at the
+// first positional, so `setup . --config x` would otherwise drop --config). ok
+// is false on a parse error. repo defaults to ".".
+func parseSetupArgs(args []string) (repo, configPath string, printOnly, ok bool) {
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	cfg := fs.String("config", "", "MCP client config file (default: Claude Desktop for this OS)")
+	pr := fs.Bool("print", false, "print the config entry instead of writing it")
+	repo = "."
+	rest := args
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return "", "", false, false
+		}
+		rest = fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		repo = rest[0] // first positional is the repo dir; keep scanning for trailing flags
+		rest = rest[1:]
+	}
+	return repo, *cfg, *pr, true
 }
 
 // defaultClaudeConfigPath returns the Claude Desktop config location per OS.

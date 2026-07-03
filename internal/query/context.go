@@ -28,13 +28,15 @@ type ContextResult struct {
 // Context computes the direct callers and callees of symbol at a ref.
 func Context(s Store, repo, ref, symbol string) ContextResult {
 	snap := s.Snapshot(repo, ref)
-	var callees []string
-	var edges []CalleeEdge
+	// Non-nil empty slices so absent neighbors marshal as [] not null (consistent
+	// JSON for agents).
+	callees := []string{}
+	edges := []CalleeEdge{}
 	for _, c := range snap.Callees[symbol] {
 		callees = append(callees, c.Name)
 		edges = append(edges, CalleeEdge{Name: c.Name, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
 	}
-	var callers []string
+	callers := []string{}
 	for name, cs := range snap.Callees {
 		for _, c := range cs {
 			if c.Name == symbol {

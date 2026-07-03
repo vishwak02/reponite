@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "reponite": {
+      "args": [
+        "mcp",
+        "/home/vishwa/reponite"
+      ],
+      "command": "/home/vishwa/reponite/bin/reponite"
+    }
+  }
+}
