@@ -1,7 +1,8 @@
 // Command reponite is the CLI entry point for the ref-aware code intelligence
 // server. `version` and `demo` work in any build; index-backed commands
-// (index/compat/diff/grep/search) need the sqlite + treesitter tags, and `mcp`
-// needs sqlite + mcp — all via `make cli`. See PROGRESS.md.
+// (index/compat/diff/grep/search/context/rootcause/refs) need the sqlite +
+// treesitter tags, and `mcp` needs sqlite + mcp — all via `make cli`. See
+// PROGRESS.md.
 package main
 
 import (
@@ -30,10 +31,10 @@ func main() {
 		mcpCommand(os.Args[2:])
 	case "watch":
 		watchCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search":
+	case "index", "compat", "diff", "grep", "search", "rootcause", "context", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
-	case "init", "brief", "rootcause", "impact", "ximpact", "why", "arch",
-		"refs", "sync", "status", "gc", "serve":
+	case "init", "brief", "impact", "ximpact", "why", "arch",
+		"sync", "status", "gc", "serve":
 		notImplemented(os.Args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "reponite: unknown command %q\n\n", os.Args[1])
@@ -63,6 +64,9 @@ index-backed (build with `+"`make cli`"+`):
   diff <from> <to>     symbol delta between two refs
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
+  context <symbol> [ref]  direct callers/callees, each edge with resolution_method + confidence
+  rootcause <symbol> <from> <to>   drill a behavior change down to its mutation sites
+  refs                 list the repo's indexed refs
   mcp [dir]            serve the tools over MCP (stdio) for an AI agent
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on .go changes (fsnotify); keeps a mounted server fresh

@@ -1,9 +1,9 @@
 // index.go is the indexer core: given a repo ref's parsed files, it computes the
 // three hashes for every symbol, resolves callees to confidence-tagged CALLS
-// edges, runs the behavior-hash pass over the whole-ref graph, and writes the
-// resulting records + files to a Store. It is PURE (backend-agnostic), so it is
-// unit-tested in-sandbox against storage.Mem (ADR-018); the thin treesitter-
-// tagged layer (ParseGo + ExtractGo + IndexFiles) supplies real parsed files.
+// edges (resolve.go), runs the behavior-hash pass over the whole-ref graph, and
+// writes the resulting records + files to a Store. It is PURE (backend-agnostic),
+// so it is unit-tested in-sandbox against storage.Mem (ADR-018); the thin
+// treesitter-tagged layer (ParseGo + ExtractGo + IndexFiles) supplies real files.
 package processing
 
 import (
@@ -11,10 +11,6 @@ import (
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
 )
-
-// tsEdgeConfidence is the confidence of a name-based (tree-sitter tier) CALLS
-// edge (§7); SCIP resolution upgrades matching edges to 1.0 later.
-const tsEdgeConfidence = 0.6
 
 // Indexer is the write surface the indexer needs; satisfied by storage.Mem and
 // the SQLite adapter (storage/sqlite).
@@ -53,22 +49,33 @@ func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) er
 		}
 	}
 
+	// Resolve every callee name against the set of symbols indexed in this ref,
+	// so each edge records how it resolved and gets an honest confidence
+	// (resolve.go) instead of one blanket constant.
+	indexed := make(map[string]bool, len(order))
+	for _, name := range order {
+		indexed[name] = true
+	}
+
 	nodes := make([]Node, 0, len(order))
 	var edges []Edge
+	resolved := make(map[string][]ResolvedCallee, len(order))
 	for _, name := range order {
 		c := byName[name]
 		nodes = append(nodes, Node{ID: name, SymbolHash: c.symbolHash})
-		for _, callee := range c.sym.Callees {
-			edges = append(edges, Edge{From: name, To: callee, Confidence: tsEdgeConfidence})
+		rcs := Resolve(c.sym.Callees, indexed)
+		resolved[name] = rcs
+		for _, rc := range rcs {
+			edges = append(edges, Edge{From: name, To: rc.Name, Confidence: rc.Confidence})
 		}
 	}
 	beh := ComputeBehavior(nodes, edges, normVer)
 
 	for _, name := range order {
 		c := byName[name]
-		callees := make([]query.Callee, 0, len(c.sym.Callees))
-		for _, callee := range c.sym.Callees {
-			callees = append(callees, query.Callee{Name: callee, Confidence: tsEdgeConfidence})
+		callees := make([]query.Callee, 0, len(resolved[name]))
+		for _, rc := range resolved[name] {
+			callees = append(callees, query.Callee{Name: rc.Name, ResolutionMethod: rc.Method, Confidence: rc.Confidence})
 		}
 		if err := w.Put(repo, ref, name, storage.SymbolRecord{
 			SymbolHash:    c.symbolHash,

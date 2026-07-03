@@ -23,6 +23,12 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdGrep(args)
 	case "search":
 		cmdSearch(args)
+	case "rootcause":
+		cmdRootCause(args)
+	case "context":
+		cmdContext(args)
+	case "refs":
+		cmdRefs(args)
 	default:
 		notImplemented(cmd)
 	}
@@ -107,4 +113,33 @@ func cmdSearch(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.SearchJSON(query.SearchName(st, repoName("."), ref, args[0])))
+}
+
+func cmdRootCause(args []string) {
+	if len(args) < 3 {
+		fail(fmt.Errorf("usage: reponite rootcause <symbol> <from-ref> <to-ref>"))
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.RootCauseJSON(query.RootCauseBy(st, repoName("."), args[0], args[1], args[2])))
+}
+
+func cmdContext(args []string) {
+	if len(args) < 1 {
+		fail(fmt.Errorf("usage: reponite context <symbol> [ref]"))
+	}
+	ref := "HEAD"
+	if len(args) > 1 {
+		ref = args[1]
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.ContextJSON(query.Context(st, repoName("."), ref, args[0])))
+}
+
+func cmdRefs(args []string) {
+	st := openStore(".")
+	defer st.Close()
+	repo := repoName(".")
+	printJSON(interfaces.RefsJSON(repo, st.Refs(repo)))
 }

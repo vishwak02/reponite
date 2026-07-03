@@ -3,14 +3,16 @@
 // sqlite.go is the production query.Store backed by pure-Go SQLite. It persists
 // the records the in-memory store holds and serves the query layer unchanged
 // (the pure logic in content/processing/query is backend-agnostic, ADR-018).
-// This first adapter uses a query-serving schema (ref_history/callees/files/
-// manifest_blobs); the full content-addressed dedup tables from §9 are a later
-// refinement driven by the already-built content.Dedup/Manifest logic.
+// Symbol identity uses a query-serving schema (ref_history/callees/manifest_blobs);
+// file content is content-addressed (file_blobs keyed by content.BlobHash, with
+// per-ref ref_files rows), so indexing N refs costs storage ∝ unique file
+// content (§4.3/§9). Each CALLS edge stores its resolution_method (invariant 5).
 package sqlite
 
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -42,12 +44,20 @@ CREATE TABLE IF NOT EXISTS ref_history (
 CREATE INDEX IF NOT EXISTS idx_hist_symbol ON ref_history(repo, name);
 CREATE TABLE IF NOT EXISTS callees (
   repo TEXT NOT NULL, ref TEXT NOT NULL, name TEXT NOT NULL,
-  callee TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 1,
+  callee TEXT NOT NULL, resolution_method TEXT NOT NULL DEFAULT '',
+  confidence REAL NOT NULL DEFAULT 1,
   PRIMARY KEY (repo, ref, name, callee)
 );
-CREATE TABLE IF NOT EXISTS files (
+-- Files are content-addressed: identical content is stored once in file_blobs
+-- (keyed by content.BlobHash) and referenced per (repo,ref,path) from ref_files,
+-- so indexing N refs of a repo costs storage ∝ unique file content (§4.3/§9).
+CREATE TABLE IF NOT EXISTS file_blobs (
+  hash TEXT PRIMARY KEY,
+  content TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ref_files (
   repo TEXT NOT NULL, ref TEXT NOT NULL, path TEXT NOT NULL,
-  content TEXT NOT NULL,
+  blob_hash TEXT NOT NULL REFERENCES file_blobs(hash),
   PRIMARY KEY (repo, ref, path)
 );
 CREATE TABLE IF NOT EXISTS file_symbols (
@@ -71,7 +81,26 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	return s, nil
+}
+
+// migrate applies additive schema changes introduced after the initial schema,
+// so a store opened on an older index.db gains new columns without a rebuild.
+// Each statement is idempotent: adding a column that already exists is ignored.
+func (s *Store) migrate() error {
+	for _, stmt := range []string{
+		`ALTER TABLE callees ADD COLUMN resolution_method TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
+	}
+	return nil
 }
 
 // Close closes the underlying database.
@@ -119,8 +148,8 @@ func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 	}
 	for _, c := range rec.Callees {
 		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO callees(repo, ref, name, callee, confidence) VALUES(?,?,?,?,?)`,
-			repo, ref, name, c.Name, c.Confidence); err != nil {
+			`INSERT OR REPLACE INTO callees(repo, ref, name, callee, resolution_method, confidence) VALUES(?,?,?,?,?,?)`,
+			repo, ref, name, c.Name, c.ResolutionMethod, c.Confidence); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -137,10 +166,16 @@ func (s *Store) PutFile(repo, ref string, f query.File) error {
 	if err != nil {
 		return err
 	}
+	blob := string(content.BlobHash([]byte(f.Content)))
 	if _, err := tx.Exec(
-		`INSERT INTO files(repo, ref, path, content) VALUES(?,?,?,?)
-		 ON CONFLICT(repo, ref, path) DO UPDATE SET content=excluded.content`,
-		repo, ref, f.Path, f.Content); err != nil {
+		`INSERT OR IGNORE INTO file_blobs(hash, content) VALUES(?,?)`, blob, f.Content); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO ref_files(repo, ref, path, blob_hash) VALUES(?,?,?,?)
+		 ON CONFLICT(repo, ref, path) DO UPDATE SET blob_hash=excluded.blob_hash`,
+		repo, ref, f.Path, blob); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -257,13 +292,13 @@ func (s *Store) Snapshot(repo, ref string) query.RefSnapshot {
 		}
 		rows.Close()
 	}
-	crows, err := s.db.Query(`SELECT name, callee, confidence FROM callees WHERE repo=? AND ref=?`, repo, ref)
+	crows, err := s.db.Query(`SELECT name, callee, resolution_method, confidence FROM callees WHERE repo=? AND ref=?`, repo, ref)
 	if err == nil {
 		for crows.Next() {
-			var name, callee string
+			var name, callee, method string
 			var conf float64
-			if crows.Scan(&name, &callee, &conf) == nil {
-				snap.Callees[name] = append(snap.Callees[name], query.Callee{Name: callee, Confidence: conf})
+			if crows.Scan(&name, &callee, &method, &conf) == nil {
+				snap.Callees[name] = append(snap.Callees[name], query.Callee{Name: callee, ResolutionMethod: method, Confidence: conf})
 			}
 		}
 		crows.Close()
@@ -274,7 +309,10 @@ func (s *Store) Snapshot(repo, ref string) query.RefSnapshot {
 func (s *Store) Files(repo, ref string) []query.File {
 	byPath := map[string]*query.File{}
 	var order []string
-	rows, err := s.db.Query(`SELECT path, content FROM files WHERE repo=? AND ref=? ORDER BY path`, repo, ref)
+	rows, err := s.db.Query(
+		`SELECT rf.path, fb.content FROM ref_files rf
+		 JOIN file_blobs fb ON fb.hash = rf.blob_hash
+		 WHERE rf.repo=? AND rf.ref=? ORDER BY rf.path`, repo, ref)
 	if err != nil {
 		return nil
 	}

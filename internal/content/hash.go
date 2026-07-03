@@ -34,6 +34,7 @@ const (
 	domainEmbed     = "reponite/embed/v1"
 	domainEdge      = "reponite/edge/v1"
 	domainManifest  = "reponite/manifest/v1"
+	domainBlob      = "reponite/blob/v1"
 )
 
 // fieldHasher accumulates length-prefixed fields into a SHA-256 digest.
@@ -108,6 +109,15 @@ func BehaviorHash(symbolHash Hash, normVer int, calleeBehaviorHashes []Hash) Has
 // FileHash is the content identity of a canonicalized file (architecture §6).
 func FileHash(normVer int, canonFile []byte) Hash {
 	return newFieldHasher(domainFile).num(normVer).bytes(canonFile).sum()
+}
+
+// BlobHash is the content-addressing key for an arbitrary stored blob (e.g. a
+// file's raw text): a domain-separated SHA-256 of the bytes. Unlike the symbol
+// hashes it is independent of norm_ver — it identifies bytes for storage dedup,
+// not a canonicalized symbol identity, so identical content stores exactly once
+// across refs (architecture §4.3/§9).
+func BlobHash(data []byte) Hash {
+	return newFieldHasher(domainBlob).bytes(data).sum()
 }
 
 // EmbedHash keys a cached embedding; it changes only when the model changes, so

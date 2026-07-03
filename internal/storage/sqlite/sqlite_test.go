@@ -70,3 +70,67 @@ func TestSQLiteStoreRoundTripAndOracle(t *testing.T) {
 		t.Fatalf("grep via SQLite: %+v err=%v", res.Matches, err)
 	}
 }
+
+// Each callee edge's resolution_method survives a store round-trip (invariant 5).
+func TestSQLiteResolutionMethodRoundTrip(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err := st.Put("r", "HEAD", "Charge", storage.SymbolRecord{
+		SymbolHash: "c", SignatureHash: "s", BehaviorHash: "b", BehaviorConf: 0.6,
+		Callees: []query.Callee{
+			{Name: "validateCard", ResolutionMethod: "name-resolved", Confidence: 0.9},
+			{Name: "log", ResolutionMethod: "unresolved-external", Confidence: 0.6},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]query.Callee{}
+	for _, c := range st.Snapshot("r", "HEAD").Callees["Charge"] {
+		got[c.Name] = c
+	}
+	if c := got["validateCard"]; c.ResolutionMethod != "name-resolved" || c.Confidence != 0.9 {
+		t.Fatalf("resolved callee round-trip wrong: %+v", c)
+	}
+	if c := got["log"]; c.ResolutionMethod != "unresolved-external" || c.Confidence != 0.6 {
+		t.Fatalf("external callee round-trip wrong: %+v", c)
+	}
+}
+
+// Files are content-addressed: identical content across refs stores one blob,
+// distinct content stores another — storage ∝ unique content (§4.3/§9).
+func TestSQLiteFileContentAddressedDedup(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	same := "package a\nfunc F(){}\n"
+	diff := "package a\nfunc G(){}\n"
+	for _, f := range []struct{ ref, content string }{
+		{"v1", same}, {"v2", same}, {"v3", diff},
+	} {
+		if err := st.PutFile("r", f.ref, query.File{Path: "a.go", Content: f.content}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var blobs int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM file_blobs`).Scan(&blobs); err != nil {
+		t.Fatal(err)
+	}
+	if blobs != 2 {
+		t.Fatalf("identical content across v1/v2 must dedup: want 2 blobs (same+diff), got %d", blobs)
+	}
+	// content is still readable per ref through the blob join
+	if fs := st.Files("r", "v1"); len(fs) != 1 || fs[0].Content != same {
+		t.Fatalf("v1 files: %+v", fs)
+	}
+	if fs := st.Files("r", "v3"); len(fs) != 1 || fs[0].Content != diff {
+		t.Fatalf("v3 files: %+v", fs)
+	}
+}

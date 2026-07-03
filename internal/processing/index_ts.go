@@ -81,12 +81,12 @@ func topLevelSpans(root *sitter.Node, src []byte) []query.SymbolSpan {
 		end := int(ch.EndPoint().Row) + 1
 		switch ch.Type() {
 		case "function_declaration":
-			spans = append(spans, query.SymbolSpan{Name: firstChildText(w, "identifier"), StartLine: start, EndLine: end})
+			spans = append(spans, query.SymbolSpan{Name: nameOfNode(w, []string{"identifier"}, false), StartLine: start, EndLine: end})
 		case "method_declaration":
-			spans = append(spans, query.SymbolSpan{Name: firstChildText(w, "field_identifier"), StartLine: start, EndLine: end})
+			spans = append(spans, query.SymbolSpan{Name: nameOfNode(w, []string{"field_identifier"}, false), StartLine: start, EndLine: end})
 		case "type_declaration":
-			for _, spec := range descendants(w, "type_spec") {
-				spans = append(spans, query.SymbolSpan{Name: firstChildText(spec, "type_identifier"), StartLine: start, EndLine: end})
+			for _, spec := range descendantsAny(w, []string{"type_spec"}) {
+				spans = append(spans, query.SymbolSpan{Name: nameOfNode(spec, []string{"type_identifier"}, false), StartLine: start, EndLine: end})
 			}
 		}
 	}

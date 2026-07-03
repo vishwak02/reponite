@@ -6,21 +6,33 @@ package query
 
 import "sort"
 
+// CalleeEdge is one outgoing CALLS edge with its resolution provenance, so an
+// agent sees not just what a symbol calls but how confidently each edge is known
+// (invariant 5).
+type CalleeEdge struct {
+	Name             string
+	ResolutionMethod string
+	Confidence       float64
+}
+
 // ContextResult is the direct neighborhood of a symbol in the call graph.
 type ContextResult struct {
-	Symbol  string
-	Ref     string
-	Callers []string
-	Callees []string
-	Meta    Meta
+	Symbol      string
+	Ref         string
+	Callers     []string
+	Callees     []string     // callee names, sorted (kept for simple consumers)
+	CalleeEdges []CalleeEdge // same edges with resolution_method + confidence
+	Meta        Meta
 }
 
 // Context computes the direct callers and callees of symbol at a ref.
 func Context(s Store, repo, ref, symbol string) ContextResult {
 	snap := s.Snapshot(repo, ref)
 	var callees []string
+	var edges []CalleeEdge
 	for _, c := range snap.Callees[symbol] {
 		callees = append(callees, c.Name)
+		edges = append(edges, CalleeEdge{Name: c.Name, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
 	}
 	var callers []string
 	for name, cs := range snap.Callees {
@@ -33,5 +45,6 @@ func Context(s Store, repo, ref, symbol string) ContextResult {
 	}
 	sort.Strings(callers)
 	sort.Strings(callees)
-	return ContextResult{Symbol: symbol, Ref: ref, Callers: callers, Callees: callees, Meta: Meta{Repo: repo, Ref: ref}}
+	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
+	return ContextResult{Symbol: symbol, Ref: ref, Callers: callers, Callees: callees, CalleeEdges: edges, Meta: Meta{Repo: repo, Ref: ref}}
 }
