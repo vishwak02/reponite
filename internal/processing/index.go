@@ -51,7 +51,14 @@ func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) er
 	for _, f := range files {
 		pkg := pkgOf(f.Path)
 		for _, s := range f.Symbols {
-			qid := qualify(pkg, s.Name)
+			// Methods qualify by receiver too (pkg.Recv.name) so same-named methods
+			// on different types are distinct; edge resolution still keys off the
+			// bare name (byBase).
+			local := s.Name
+			if s.Recv != "" {
+				local = s.Recv + "." + s.Name
+			}
+			qid := qualify(pkg, local)
 			id := content.SymbolIdentity{Repo: repo, Lang: "go", Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
 			if _, dup := byQID[qid]; !dup {
 				order = append(order, qid)

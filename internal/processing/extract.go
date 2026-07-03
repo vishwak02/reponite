@@ -16,6 +16,7 @@ import (
 // Symbol is a top-level (or nested) symbol extracted from a file, pre-hashing.
 type Symbol struct {
 	Name      string
+	Recv      string // method receiver type (empty for functions/types), for id qualification
 	Kind      string // function|method|type
 	Signature string
 	CanonBody []byte
@@ -74,14 +75,33 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		canonBody = content.Canon(body, normVer)
 		callees = calleesWithRules(body, r)
 	}
+	recv := ""
+	if kind == "method" {
+		recv = receiverType(fn, r)
+	}
 	return Symbol{
 		Name:      nameOf(fn, r),
+		Recv:      recv,
 		Kind:      kind,
 		Signature: string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
 		CanonBody: canonBody,
 		Doc:       doc,
 		Callees:   callees,
 	}
+}
+
+// receiverType returns a method's receiver type name (pointer/spaces stripped),
+// e.g. "Mem" for "(m *Mem)". The receiver is the first RecvTypes child of the
+// method declaration; its type name is the first RecvName descendant within.
+func receiverType(fn content.AST, r LangRules) string {
+	if len(r.RecvTypes) == 0 {
+		return ""
+	}
+	recv := firstChildAny(fn, r.RecvTypes)
+	if recv == nil {
+		return ""
+	}
+	return strings.TrimLeft(nameOfNode(recv, r.RecvName, true), "*& ")
 }
 
 func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbol {

@@ -14,6 +14,8 @@ type LangRules struct {
 	TypeDecl   []string // type/class/struct/interface/enum declarations
 	TypeSpec   []string // inner spec node holding a type name (Go type_spec); empty => name is a direct child of TypeDecl
 	NameTypes  []string // node types holding a declared/callee name
+	RecvTypes  []string // method-receiver container node types (Go: the receiver parameter_list); empty => no receiver qualification
+	RecvName   []string // node types holding the receiver's type name within RecvTypes
 	BodyTypes  []string // callable body node types (dropped from the signature)
 	CallTypes  []string // call-expression node types
 	SortChild  []string // node types whose children are order-independent (import lists)
@@ -53,6 +55,8 @@ var GoRules = LangRules{
 	TypeDecl:   []string{"type_declaration"},
 	TypeSpec:   []string{"type_spec"},
 	NameTypes:  []string{"identifier", "field_identifier", "type_identifier"},
+	RecvTypes:  []string{"parameter_list"},
+	RecvName:   []string{"type_identifier"},
 	BodyTypes:  []string{"block"},
 	CallTypes:  []string{"call_expression"},
 	SortChild:  []string{"import_spec_list"},

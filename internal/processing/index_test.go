@@ -123,6 +123,27 @@ func TestIndexFilesPackageQualifiedNoCollision(t *testing.T) {
 	}
 }
 
+// Same-package methods with the same bare name but different receivers must be
+// distinct nodes (receiver-level qualification, the #1 residual).
+func TestIndexFilesReceiverQualifiedSamePackage(t *testing.T) {
+	m := storage.NewMem()
+	files := []ParsedFile{{Path: "p/x.go", Content: "x", Symbols: []Symbol{
+		{Name: "Get", Recv: "A", Kind: "method", Signature: "func (A) Get()", CanonBody: []byte("a-logic")},
+		{Name: "Get", Recv: "B", Kind: "method", Signature: "func (B) Get()", CanonBody: []byte("b-logic")},
+	}}}
+	if err := IndexFiles(m, "r", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+	a, ok1 := m.SymbolAt("r", "p.A.Get", "HEAD")
+	b, ok2 := m.SymbolAt("r", "p.B.Get", "HEAD")
+	if !ok1 || !ok2 {
+		t.Fatal("same-package methods with different receivers must be distinct qualified ids")
+	}
+	if a.BehaviorHash == b.BehaviorHash {
+		t.Fatal("distinct-receiver methods must not conflate")
+	}
+}
+
 // Reindexing a ref replaces its symbols; a symbol that vanished must not linger.
 func TestIndexFilesReindexReplaces(t *testing.T) {
 	m := storage.NewMem()
