@@ -2,39 +2,74 @@ package processing
 
 import "testing"
 
-// A callee present in the ref's indexed set resolves to a visible definition
-// (name-resolved, high confidence); anything else is an opaque external leaf.
-func TestResolveClassifiesAgainstIndexedSet(t *testing.T) {
-	indexed := map[string]bool{"validateCard": true, "Charge": true}
-	got := Resolve([]string{"validateCard", "Println", "log"}, indexed)
-	if len(got) != 3 {
-		t.Fatalf("want 3 resolved callees, got %d", len(got))
+func TestQualifyAndBaseName(t *testing.T) {
+	if got := qualify("internal/storage", "Put"); got != "internal/storage.Put" {
+		t.Fatalf("qualify = %q", got)
 	}
-	if got[0].Name != "validateCard" || got[0].Method != MethodResolved || got[0].Confidence != ConfResolved {
-		t.Fatalf("in-repo callee must be name-resolved@%v: %+v", ConfResolved, got[0])
+	if got := qualify("", "Charge"); got != "Charge" {
+		t.Fatalf("rootless qualify must stay bare: %q", got)
 	}
-	for _, ext := range got[1:] {
-		if ext.Method != MethodExternal || ext.Confidence != ConfExternal {
-			t.Fatalf("unindexed callee must be unresolved-external@%v: %+v", ConfExternal, ext)
-		}
+	if got := BaseName("internal/storage.Put"); got != "Put" {
+		t.Fatalf("BaseName = %q", got)
+	}
+	if got := BaseName("Charge"); got != "Charge" {
+		t.Fatalf("BaseName of bare = %q", got)
 	}
 }
 
-func TestResolvePreservesOrderAndHandlesEmpty(t *testing.T) {
-	if got := Resolve(nil, map[string]bool{}); len(got) != 0 {
-		t.Fatalf("nil callees -> empty, got %+v", got)
+func TestPkgOf(t *testing.T) {
+	if got := pkgOf("internal/storage/mem.go"); got != "internal/storage" {
+		t.Fatalf("pkgOf = %q", got)
 	}
-	all := map[string]bool{"a": true, "b": true, "c": true}
-	got := Resolve([]string{"c", "a", "b"}, all)
-	if got[0].Name != "c" || got[1].Name != "a" || got[2].Name != "b" {
-		t.Fatalf("Resolve must preserve extractor order: %+v", got)
+	if got := pkgOf("main.go"); got != "" {
+		t.Fatalf("root file must have no qualifier: %q", got)
 	}
 }
 
-// The confidence policy must be monotonic with certainty: a type-proven edge is
-// the most confident, an in-repo name match less so, an external leaf least.
-func TestResolveConfidenceMonotonic(t *testing.T) {
-	if !(ConfTypes > ConfResolved && ConfResolved > ConfExternal) {
-		t.Fatalf("confidence must be ordered types>resolved>external: %v %v %v", ConfTypes, ConfResolved, ConfExternal)
+func TestResolveEdgesScoping(t *testing.T) {
+	// Two packages each define Put; content defines a unique SymbolHash.
+	nodeSet := map[string]bool{
+		"internal/storage.Put":        true,
+		"internal/storage/sqlite.Put": true,
+		"internal/content.SymbolHash": true,
+		"internal/storage.Mem":        true,
+	}
+	byBase := map[string][]string{
+		"Put":        {"internal/storage.Put", "internal/storage/sqlite.Put"},
+		"SymbolHash": {"internal/content.SymbolHash"},
+		"Mem":        {"internal/storage.Mem"},
+	}
+	got := resolveEdges("internal/storage",
+		[]string{"Put", "SymbolHash", "Println"}, nodeSet, byBase)
+
+	// In-package Put resolves to the caller's own package definition.
+	if got[0].Name != "internal/storage.Put" || got[0].ResolutionMethod != MethodResolved || got[0].Confidence != ConfResolved {
+		t.Fatalf("in-package call must resolve to own pkg: %+v", got[0])
+	}
+	// Repo-wide unique base resolves precisely across packages.
+	if got[1].Name != "internal/content.SymbolHash" || got[1].ResolutionMethod != MethodResolved {
+		t.Fatalf("unique cross-pkg call must resolve: %+v", got[1])
+	}
+	// Unknown name is external.
+	if got[2].ResolutionMethod != MethodExternal || got[2].Confidence != ConfExternal {
+		t.Fatalf("unknown call must be external: %+v", got[2])
+	}
+}
+
+func TestResolveEdgesAmbiguous(t *testing.T) {
+	nodeSet := map[string]bool{"a.Put": true, "b.Put": true}
+	byBase := map[string][]string{"Put": {"a.Put", "b.Put"}}
+	// Caller in a third package calling Put: two candidates, no in-package match.
+	got := resolveEdges("c", []string{"Put"}, nodeSet, byBase)
+	if got[0].ResolutionMethod != MethodAmbiguous || got[0].Confidence != ConfAmbiguous || got[0].Name != "Put" {
+		t.Fatalf("cross-pkg ambiguous call must be flagged, not silently picked: %+v", got[0])
+	}
+}
+
+// Confidence is monotonic with certainty.
+func TestConfidenceMonotonic(t *testing.T) {
+	if !(ConfTypes > ConfResolved && ConfResolved > ConfExternal && ConfExternal > ConfAmbiguous) {
+		t.Fatalf("want types>resolved>external>ambiguous: %v %v %v %v",
+			ConfTypes, ConfResolved, ConfExternal, ConfAmbiguous)
 	}
 }

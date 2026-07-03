@@ -110,6 +110,25 @@ func TestSearchName(t *testing.T) {
 	}
 }
 
+func TestResolveSymbolBareQualifiedAmbiguous(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "storage.Put", rc("a", "s", "b", 1))
+	m.Put("r", "HEAD", "sqlite.Put", rc("c", "s", "b", 1))
+	m.Put("r", "HEAD", "content.SymbolHash", rc("d", "s", "b", 1))
+	if got := query.ResolveSymbol(m, "r", "HEAD", "storage.Put"); len(got) != 1 || got[0] != "storage.Put" {
+		t.Fatalf("exact qualified: %v", got)
+	}
+	if got := query.ResolveSymbol(m, "r", "HEAD", "SymbolHash"); len(got) != 1 || got[0] != "content.SymbolHash" {
+		t.Fatalf("bare unique must resolve to its qualified id: %v", got)
+	}
+	if got := query.ResolveSymbol(m, "r", "HEAD", "Put"); len(got) != 2 {
+		t.Fatalf("ambiguous bare name must return all candidates: %v", got)
+	}
+	if got := query.ResolveSymbol(m, "r", "HEAD", "Nope"); len(got) != 0 {
+		t.Fatalf("unknown must return none: %v", got)
+	}
+}
+
 func TestSearchNameExcludesTestsByDefault(t *testing.T) {
 	m := storage.NewMem()
 	m.Put("r", "HEAD", "GetUser", rc("a", "s", "b", 1))

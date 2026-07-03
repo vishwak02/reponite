@@ -30,59 +30,61 @@ type ParsedFile struct {
 	Spans   []query.SymbolSpan
 }
 
-// IndexFiles indexes all files of one repo ref.
+// IndexFiles indexes all files of one repo ref. Symbols are keyed by a
+// package-qualified id (pkg.name, pkg = the file's directory) so distinct
+// definitions that share a bare name (e.g. storage.Mem.Put vs sqlite.Store.Put)
+// are distinct nodes and never conflated (correctness). Callee edges are then
+// resolved against those ids (resolve.go).
 func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error {
 	type computed struct {
 		sym        Symbol
+		pkg        string
 		symbolHash content.Hash
 		sigHash    content.Hash
 	}
-	var order []string
-	byName := map[string]computed{}
+	var order []string              // qualified ids, first-seen order
+	byQID := map[string]computed{}  // qid -> facts
+	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
 	for _, f := range files {
+		pkg := pkgOf(f.Path)
 		for _, s := range f.Symbols {
+			qid := qualify(pkg, s.Name)
 			id := content.SymbolIdentity{Repo: repo, Lang: "go", Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
-			if _, dup := byName[s.Name]; !dup {
-				order = append(order, s.Name)
+			if _, dup := byQID[qid]; !dup {
+				order = append(order, qid)
+				byBase[s.Name] = append(byBase[s.Name], qid)
 			}
-			byName[s.Name] = computed{sym: s, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id)}
+			byQID[qid] = computed{sym: s, pkg: pkg, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id)}
 		}
 	}
 
-	// Resolve every callee name against the set of symbols indexed in this ref,
-	// so each edge records how it resolved and gets an honest confidence
-	// (resolve.go) instead of one blanket constant.
-	indexed := make(map[string]bool, len(order))
-	for _, name := range order {
-		indexed[name] = true
+	nodeSet := make(map[string]bool, len(order))
+	for _, qid := range order {
+		nodeSet[qid] = true
 	}
 
 	nodes := make([]Node, 0, len(order))
 	var edges []Edge
-	resolved := make(map[string][]ResolvedCallee, len(order))
-	for _, name := range order {
-		c := byName[name]
-		nodes = append(nodes, Node{ID: name, SymbolHash: c.symbolHash})
-		rcs := Resolve(c.sym.Callees, indexed)
-		resolved[name] = rcs
-		for _, rc := range rcs {
-			edges = append(edges, Edge{From: name, To: rc.Name, Confidence: rc.Confidence})
+	resolved := make(map[string][]query.Callee, len(order))
+	for _, qid := range order {
+		c := byQID[qid]
+		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
+		callees := resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase)
+		resolved[qid] = callees
+		for _, ce := range callees {
+			edges = append(edges, Edge{From: qid, To: ce.Name, Confidence: ce.Confidence})
 		}
 	}
 	beh := ComputeBehavior(nodes, edges, normVer)
 
-	for _, name := range order {
-		c := byName[name]
-		callees := make([]query.Callee, 0, len(resolved[name]))
-		for _, rc := range resolved[name] {
-			callees = append(callees, query.Callee{Name: rc.Name, ResolutionMethod: rc.Method, Confidence: rc.Confidence})
-		}
-		if err := w.Put(repo, ref, name, storage.SymbolRecord{
+	for _, qid := range order {
+		c := byQID[qid]
+		if err := w.Put(repo, ref, qid, storage.SymbolRecord{
 			SymbolHash:    c.symbolHash,
 			SignatureHash: c.sigHash,
-			BehaviorHash:  beh.BehaviorHash[name],
-			BehaviorConf:  beh.BehaviorConf[name],
-			Callees:       callees,
+			BehaviorHash:  beh.BehaviorHash[qid],
+			BehaviorConf:  beh.BehaviorConf[qid],
+			Callees:       resolved[qid],
 		}); err != nil {
 			return err
 		}

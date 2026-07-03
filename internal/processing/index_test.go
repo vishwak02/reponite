@@ -81,6 +81,48 @@ func TestIndexFilesResolutionProvenance(t *testing.T) {
 	}
 }
 
+// #1 keystone: two packages defining the same bare name must be distinct nodes
+// (no conflation), and a call to that name across packages must be flagged
+// ambiguous rather than silently attributed to one.
+func TestIndexFilesPackageQualifiedNoCollision(t *testing.T) {
+	m := storage.NewMem()
+	files := []ParsedFile{
+		{Path: "storage/mem.go", Content: "x", Symbols: []Symbol{
+			sym("Put", "method", "func Put() error", "mem-logic"),
+			sym("MemOnly", "function", "func MemOnly()", "b"),
+		}},
+		{Path: "sqlite/store.go", Content: "x", Symbols: []Symbol{
+			sym("Put", "method", "func Put() error", "sqlite-logic"), // same name, diff pkg + body
+		}},
+		{Path: "proc/index.go", Content: "x", Symbols: []Symbol{
+			sym("IndexFiles", "function", "func IndexFiles()", "b", "Put", "MemOnly"),
+		}},
+	}
+	if err := IndexFiles(m, "r", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+
+	memPut, ok1 := m.SymbolAt("r", "storage.Put", "HEAD")
+	sqlPut, ok2 := m.SymbolAt("r", "sqlite.Put", "HEAD")
+	if !ok1 || !ok2 {
+		t.Fatal("both Put definitions must exist as distinct qualified symbols")
+	}
+	if memPut.BehaviorHash == sqlPut.BehaviorHash {
+		t.Fatal("distinct Put bodies must have distinct behavior hashes (no conflation)")
+	}
+
+	edges := map[string]query.Callee{}
+	for _, c := range m.Snapshot("r", "HEAD").Callees["proc.IndexFiles"] {
+		edges[c.Name] = c
+	}
+	if e := edges["Put"]; e.ResolutionMethod != MethodAmbiguous || e.Confidence != ConfAmbiguous {
+		t.Fatalf("cross-pkg call to Put must be ambiguous, not silently resolved: %+v", e)
+	}
+	if e := edges["storage.MemOnly"]; e.ResolutionMethod != MethodResolved {
+		t.Fatalf("repo-unique callee must resolve to its qualified id: %+v", edges)
+	}
+}
+
 func TestIndexFilesDiffAndGrep(t *testing.T) {
 	m := storage.NewMem()
 	_ = IndexFiles(m, "r", "a", 1, []ParsedFile{{

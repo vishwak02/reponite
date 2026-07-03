@@ -29,13 +29,17 @@ type ContextResult struct {
 // points (IsTestName) are excluded from callers/callees unless includeTests, so
 // production navigation isn't cluttered with test functions.
 func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult {
+	sym := symbol
+	if names := ResolveSymbol(s, repo, ref, symbol); len(names) > 0 {
+		sym = names[0] // resolve bare -> package-qualified id
+	}
 	snap := s.Snapshot(repo, ref)
 	// Non-nil empty slices so absent neighbors marshal as [] not null (consistent
 	// JSON for agents).
 	callees := []string{}
 	edges := []CalleeEdge{}
-	for _, c := range snap.Callees[symbol] {
-		if IsTestName(c.Name) && !includeTests {
+	for _, c := range snap.Callees[sym] {
+		if !includeTests && IsTestName(baseName(c.Name)) {
 			continue
 		}
 		callees = append(callees, c.Name)
@@ -43,11 +47,11 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	}
 	callers := []string{}
 	for name, cs := range snap.Callees {
-		if IsTestName(name) && !includeTests {
+		if !includeTests && IsTestName(baseName(name)) {
 			continue
 		}
 		for _, c := range cs {
-			if c.Name == symbol {
+			if c.Name == sym {
 				callers = append(callers, name)
 				break
 			}
@@ -56,5 +60,5 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	sort.Strings(callers)
 	sort.Strings(callees)
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
-	return ContextResult{Symbol: symbol, Ref: ref, Callers: callers, Callees: callees, CalleeEdges: edges, Meta: Meta{Repo: repo, Ref: ref}}
+	return ContextResult{Symbol: sym, Ref: ref, Callers: callers, Callees: callees, CalleeEdges: edges, Meta: Meta{Repo: repo, Ref: ref}}
 }
