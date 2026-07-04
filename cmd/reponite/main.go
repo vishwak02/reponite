@@ -31,9 +31,9 @@ func main() {
 		mcpCommand(os.Args[2:])
 	case "watch":
 		watchCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "rootcause", "context", "refs":
+	case "index", "compat", "diff", "grep", "search", "rootcause", "rootcause-trace", "ci-check", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
-	case "init", "brief", "impact", "ximpact", "why", "arch",
+	case "init", "impact", "ximpact", "why", "arch",
 		"sync", "status", "gc", "serve":
 		notImplemented(os.Args[1])
 	default:
@@ -62,11 +62,14 @@ index-backed (build with `+"`make cli`"+`):
   index <dir> [ref]    index a repo's Go files at a ref (working tree)
   index --git <rev> [dir]   index a git revision's tree (tag/branch/SHA/HEAD~3) with its real commit
   compat <symbol> [ref]   compatibility verdicts across the repo's other refs
-  diff <from> <to>     symbol delta between two refs
+  diff <from> <to> [--changed-only] [--package P] [--confidence-min F]   symbol delta between two refs
+  ci-check --base <ref> --head <ref>   exit non-zero on any exported API break (PR gate)
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
   context <symbol> [ref]  direct callers/callees, each edge with resolution_method + confidence
   rootcause <symbol> <from> <to>   drill a behavior change down to its mutation sites
+  rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace
+  brief <symbol> [ref] [--budget N]   one bundle to edit a symbol: body + callees/callers + tests + compat
   refs                 list the repo's indexed refs
   mcp [dir]            serve the tools over MCP (stdio) for an AI agent
   setup [dir]         register reponite as an MCP server in your agent config

@@ -28,14 +28,19 @@ curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh 
 make cli                               # builds bin/reponite (all adapters)
 
 reponite demo                          # in-memory end-to-end run — no repo needed
-reponite index .                       # index this repo's Go files at HEAD
+reponite index .                       # index this repo at HEAD (Go/Python/JS/TS/Java, auto-detected)
 reponite index . v2.3.0                # index another ref
-reponite compat Charge                 # Charge's compatibility across indexed refs
+reponite compat Charge                 # Charge's compatibility across indexed refs (+ changed_callees)
+reponite brief Charge                  # one bundle to edit Charge: body + callees/callers + tests + compat
+reponite diff v0.1.0 HEAD --changed-only --package internal/query   # scoped, changed-only delta
+reponite ci-check --base main --head HEAD   # non-zero exit on any exported API break (PR gate)
 reponite grep validateCard             # trigram search; each hit fused with its symbol
 
 # use it from an AI agent (dogfooding):
-reponite setup .                       # register reponite as an MCP server for your agent
-reponite mcp .                         # (what the agent runs) serve the tools over stdio
+reponite setup .                       # register as an MCP server (Claude Desktop by default)
+reponite setup . --client cursor       # or claude-code | cursor | windsurf
+reponite mcp .                         # (what the agent runs) serve the tools over stdio;
+                                       #   self-indexes HEAD on first mount if no index exists
 ```
 
 `reponite demo` prints the flagship verdict as JSON:

@@ -9,6 +9,7 @@ package processing
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -40,18 +41,22 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 
 	var files []ParsedFile
 	err = tree.Files().ForEach(func(f *object.File) error {
-		if !strings.HasSuffix(f.Name, ".go") || skipPath(f.Name) {
+		rules, ok := RulesForExt(filepath.Ext(f.Name))
+		if !ok || skipPath(f.Name) {
 			return nil
 		}
 		src, err := f.Contents()
 		if err != nil {
 			return err
 		}
-		root, spans, perr := parseFile([]byte(src))
+		root, spans, perr := parseFileRules([]byte(src), filepath.Ext(f.Name), rules)
 		if perr != nil {
 			return perr
 		}
-		files = append(files, ParsedFile{Path: f.Name, Content: src, Symbols: ExtractGo(root, normVer), Spans: spans})
+		if root == nil {
+			return nil // no grammar bound for this extension; skip
+		}
+		files = append(files, ParsedFile{Path: f.Name, Content: src, Lang: rules.Name, Symbols: Extract(root, rules, normVer), Spans: spans})
 		return nil
 	})
 	if err != nil {

@@ -29,6 +29,7 @@ var _ Indexer = (*storage.Mem)(nil)
 type ParsedFile struct {
 	Path    string
 	Content string
+	Lang    string // language name (lang.go); empty defaults to "go" for back-compat
 	Symbols []Symbol
 	Spans   []query.SymbolSpan
 }
@@ -56,6 +57,10 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
 	for _, f := range files {
 		pkg := pkgOf(f.Path)
+		lang := f.Lang
+		if lang == "" {
+			lang = "go" // back-compat: pure callers/tests predate the Lang field
+		}
 		for _, s := range f.Symbols {
 			// Methods qualify by receiver too (pkg.Recv.name) so same-named methods
 			// on different types are distinct; edge resolution still keys off the
@@ -65,7 +70,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				local = s.Recv + "." + s.Name
 			}
 			qid := qualify(pkg, local)
-			id := content.SymbolIdentity{Repo: repo, Lang: "go", Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
+			id := content.SymbolIdentity{Repo: repo, Lang: lang, Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
 			if _, dup := byQID[qid]; !dup {
 				order = append(order, qid)
 				byBase[s.Name] = append(byBase[s.Name], qid)

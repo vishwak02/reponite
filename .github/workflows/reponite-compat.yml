@@ -1,0 +1,29 @@
+# Example PR gate: fail when a pull request breaks an exported API.
+# Copy into a target repo's .github/workflows/. Indexes the base and head
+# revisions into one reponite DB, then runs `ci-check` (non-zero exit on any
+# exported removed/shape_changed symbol). Behavior changes are not gated here.
+name: reponite compat
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  compat:
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need base + head history for --git indexing
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      # Build reponite (all adapters). In a non-Go repo, replace with the
+      # released binary: curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh | sh
+      - run: git clone --depth 1 https://github.com/vishwak02/reponite /tmp/reponite
+      - run: cd /tmp/reponite && make cli && echo "/tmp/reponite/bin" >> "$GITHUB_PATH"
+      # Index both revisions into one DB (labels: base / head).
+      - run: reponite index --git "origin/${{ github.base_ref }}" base
+      - run: reponite index --git "${{ github.event.pull_request.head.sha }}" head
+      - run: reponite ci-check --base base --head head

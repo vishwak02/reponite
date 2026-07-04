@@ -16,9 +16,10 @@ import (
 	"github.com/vishwak02/reponite/internal/version"
 )
 
-// watchCommand indexes HEAD once, then re-indexes on .go changes (debounced),
-// so a mounted `reponite mcp` server (reading via SQLite WAL) always serves
-// fresh results without a manual `reponite index`.
+// watchCommand indexes HEAD once, then re-indexes on source-file changes
+// (any indexed language, debounced), so a mounted `reponite mcp` server
+// (reading via SQLite WAL) always serves fresh results without a manual
+// `reponite index`.
 func watchCommand(args []string) {
 	dir := "."
 	if len(args) > 0 {
@@ -76,7 +77,7 @@ func watchCommand(args []string) {
 					_ = w.Add(ev.Name)
 				}
 			}
-			if !strings.HasSuffix(ev.Name, ".go") {
+			if _, ok := processing.RulesForExt(filepath.Ext(ev.Name)); !ok {
 				continue
 			}
 			if debounce != nil {

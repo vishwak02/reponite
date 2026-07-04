@@ -11,7 +11,9 @@ func mcpCommand(args []string) {
 	}
 	st := openStore(dir)
 	defer st.Close()
-	ts := &interfaces.ToolServer{Store: st, Repo: repoName(dir)}
+	repo := repoName(dir)
+	autoIndexIfEmpty(st, repo, dir) // self-index on first mount so tools aren't silently empty
+	ts := &interfaces.ToolServer{Store: st, Repo: repo, Intent: newIntentProvider(dir)}
 	if err := interfaces.ServeStdio(ts); err != nil {
 		fail(err)
 	}

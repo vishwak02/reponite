@@ -11,10 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 func setupCommand(args []string) {
-	repo, configPath, printOnly, ok := parseSetupArgs(args)
+	repo, configPath, client, printOnly, ok := parseSetupArgs(args)
 	if !ok {
 		os.Exit(2)
 	}
@@ -38,11 +39,16 @@ func setupCommand(args []string) {
 
 	path := configPath
 	if path == "" {
-		path = defaultClaudeConfigPath()
-		if path == "" {
-			fmt.Fprintln(os.Stderr, "reponite setup: could not determine the Claude config path; pass --config <file> or use --print")
+		p, known := clientConfigPath(client, absRepo)
+		if !known {
+			fmt.Fprintf(os.Stderr, "reponite setup: unknown --client %q; known: %s. For other clients pass --config <file> or --print.\n", client, strings.Join(knownClients(), ", "))
 			os.Exit(1)
 		}
+		if p == "" {
+			fmt.Fprintln(os.Stderr, "reponite setup: could not determine the config path for this OS; pass --config <file> or use --print")
+			os.Exit(1)
+		}
+		path = p
 	}
 	if err := mergeMCPServer(path, "reponite", entry); err != nil {
 		fmt.Fprintln(os.Stderr, "reponite setup:", err)
@@ -51,19 +57,52 @@ func setupCommand(args []string) {
 	fmt.Printf("added the 'reponite' MCP server to %s\nrepo: %s\nRestart your agent to pick it up.\n", path, absRepo)
 }
 
-// parseSetupArgs parses `setup [dir] [--config path] [--print]`, allowing the
-// positional dir and the flags in any order (Go's flag package stops at the
-// first positional, so `setup . --config x` would otherwise drop --config). ok
-// is false on a parse error. repo defaults to ".".
-func parseSetupArgs(args []string) (repo, configPath string, printOnly, ok bool) {
+// clientConfigPath returns the default MCP config path for a known client, or
+// ("", false) for an unknown one. Every supported client consumes the same
+// {"mcpServers": {name: {command, args}}} shape that mergeMCPServer writes;
+// clients with a divergent schema should use --config/--print instead.
+func clientConfigPath(client, absRepo string) (string, bool) {
+	home, _ := os.UserHomeDir()
+	switch client {
+	case "claude-desktop", "claude", "":
+		return defaultClaudeConfigPath(), true
+	case "claude-code":
+		// Project scope: the checked-in .mcp.json alongside the repo.
+		return filepath.Join(absRepo, ".mcp.json"), true
+	case "cursor":
+		if home == "" {
+			return "", true
+		}
+		return filepath.Join(home, ".cursor", "mcp.json"), true
+	case "windsurf":
+		if home == "" {
+			return "", true
+		}
+		return filepath.Join(home, ".codeium", "windsurf", "mcp_config.json"), true
+	}
+	return "", false
+}
+
+// knownClients lists the clients setup can auto-target (mcpServers-shaped config).
+func knownClients() []string {
+	return []string{"claude-desktop", "claude-code", "cursor", "windsurf"}
+}
+
+// parseSetupArgs parses `setup [dir] [--client name] [--config path] [--print]`,
+// allowing the positional dir and the flags in any order (Go's flag package
+// stops at the first positional, so `setup . --config x` would otherwise drop
+// --config). ok is false on a parse error. repo defaults to ".", client to
+// "claude-desktop".
+func parseSetupArgs(args []string) (repo, configPath, client string, printOnly, ok bool) {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-	cfg := fs.String("config", "", "MCP client config file (default: Claude Desktop for this OS)")
+	cfg := fs.String("config", "", "MCP client config file (overrides --client)")
+	cl := fs.String("client", "claude-desktop", "MCP client: claude-desktop|claude-code|cursor|windsurf")
 	pr := fs.Bool("print", false, "print the config entry instead of writing it")
 	repo = "."
 	rest := args
 	for {
 		if err := fs.Parse(rest); err != nil {
-			return "", "", false, false
+			return "", "", "", false, false
 		}
 		rest = fs.Args()
 		if len(rest) == 0 {
@@ -72,7 +111,7 @@ func parseSetupArgs(args []string) (repo, configPath string, printOnly, ok bool)
 		repo = rest[0] // first positional is the repo dir; keep scanning for trailing flags
 		rest = rest[1:]
 	}
-	return repo, *cfg, *pr, true
+	return repo, *cfg, *cl, *pr, true
 }
 
 // defaultClaudeConfigPath returns the Claude Desktop config location per OS.

@@ -54,9 +54,26 @@ func CompatSymbol(s Store, origin RepoRef, symbol string, targets []RepoRef) (Co
 		}
 		ts = append(ts, Target{Repo: t.Repo, Ref: t.Ref, Snapshot: snap})
 	}
+	verdicts := CompatAcross(o, ts)
+	// Enrich behavior_changed verdicts with the specific differing callees, so
+	// compat connects to rootcause without a second call (roadmap 3.1).
+	var originSnap RefSnapshot
+	loaded := false
+	for i := range verdicts {
+		if verdicts[i].Verdict != BehaviorChanged {
+			continue
+		}
+		if !loaded {
+			originSnap = s.Snapshot(origin.Repo, origin.Ref)
+			loaded = true
+		}
+		// from = target (the other ref), to = origin (the ref asked about), so
+		// "+" means origin added the callee, "-" means origin removed it.
+		verdicts[i].ChangedCallees = ChangedCallees(name, s.Snapshot(verdicts[i].Repo, verdicts[i].Ref), originSnap)
+	}
 	return CompatReport{
 		Symbol: name, Origin: origin,
-		Verdicts: CompatAcross(o, ts),
+		Verdicts: verdicts,
 		Meta:     Meta{Repo: origin.Repo, Ref: origin.Ref, Warnings: warns},
 	}, nil
 }
@@ -97,8 +114,9 @@ type DiffReport struct {
 	Meta     Meta
 }
 
-// DiffRefsBy diffs two refs of a repo via the Store.
-func DiffRefsBy(s Store, repo, from, to string) DiffReport {
+// DiffRefsBy diffs two refs of a repo via the Store, applying opt (zero value =
+// no filtering).
+func DiffRefsBy(s Store, repo, from, to string, opt DiffOptions) DiffReport {
 	var warns []string
 	if !refIndexed(s, repo, from) {
 		warns = append(warns, from+" not indexed")
@@ -108,7 +126,7 @@ func DiffRefsBy(s Store, repo, from, to string) DiffReport {
 	}
 	return DiffReport{
 		Repo: repo, From: from, To: to,
-		Changes: DiffRefs(s.SymbolsAt(repo, from), s.SymbolsAt(repo, to)),
+		Changes: FilterChanges(DiffRefs(s.SymbolsAt(repo, from), s.SymbolsAt(repo, to)), opt),
 		Meta:    Meta{Repo: repo, Ref: to, Warnings: warns},
 	}
 }

@@ -15,6 +15,7 @@ import (
 
 // ServeStdio registers reponite's tools and serves MCP over stdio until EOF.
 func ServeStdio(ts *ToolServer) error {
+	CompactOutput = true // agents consume this; single-line JSON saves tokens
 	s := server.NewMCPServer("reponite", "0.1.0")
 
 	add := func(tool mcp.Tool) {
@@ -57,12 +58,25 @@ func ServeStdio(ts *ToolServer) error {
 	add(mcp.NewTool("reponite_diff",
 		mcp.WithDescription("Per-symbol delta between two refs (added/removed/shape/behavior/unchanged)."),
 		mcp.WithString("from", mcp.Required()),
-		mcp.WithString("to", mcp.Required())))
+		mcp.WithString("to", mcp.Required()),
+		mcp.WithString("changed_only", mcp.Description(`"true" to hide unchanged symbols`)),
+		mcp.WithString("package", mcp.Description("keep only symbols whose package has this prefix")),
+		mcp.WithString("confidence_min", mcp.Description("hide changes below this confidence (0..1)"))))
 	add(mcp.NewTool("reponite_rootcause",
 		mcp.WithDescription("Walk a behavior-changed symbol to its mutation-site frontier between two refs."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("from", mcp.Required()),
 		mcp.WithString("to", mcp.Required())))
+	add(mcp.NewTool("reponite_rootcause_trace",
+		mcp.WithDescription("Paste a stack trace (Go/Python/JS/Java); maps frames to symbols and drills down the failing path to the mutation site between two refs."),
+		mcp.WithString("stacktrace", mcp.Required(), mcp.Description("the raw stack trace / traceback")),
+		mcp.WithString("from", mcp.Required()),
+		mcp.WithString("to", mcp.Required())))
+	add(mcp.NewTool("reponite_brief",
+		mcp.WithDescription("Everything needed to edit a symbol in one token-budgeted bundle: full body, callees+callers (preview+handle), covering tests, and the compat snapshot. Replaces 5-6 file reads."),
+		mcp.WithString("symbol", mcp.Required()),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("budget", mcp.Description("token budget (default 3000)"))))
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("List indexed refs for the repo.")))
 

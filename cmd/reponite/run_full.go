@@ -4,6 +4,10 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/vishwak02/reponite/internal/interfaces"
 	"github.com/vishwak02/reponite/internal/processing"
@@ -25,6 +29,12 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdSearch(args)
 	case "rootcause":
 		cmdRootCause(args)
+	case "rootcause-trace":
+		cmdRootCauseTrace(args)
+	case "ci-check":
+		cmdCICheck(args)
+	case "brief":
+		cmdBrief(args)
 	case "context":
 		cmdContext(args)
 	case "refs":
@@ -114,12 +124,20 @@ func cmdCompat(args []string) {
 }
 
 func cmdDiff(args []string) {
+	changedOnly, args := popFlag(args, "--changed-only")
+	pkg, args := popValue(args, "--package")
+	confStr, args := popValue(args, "--confidence-min")
 	if len(args) < 2 {
-		fail(fmt.Errorf("usage: reponite diff <from-ref> <to-ref>"))
+		fail(fmt.Errorf("usage: reponite diff <from-ref> <to-ref> [--changed-only] [--package P] [--confidence-min F]"))
 	}
+	conf := 0.0
+	if confStr != "" {
+		conf, _ = strconv.ParseFloat(confStr, 64)
+	}
+	opt := query.DiffOptions{ChangedOnly: changedOnly, Package: pkg, MinConfidence: conf}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.DiffJSON(query.DiffRefsBy(st, repoName("."), args[0], args[1])))
+	printJSON(interfaces.DiffJSON(query.DiffRefsBy(st, repoName("."), args[0], args[1], opt)))
 }
 
 func cmdGrep(args []string) {
@@ -160,6 +178,82 @@ func cmdRootCause(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.RootCauseJSON(query.RootCauseBy(st, repoName("."), args[0], args[1], args[2])))
+}
+
+// cmdCICheck exits non-zero if any exported symbol broke (removed or
+// shape_changed) between base and head — the obvious PR gate. Behavior changes
+// are not treated as breaks (they don't break the API contract).
+func cmdCICheck(args []string) {
+	baseRef, args := popValue(args, "--base")
+	headRef, args := popValue(args, "--head")
+	if baseRef == "" || headRef == "" {
+		fail(fmt.Errorf("usage: reponite ci-check --base <ref> --head <ref>"))
+	}
+	st := openStore(".")
+	defer st.Close()
+	rep := query.DiffRefsBy(st, repoName("."), baseRef, headRef, query.DiffOptions{ChangedOnly: true})
+	var breaks []query.SymbolChange
+	for _, c := range rep.Changes {
+		if c.Kind != query.ChangeRemoved && c.Kind != query.ChangeShape {
+			continue
+		}
+		base := c.Name
+		if i := strings.LastIndex(base, "."); i >= 0 {
+			base = base[i+1:]
+		}
+		if base != "" && base[0] >= 'A' && base[0] <= 'Z' { // exported (Go convention)
+			breaks = append(breaks, c)
+		}
+	}
+	for _, b := range breaks {
+		fmt.Printf("API BREAK: %s %s\n", b.Kind, b.Name)
+	}
+	if len(breaks) > 0 {
+		fmt.Fprintf(os.Stderr, "reponite ci-check: %d exported API break(s) between %s and %s\n", len(breaks), baseRef, headRef)
+		os.Exit(1)
+	}
+	fmt.Printf("reponite ci-check: no exported API breaks between %s and %s\n", baseRef, headRef)
+}
+
+func cmdBrief(args []string) {
+	budgetStr, args := popValue(args, "--budget")
+	if len(args) < 1 {
+		fail(fmt.Errorf("usage: reponite brief <symbol> [ref] [--budget N]"))
+	}
+	ref := "HEAD"
+	if len(args) > 1 {
+		ref = args[1]
+	}
+	budget := 0
+	if budgetStr != "" {
+		budget, _ = strconv.Atoi(budgetStr)
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.BriefJSON(query.Brief(st, repoName("."), ref, args[0], budget, processing.NewGitIntent("."))))
+}
+
+// cmdRootCauseTrace reads a stack trace (from a file arg or stdin) and drills
+// down along the failing path between two refs.
+func cmdRootCauseTrace(args []string) {
+	fromRef, args := popValue(args, "--from")
+	toRef, args := popValue(args, "--to")
+	if fromRef == "" || toRef == "" {
+		fail(fmt.Errorf("usage: reponite rootcause-trace <file|-> --from <ref> --to <ref>"))
+	}
+	var data []byte
+	var err error
+	if len(args) == 0 || args[0] == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(args[0])
+	}
+	if err != nil {
+		fail(err)
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.RootCauseTraceJSON(query.RootCauseTrace(st, repoName("."), fromRef, toRef, string(data))))
 }
 
 func cmdContext(args []string) {

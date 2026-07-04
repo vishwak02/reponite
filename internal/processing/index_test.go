@@ -178,7 +178,7 @@ func TestIndexFilesDiffAndGrep(t *testing.T) {
 	}})
 
 	kinds := map[string]query.ChangeKind{}
-	for _, c := range query.DiffRefsBy(m, "r", "a", "b").Changes {
+	for _, c := range query.DiffRefsBy(m, "r", "a", "b", query.DiffOptions{}).Changes {
 		kinds[c.Name] = c.Kind
 	}
 	if kinds["Keep"] != query.ChangeUnchanged || kinds["Gone"] != query.ChangeRemoved || kinds["New"] != query.ChangeAdded {

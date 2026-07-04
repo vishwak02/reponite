@@ -14,6 +14,11 @@ import (
 
 	sitter "github.com/smacker/go-tree-sitter"
 	golang "github.com/smacker/go-tree-sitter/golang"
+	java "github.com/smacker/go-tree-sitter/java"
+	javascript "github.com/smacker/go-tree-sitter/javascript"
+	python "github.com/smacker/go-tree-sitter/python"
+	tsx "github.com/smacker/go-tree-sitter/typescript/tsx"
+	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 
 	"github.com/vishwak02/reponite/internal/content"
 )
@@ -37,13 +42,45 @@ func (t tsNode) Children() []content.AST {
 	return out
 }
 
-// ParseGo parses Go source into a content.AST tree rooted at source_file.
-func ParseGo(src []byte) (content.AST, error) {
+// grammarForExt returns the tree-sitter grammar for a file extension, or nil if
+// the extension is unsupported. TypeScript needs two grammars — the tsx grammar
+// is a superset that also accepts JSX in .tsx files — so the choice is keyed on
+// the extension, not just the LangRules name.
+func grammarForExt(ext string) *sitter.Language {
+	switch ext {
+	case ".go":
+		return golang.GetLanguage()
+	case ".py":
+		return python.GetLanguage()
+	case ".js", ".jsx", ".mjs", ".cjs":
+		return javascript.GetLanguage()
+	case ".ts":
+		return typescript.GetLanguage()
+	case ".tsx":
+		return tsx.GetLanguage()
+	case ".java":
+		return java.GetLanguage()
+	}
+	return nil
+}
+
+// parseRoot parses source with a specific grammar, returning the raw root node
+// (callers wrap it in tsNode for content.AST or read positions directly).
+func parseRoot(src []byte, lang *sitter.Language) (*sitter.Node, error) {
 	p := sitter.NewParser()
-	p.SetLanguage(golang.GetLanguage())
+	p.SetLanguage(lang)
 	tree, err := p.ParseCtx(context.Background(), nil, src)
 	if err != nil {
 		return nil, err
 	}
-	return tsNode{n: tree.RootNode(), src: src}, nil
+	return tree.RootNode(), nil
+}
+
+// ParseGo parses Go source into a content.AST tree rooted at source_file.
+func ParseGo(src []byte) (content.AST, error) {
+	root, err := parseRoot(src, golang.GetLanguage())
+	if err != nil {
+		return nil, err
+	}
+	return tsNode{n: root, src: src}, nil
 }

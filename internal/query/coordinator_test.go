@@ -48,6 +48,39 @@ func TestCompatSymbolAcrossRefs(t *testing.T) {
 	}
 }
 
+func TestCompatChangedCallees(t *testing.T) {
+	m := storage.NewMem()
+	// origin (HEAD): Charge's callee validateCard has new behavior; audit is added.
+	m.Put("r", "HEAD", "Charge", rc("c", "sig", "behNEW", 1, "validateCard", "audit"))
+	m.Put("r", "HEAD", "validateCard", rc("vcNEW", "s", "vcbNEW", 1))
+	m.Put("r", "HEAD", "audit", rc("a", "s", "ab", 1))
+	// target (prod): validateCard old behavior; legacy is present (HEAD removed it).
+	m.Put("r", "prod", "Charge", rc("c", "sig", "behOLD", 1, "validateCard", "legacy"))
+	m.Put("r", "prod", "validateCard", rc("vcOLD", "s", "vcbOLD", 1))
+	m.Put("r", "prod", "legacy", rc("l", "s", "lb", 1))
+
+	rep, err := query.CompatSymbol(m, query.RepoRef{Repo: "r", Ref: "HEAD"}, "Charge", []query.RepoRef{{Repo: "r", Ref: "prod"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v *query.CompatVerdict
+	for i := range rep.Verdicts {
+		if rep.Verdicts[i].Ref == "prod" {
+			v = &rep.Verdicts[i]
+		}
+	}
+	if v == nil || v.Verdict != query.BehaviorChanged {
+		t.Fatalf("expected prod behavior_changed, got %+v", rep.Verdicts)
+	}
+	got := map[string]bool{}
+	for _, c := range v.ChangedCallees {
+		got[c] = true
+	}
+	if !got["~validateCard"] || !got["+audit"] || !got["-legacy"] || len(v.ChangedCallees) != 3 {
+		t.Fatalf("changed_callees = %v (want ~validateCard, +audit, -legacy)", v.ChangedCallees)
+	}
+}
+
 func TestCompatSymbolOriginMissing(t *testing.T) {
 	m := storage.NewMem()
 	m.Put("billing", "HEAD", "Charge", rc("c", "sig", "beh", 1))
@@ -63,7 +96,7 @@ func TestDiffRefsBy(t *testing.T) {
 	m.Put("r", "b", "Keep", rc("k", "s", "b", 1))
 	m.Put("r", "b", "New", rc("n", "s", "b", 1))
 	kinds := map[string]query.ChangeKind{}
-	for _, c := range query.DiffRefsBy(m, "r", "a", "b").Changes {
+	for _, c := range query.DiffRefsBy(m, "r", "a", "b", query.DiffOptions{}).Changes {
 		kinds[c.Name] = c.Kind
 	}
 	if kinds["Gone"] != query.ChangeRemoved || kinds["New"] != query.ChangeAdded || kinds["Keep"] != query.ChangeUnchanged {

@@ -7,7 +7,11 @@
 // of the two snapshots and is never asserted as more certain than computed.
 package query
 
-import "github.com/vishwak02/reponite/internal/content"
+import (
+	"sort"
+
+	"github.com/vishwak02/reponite/internal/content"
+)
 
 // Verdict is one of the three-tier compatibility outcomes (architecture §8.1).
 type Verdict string
@@ -37,6 +41,11 @@ type CompatResult struct {
 	Confidence       float64
 	DirectConfidence float64
 	Detail           string
+	// ChangedCallees, set for a behavior_changed verdict by the coordinator,
+	// names which callees actually differ (prefix: + added, - removed, ~ its own
+	// behavior changed) — so compat answers "what specifically differs" without a
+	// second rootcause call.
+	ChangedCallees []string
 }
 
 // Compat compares an origin snapshot against a target snapshot (§8.1). The
@@ -79,6 +88,40 @@ func CompatAcross(origin SymbolRef, targets []Target) []CompatVerdict {
 		out = append(out, CompatVerdict{Repo: t.Repo, Ref: t.Ref, CompatResult: Compat(origin, t.Snapshot)})
 	}
 	return out
+}
+
+// ChangedCallees reports which of a symbol's callees differ between two ref
+// snapshots: prefix "+" added, "-" removed, "~" present in both but its own
+// behavior changed. Pure over snapshots; the coordinator attaches it to a
+// behavior_changed verdict so compat connects to rootcause in one response.
+func ChangedCallees(symbol string, from, to RefSnapshot) []string {
+	fromC := calleeBehaviors(symbol, from)
+	toC := calleeBehaviors(symbol, to)
+	var out []string
+	for name, tb := range toC {
+		if fb, ok := fromC[name]; !ok {
+			out = append(out, "+"+name)
+		} else if fb != tb {
+			out = append(out, "~"+name)
+		}
+	}
+	for name := range fromC {
+		if _, ok := toC[name]; !ok {
+			out = append(out, "-"+name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// calleeBehaviors maps each callee of symbol to its behavior hash at a ref (zero
+// hash when the callee is external/unindexed, so such edges never look changed).
+func calleeBehaviors(symbol string, snap RefSnapshot) map[string]content.Hash {
+	m := make(map[string]content.Hash)
+	for _, c := range snap.Callees[symbol] {
+		m[c.Name] = snap.Symbols[c.Name].BehaviorHash
+	}
+	return m
 }
 
 func minConf(a, b float64) float64 {
