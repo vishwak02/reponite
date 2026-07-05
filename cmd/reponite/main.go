@@ -31,10 +31,12 @@ func main() {
 		mcpCommand(os.Args[2:])
 	case "watch":
 		watchCommand(os.Args[2:])
+	case "serve":
+		serveCommand(os.Args[2:])
 	case "index", "compat", "diff", "grep", "search", "rootcause", "rootcause-trace", "ci-check", "ximpact", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
-		"sync", "status", "gc", "serve":
+		"sync", "status", "gc":
 		notImplemented(os.Args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "reponite: unknown command %q\n\n", os.Args[1])
@@ -74,6 +76,7 @@ index-backed (build with `+"`make cli`"+`):
   refs                 list the repo's indexed refs
   mcp [dir]            serve the tools over MCP (stdio) for an AI agent
   setup [dir]         register reponite as an MCP server in your agent config
-  watch [dir]         auto-reindex HEAD on .go changes (fsnotify); keeps a mounted server fresh
+  watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
+  serve [dir] [--addr host:port]   read-only web dashboard + JSON API (default 127.0.0.1:8899)
 `)
 }
