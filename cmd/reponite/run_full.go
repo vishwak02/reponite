@@ -35,6 +35,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdCICheck(args)
 	case "ximpact":
 		cmdXImpact(args)
+	case "semsearch":
+		cmdSemSearch(args)
 	case "brief":
 		cmdBrief(args)
 	case "context":
@@ -215,6 +217,25 @@ func cmdCICheck(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("reponite ci-check: no exported API breaks between %s and %s\n", baseRef, headRef)
+}
+
+// cmdSemSearch ranks symbols by semantic similarity to a natural-language query.
+func cmdSemSearch(args []string) {
+	limStr, args := popValue(args, "--limit")
+	if len(args) < 1 {
+		fail(fmt.Errorf("usage: reponite semsearch <query> [ref] [--limit N]"))
+	}
+	ref := "HEAD"
+	if len(args) > 1 {
+		ref = args[1]
+	}
+	limit := 0
+	if limStr != "" {
+		limit, _ = strconv.Atoi(limStr)
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.SemanticJSON(query.SemanticSearch(st, repoName("."), ref, args[0], limit, nil)))
 }
 
 // cmdXImpact reports who across every indexed repo calls an external symbol.

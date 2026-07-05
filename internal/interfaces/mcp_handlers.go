@@ -63,6 +63,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return BriefJSON(query.Brief(t.Store, t.Repo, ref, args["symbol"], budget, t.Intent))
 	case "reponite_ximpact":
 		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
+	case "reponite_semsearch":
+		limit, _ := strconv.Atoi(args["limit"])
+		return SemanticJSON(query.SemanticSearch(t.Store, t.Repo, ref, args["query"], limit, nil))
 	case "reponite_refs":
 		return RefsJSON(t.Repo, t.Store.Refs(t.Repo))
 	default:

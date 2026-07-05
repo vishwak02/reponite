@@ -77,6 +77,11 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
 		mcp.WithString("budget", mcp.Description("token budget (default 3000)"))))
+	add(mcp.NewTool("reponite_semsearch",
+		mcp.WithDescription("Semantic symbol search — 'where is the thing that does X'. Ranks symbols by identifier-aware similarity to a natural-language query (no model needed)."),
+		mcp.WithString("query", mcp.Required()),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("limit", mcp.Description("max hits (default 10)"))))
 	add(mcp.NewTool("reponite_ximpact",
 		mcp.WithDescription("Cross-repo impact: who across every indexed repo calls this (external) symbol — the question before changing an exported API. Source-call-graph, name-based (RPC invisible)."),
 		mcp.WithString("symbol", mcp.Required()),

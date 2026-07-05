@@ -1,0 +1,49 @@
+{
+  "name": "reponite",
+  "displayName": "reponite",
+  "description": "Ref-aware code intelligence: edit briefs and compatibility verdicts from reponite, inline.",
+  "version": "0.1.0",
+  "publisher": "vishwak02",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Other"],
+  "repository": { "type": "git", "url": "https://github.com/vishwak02/reponite" },
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "reponite.brief", "title": "reponite: Brief for symbol under cursor" },
+      { "command": "reponite.compat", "title": "reponite: Compat for symbol under cursor" },
+      { "command": "reponite.serve", "title": "reponite: Open web dashboard" }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "reponite.brief", "group": "reponite@1", "when": "editorHasSelection || editorTextFocus" },
+        { "command": "reponite.compat", "group": "reponite@2", "when": "editorHasSelection || editorTextFocus" }
+      ]
+    },
+    "configuration": {
+      "title": "reponite",
+      "properties": {
+        "reponite.binary": {
+          "type": "string",
+          "default": "reponite",
+          "description": "Path to the reponite binary."
+        },
+        "reponite.serveAddr": {
+          "type": "string",
+          "default": "127.0.0.1:8899",
+          "description": "Address for `reponite serve` (the web dashboard)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}
