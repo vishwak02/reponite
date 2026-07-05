@@ -41,8 +41,21 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 
 	var files []ParsedFile
 	err = tree.Files().ForEach(func(f *object.File) error {
+		if skipPath(f.Name) {
+			return nil
+		}
+		if IsROSFile(f.Name) {
+			src, err := f.Contents()
+			if err != nil {
+				return err
+			}
+			if pf, ok := rosFile(f.Name, src); ok {
+				files = append(files, pf)
+			}
+			return nil
+		}
 		rules, ok := RulesForExt(filepath.Ext(f.Name))
-		if !ok || skipPath(f.Name) {
+		if !ok {
 			return nil
 		}
 		src, err := f.Contents()

@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh 
 make cli                               # builds bin/reponite (all adapters)
 
 reponite demo                          # in-memory end-to-end run — no repo needed
-reponite index .                       # index this repo at HEAD (Go/Python/JS/TS/Java, auto-detected)
+reponite index .                       # index at HEAD (Go/Python/JS/TS/Java + ROS .msg/.srv/.action)
 reponite index . v2.3.0                # index another ref
 reponite compat Charge                 # Charge's compatibility across indexed refs (+ changed_callees)
 reponite brief Charge                  # one bundle to edit Charge: body + callees/callers + tests + compat
