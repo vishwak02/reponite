@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS ref_history (
   repo TEXT NOT NULL, ref TEXT NOT NULL, name TEXT NOT NULL,
   present INTEGER NOT NULL DEFAULT 1,
   symbol_hash TEXT, signature_hash TEXT, behavior_hash TEXT, behavior_conf REAL,
+  direct_conf REAL NOT NULL DEFAULT 1,
   PRIMARY KEY (repo, ref, name)
 );
 CREATE INDEX IF NOT EXISTS idx_hist_symbol ON ref_history(repo, name);
@@ -95,6 +96,7 @@ func Open(path string) (*Store, error) {
 func (s *Store) migrate() error {
 	for _, stmt := range []string{
 		`ALTER TABLE callees ADD COLUMN resolution_method TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE ref_history ADD COLUMN direct_conf REAL NOT NULL DEFAULT 1`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
@@ -123,6 +125,28 @@ func (s *Store) AddRef(repo, ref, commit, manifestHash string) error {
 	return err
 }
 
+// ClearRef drops a ref's symbols, callee edges, and file references so a reindex
+// replaces rather than accumulates. Content-addressed file_blobs are left intact
+// (shared across refs; reclaimed by GC), as is the refs row (reindex updates it).
+func (s *Store) ClearRef(repo, ref string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, q := range []string{
+		`DELETE FROM ref_history WHERE repo=? AND ref=?`,
+		`DELETE FROM callees WHERE repo=? AND ref=?`,
+		`DELETE FROM ref_files WHERE repo=? AND ref=?`,
+		`DELETE FROM file_symbols WHERE repo=? AND ref=?`,
+	} {
+		if _, err := tx.Exec(q, repo, ref); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // Put stores a symbol at a ref (ref_history + its callees).
 func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 	if err := s.upsertRef(repo, ref); err != nil {
@@ -133,12 +157,12 @@ func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf)
-		 VALUES(?,?,?,1,?,?,?,?)
+		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf)
+		 VALUES(?,?,?,1,?,?,?,?,?)
 		 ON CONFLICT(repo, ref, name) DO UPDATE SET
 		   present=1, symbol_hash=excluded.symbol_hash, signature_hash=excluded.signature_hash,
-		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf`,
-		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf); err != nil {
+		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf`,
+		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -230,10 +254,10 @@ func (s *Store) Refs(repo string) []string {
 func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 	var present int
 	var sig, beh sql.NullString
-	var conf sql.NullFloat64
+	var conf, dconf sql.NullFloat64
 	err := s.db.QueryRow(
-		`SELECT present, signature_hash, behavior_hash, behavior_conf FROM ref_history WHERE repo=? AND ref=? AND name=?`,
-		repo, ref, symbol).Scan(&present, &sig, &beh, &conf)
+		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf FROM ref_history WHERE repo=? AND ref=? AND name=?`,
+		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf)
 	if err != nil {
 		return query.SymbolRef{Present: false}, false
 	}
@@ -242,13 +266,14 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 		SignatureHash: content.Hash(sig.String),
 		BehaviorHash:  content.Hash(beh.String),
 		BehaviorConf:  conf.Float64,
+		DirectConf:    dconf.Float64,
 	}, true
 }
 
 func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	out := map[string]query.SymbolRef{}
 	rows, err := s.db.Query(
-		`SELECT name, present, signature_hash, behavior_hash, behavior_conf FROM ref_history WHERE repo=? AND ref=?`,
+		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf FROM ref_history WHERE repo=? AND ref=?`,
 		repo, ref)
 	if err != nil {
 		return out
@@ -258,8 +283,8 @@ func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 		var name string
 		var present int
 		var sig, beh sql.NullString
-		var conf sql.NullFloat64
-		if rows.Scan(&name, &present, &sig, &beh, &conf) != nil {
+		var conf, dconf sql.NullFloat64
+		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf) != nil {
 			continue
 		}
 		if present != 1 {
@@ -267,7 +292,7 @@ func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 		}
 		out[name] = query.SymbolRef{
 			Present: true, SignatureHash: content.Hash(sig.String),
-			BehaviorHash: content.Hash(beh.String), BehaviorConf: conf.Float64,
+			BehaviorHash: content.Hash(beh.String), BehaviorConf: conf.Float64, DirectConf: dconf.Float64,
 		}
 	}
 	return out

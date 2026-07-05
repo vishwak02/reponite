@@ -69,8 +69,8 @@ func TestExtractFunctionsMethodsTypes(t *testing.T) {
 	if len(charge.CanonBody) == 0 {
 		t.Fatal("Charge canon body empty")
 	}
-	if s := find(syms, "Save"); s == nil || s.Kind != "method" {
-		t.Fatalf("Save missing/kind: %+v", s)
+	if s := find(syms, "Save"); s == nil || s.Kind != "method" || s.Recv != "Store" {
+		t.Fatalf("Save missing/kind/recv (want recv=Store): %+v", s)
 	}
 	if u := find(syms, "User"); u == nil || u.Kind != "type" || len(u.CanonBody) != 0 || u.Signature == "" {
 		t.Fatalf("User type wrong: %+v", u)

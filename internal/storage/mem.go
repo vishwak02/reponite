@@ -19,7 +19,8 @@ type SymbolRecord struct {
 	SymbolHash    content.Hash
 	SignatureHash content.Hash
 	BehaviorHash  content.Hash
-	BehaviorConf  float64
+	BehaviorConf  float64 // min confidence over the transitive subgraph (invariant 5)
+	DirectConf    float64 // min confidence over this symbol's own direct edges
 	Callees       []query.Callee
 }
 
@@ -54,6 +55,14 @@ func (m *Mem) touch(repo, ref string) {
 	if m.syms[refKey{repo, ref}] == nil {
 		m.syms[refKey{repo, ref}] = map[string]SymbolRecord{}
 	}
+}
+
+// ClearRef drops a ref's symbols and files so a reindex replaces them.
+func (m *Mem) ClearRef(repo, ref string) error {
+	k := refKey{repo, ref}
+	delete(m.syms, k)
+	delete(m.files, k)
+	return nil
 }
 
 // Put records a symbol at a ref (also registering the repo and ref).
@@ -127,6 +136,7 @@ func asRef(rec SymbolRecord) query.SymbolRef {
 		SignatureHash: rec.SignatureHash,
 		BehaviorHash:  rec.BehaviorHash,
 		BehaviorConf:  rec.BehaviorConf,
+		DirectConf:    rec.DirectConf,
 	}
 }
 

@@ -81,6 +81,90 @@ func TestIndexFilesResolutionProvenance(t *testing.T) {
 	}
 }
 
+// #1 keystone: two packages defining the same bare name must be distinct nodes
+// (no conflation), and a call to that name across packages must be flagged
+// ambiguous rather than silently attributed to one.
+func TestIndexFilesPackageQualifiedNoCollision(t *testing.T) {
+	m := storage.NewMem()
+	files := []ParsedFile{
+		{Path: "storage/mem.go", Content: "x", Symbols: []Symbol{
+			sym("Put", "method", "func Put() error", "mem-logic"),
+			sym("MemOnly", "function", "func MemOnly()", "b"),
+		}},
+		{Path: "sqlite/store.go", Content: "x", Symbols: []Symbol{
+			sym("Put", "method", "func Put() error", "sqlite-logic"), // same name, diff pkg + body
+		}},
+		{Path: "proc/index.go", Content: "x", Symbols: []Symbol{
+			sym("IndexFiles", "function", "func IndexFiles()", "b", "Put", "MemOnly"),
+		}},
+	}
+	if err := IndexFiles(m, "r", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+
+	memPut, ok1 := m.SymbolAt("r", "storage.Put", "HEAD")
+	sqlPut, ok2 := m.SymbolAt("r", "sqlite.Put", "HEAD")
+	if !ok1 || !ok2 {
+		t.Fatal("both Put definitions must exist as distinct qualified symbols")
+	}
+	if memPut.BehaviorHash == sqlPut.BehaviorHash {
+		t.Fatal("distinct Put bodies must have distinct behavior hashes (no conflation)")
+	}
+
+	edges := map[string]query.Callee{}
+	for _, c := range m.Snapshot("r", "HEAD").Callees["proc.IndexFiles"] {
+		edges[c.Name] = c
+	}
+	if e := edges["Put"]; e.ResolutionMethod != MethodAmbiguous || e.Confidence != ConfAmbiguous {
+		t.Fatalf("cross-pkg call to Put must be ambiguous, not silently resolved: %+v", e)
+	}
+	if e := edges["storage.MemOnly"]; e.ResolutionMethod != MethodResolved {
+		t.Fatalf("repo-unique callee must resolve to its qualified id: %+v", edges)
+	}
+}
+
+// Same-package methods with the same bare name but different receivers must be
+// distinct nodes (receiver-level qualification, the #1 residual).
+func TestIndexFilesReceiverQualifiedSamePackage(t *testing.T) {
+	m := storage.NewMem()
+	files := []ParsedFile{{Path: "p/x.go", Content: "x", Symbols: []Symbol{
+		{Name: "Get", Recv: "A", Kind: "method", Signature: "func (A) Get()", CanonBody: []byte("a-logic")},
+		{Name: "Get", Recv: "B", Kind: "method", Signature: "func (B) Get()", CanonBody: []byte("b-logic")},
+	}}}
+	if err := IndexFiles(m, "r", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+	a, ok1 := m.SymbolAt("r", "p.A.Get", "HEAD")
+	b, ok2 := m.SymbolAt("r", "p.B.Get", "HEAD")
+	if !ok1 || !ok2 {
+		t.Fatal("same-package methods with different receivers must be distinct qualified ids")
+	}
+	if a.BehaviorHash == b.BehaviorHash {
+		t.Fatal("distinct-receiver methods must not conflate")
+	}
+}
+
+// Reindexing a ref replaces its symbols; a symbol that vanished must not linger.
+func TestIndexFilesReindexReplaces(t *testing.T) {
+	m := storage.NewMem()
+	if err := IndexFiles(m, "r", "HEAD", 1, []ParsedFile{{Path: "p/a.go", Content: "x", Symbols: []Symbol{
+		sym("A", "function", "func A()", "b"), sym("B", "function", "func B()", "b"),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := IndexFiles(m, "r", "HEAD", 1, []ParsedFile{{Path: "p/a.go", Content: "x", Symbols: []Symbol{
+		sym("A", "function", "func A()", "b2"),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.SymbolAt("r", "p.B", "HEAD"); ok {
+		t.Fatal("reindex must drop the vanished symbol p.B (no stale rows)")
+	}
+	if _, ok := m.SymbolAt("r", "p.A", "HEAD"); !ok {
+		t.Fatal("reindex must keep p.A")
+	}
+}
+
 func TestIndexFilesDiffAndGrep(t *testing.T) {
 	m := storage.NewMem()
 	_ = IndexFiles(m, "r", "a", 1, []ParsedFile{{
@@ -94,7 +178,7 @@ func TestIndexFilesDiffAndGrep(t *testing.T) {
 	}})
 
 	kinds := map[string]query.ChangeKind{}
-	for _, c := range query.DiffRefsBy(m, "r", "a", "b").Changes {
+	for _, c := range query.DiffRefsBy(m, "r", "a", "b", query.DiffOptions{}).Changes {
 		kinds[c.Name] = c.Kind
 	}
 	if kinds["Keep"] != query.ChangeUnchanged || kinds["Gone"] != query.ChangeRemoved || kinds["New"] != query.ChangeAdded {

@@ -6,14 +6,18 @@ package interfaces
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/vishwak02/reponite/internal/query"
 )
 
 // ToolServer answers reponite tool calls against a Store, scoped to one repo.
+// Intent is an optional provenance provider for reponite_brief (nil when no
+// git-backed linkage is wired), keeping the dispatch layer pure.
 type ToolServer struct {
-	Store query.Store
-	Repo  string
+	Store  query.Store
+	Repo   string
+	Intent query.IntentProvider
 }
 
 // Call dispatches a tool by name; args are string-valued (as MCP delivers them).
@@ -22,9 +26,10 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
+	includeTests := args["tests"] == "true"
 	switch tool {
 	case "reponite_search":
-		return SearchJSON(query.SearchName(t.Store, t.Repo, ref, args["query"]))
+		return SearchJSON(query.SearchName(t.Store, t.Repo, ref, args["query"], includeTests))
 	case "reponite_grep":
 		res, err := query.GrepRepo(t.Store, t.Repo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] != "false"})
 		if err != nil {
@@ -44,11 +49,20 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		}
 		return CompatJSON(rep)
 	case "reponite_context":
-		return ContextJSON(query.Context(t.Store, t.Repo, ref, args["symbol"]))
+		return ContextJSON(query.Context(t.Store, t.Repo, ref, args["symbol"], includeTests))
 	case "reponite_diff":
-		return DiffJSON(query.DiffRefsBy(t.Store, t.Repo, args["from"], args["to"]))
+		min, _ := strconv.ParseFloat(args["confidence_min"], 64)
+		opt := query.DiffOptions{ChangedOnly: args["changed_only"] == "true", Package: args["package"], MinConfidence: min}
+		return DiffJSON(query.DiffRefsBy(t.Store, t.Repo, args["from"], args["to"], opt))
 	case "reponite_rootcause":
 		return RootCauseJSON(query.RootCauseBy(t.Store, t.Repo, args["symbol"], args["from"], args["to"]))
+	case "reponite_rootcause_trace":
+		return RootCauseTraceJSON(query.RootCauseTrace(t.Store, t.Repo, args["from"], args["to"], args["stacktrace"]))
+	case "reponite_brief":
+		budget, _ := strconv.Atoi(args["budget"])
+		return BriefJSON(query.Brief(t.Store, t.Repo, ref, args["symbol"], budget, t.Intent))
+	case "reponite_ximpact":
+		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
 	case "reponite_refs":
 		return RefsJSON(t.Repo, t.Store.Refs(t.Repo))
 	default:

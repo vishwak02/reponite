@@ -100,6 +100,29 @@ func TestSQLiteResolutionMethodRoundTrip(t *testing.T) {
 	}
 }
 
+// ClearRef drops a ref's symbols/callees/files so a reindex replaces them.
+func TestSQLiteClearRef(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.Put("r", "HEAD", "A", rec("a", "s", "b", 1, "B"))
+	st.PutFile("r", "HEAD", query.File{Path: "a.go", Content: "x"})
+	if err := st.ClearRef("r", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.SymbolAt("r", "A", "HEAD"); ok {
+		t.Fatal("ClearRef must remove symbols")
+	}
+	if len(st.Snapshot("r", "HEAD").Callees) != 0 {
+		t.Fatal("ClearRef must remove callee edges")
+	}
+	if len(st.Files("r", "HEAD")) != 0 {
+		t.Fatal("ClearRef must remove ref file references")
+	}
+}
+
 // Files are content-addressed: identical content across refs stores one blob,
 // distinct content stores another — storage ∝ unique content (§4.3/§9).
 func TestSQLiteFileContentAddressedDedup(t *testing.T) {

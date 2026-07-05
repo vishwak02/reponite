@@ -16,6 +16,7 @@ import (
 // Symbol is a top-level (or nested) symbol extracted from a file, pre-hashing.
 type Symbol struct {
 	Name      string
+	Recv      string // method receiver type (empty for functions/types), for id qualification
 	Kind      string // function|method|type
 	Signature string
 	CanonBody []byte
@@ -33,8 +34,13 @@ func ExtractGo(root content.AST, normVer int) []Symbol { return Extract(root, Go
 // associated with the declaration that immediately follows it.
 func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 	var out []Symbol
-	var walk func(n content.AST)
-	walk = func(n content.AST) {
+	// enclosing carries the name of the class/type we're descending through, so
+	// class-based languages (Python/JS/TS/Java) qualify a method by its enclosing
+	// class the way Go qualifies by its receiver — keeping same-named methods on
+	// different classes distinct (Invariant 2). Empty at file scope and for Go
+	// (whose methods are top-level with a child receiver, not nested in the type).
+	var walk func(n content.AST, enclosing string)
+	walk = func(n content.AST, enclosing string) {
 		var doc [][]byte
 		for _, child := range n.Children() {
 			t := child.Type()
@@ -44,19 +50,25 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 			}
 			switch {
 			case containsStr(r.FuncDecl, t):
-				out = append(out, extractCallable(child, "function", r, normVer, joinDoc(doc)))
+				out = append(out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing))
 			case containsStr(r.MethodDecl, t):
-				out = append(out, extractCallable(child, "method", r, normVer, joinDoc(doc)))
+				out = append(out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing))
 			case containsStr(r.TypeDecl, t):
 				out = append(out, typeSymbols(child, r, normVer, joinDoc(doc))...)
-				walk(child) // descend for nested methods (class/type bodies)
+				// Descend for nested methods, qualified by this type's name. Go-style
+				// type blocks (TypeSpec set) never nest methods, so they don't qualify.
+				nested := enclosing
+				if len(r.TypeSpec) == 0 {
+					nested = nameOf(child, r)
+				}
+				walk(child, nested)
 			default:
-				walk(child)
+				walk(child, enclosing)
 			}
 			doc = nil
 		}
 	}
-	walk(root)
+	walk(root, "")
 	return out
 }
 
@@ -67,21 +79,43 @@ func joinDoc(doc [][]byte) []byte {
 	return bytes.Join(doc, []byte("\n"))
 }
 
-func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte) Symbol {
+func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte, enclosing string) Symbol {
 	var canonBody []byte
 	var callees []string
 	if body := firstChildAny(fn, r.BodyTypes); body != nil {
 		canonBody = content.Canon(body, normVer)
 		callees = calleesWithRules(body, r)
 	}
+	recv := ""
+	if kind == "method" {
+		recv = receiverType(fn, r)
+	}
+	if recv == "" {
+		recv = enclosing // class-based languages: qualify by the enclosing class
+	}
 	return Symbol{
 		Name:      nameOf(fn, r),
+		Recv:      recv,
 		Kind:      kind,
 		Signature: string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
 		CanonBody: canonBody,
 		Doc:       doc,
 		Callees:   callees,
 	}
+}
+
+// receiverType returns a method's receiver type name (pointer/spaces stripped),
+// e.g. "Mem" for "(m *Mem)". The receiver is the first RecvTypes child of the
+// method declaration; its type name is the first RecvName descendant within.
+func receiverType(fn content.AST, r LangRules) string {
+	if len(r.RecvTypes) == 0 {
+		return ""
+	}
+	recv := firstChildAny(fn, r.RecvTypes)
+	if recv == nil {
+		return ""
+	}
+	return strings.TrimLeft(nameOfNode(recv, r.RecvName, true), "*& ")
 }
 
 func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbol {

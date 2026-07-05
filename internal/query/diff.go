@@ -4,7 +4,10 @@
 // Oracle's tiered verdict; deterministic (sorted by symbol name).
 package query
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // ChangeKind classifies one symbol's delta between two refs.
 type ChangeKind string
@@ -59,6 +62,47 @@ func DiffRefs(a, b map[string]SymbolRef) []SymbolChange {
 		}
 	}
 	return out
+}
+
+// DiffOptions scopes a diff for agents/CLI. Zero value = no filtering.
+type DiffOptions struct {
+	ChangedOnly   bool    // drop unchanged symbols (the big token win)
+	Package       string  // keep only symbols whose package has this prefix
+	MinConfidence float64 // drop changes below this confidence
+}
+
+// FilterChanges applies DiffOptions to a change list (pure). --kind is not
+// offered because symbol kind (function/type) is not persisted in ref_history.
+func FilterChanges(changes []SymbolChange, opt DiffOptions) []SymbolChange {
+	if opt == (DiffOptions{}) {
+		return changes
+	}
+	out := make([]SymbolChange, 0, len(changes))
+	for _, c := range changes {
+		if opt.ChangedOnly && c.Kind == ChangeUnchanged {
+			continue
+		}
+		if opt.MinConfidence > 0 && c.Confidence < opt.MinConfidence {
+			continue
+		}
+		if opt.Package != "" && !strings.HasPrefix(packageOfQID(c.Name), opt.Package) {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// packageOfQID extracts the package qualifier from a qualified id: the directory
+// prefix before the first "." that follows the last "/" (e.g.
+// "internal/query.Recv.Foo" -> "internal/query"). "" for a rootless bare name.
+func packageOfQID(qid string) string {
+	slash := strings.LastIndex(qid, "/")
+	dot := strings.Index(qid[slash+1:], ".")
+	if dot < 0 {
+		return ""
+	}
+	return qid[:slash+1+dot]
 }
 
 func verdictToChange(v Verdict) ChangeKind {

@@ -17,7 +17,7 @@ External adapters live behind **build tags** and are fetched on demand:
 | tag         | what it adds                        |
 |-------------|-------------------------------------|
 | `sqlite`    | SQLite store (`modernc.org/sqlite`) |
-| `treesitter`| tree-sitter parser (CGO)            |
+| `treesitter`| tree-sitter parser (CGO) + go-git ref indexing + go/types precise edges (pulls a current `golang.org/x/tools`; build with a recent Go) |
 | `mcp`       | MCP server (`mark3labs/mcp-go`)     |
 
 Build the full CLI (all adapters):
