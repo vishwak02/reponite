@@ -49,7 +49,7 @@ Per-adapter checks (mirror CI):
 6. Correctness-critical logic stays pure/stdlib behind interfaces; external deps live in thin build-tagged adapters (ADR-018).
 
 ## Adding a language
-Add a `LangRules` entry in `internal/processing/lang.go`, bind its tree-sitter grammar in the parser layer, and add a per-language parse test. The `Extract` engine is language-agnostic.
+Add a `LangRules` entry in `internal/processing/lang.go`, bind its tree-sitter grammar in `parser.go` (`grammarForExt`), and add a per-language parse test. The `Extract` engine is language-agnostic; `IndexDir`/`IndexGitRef` dispatch by `RulesForExt`. Non-tree-sitter interface formats (e.g. ROS `.msg`/`.srv`/`.action`) are parsed by a pure text extractor (`ros.go`) that `IndexDir`/`IndexGitRef` route to before the tree-sitter path — their signature is the field contract, so the Oracle flags a changed contract as `shape_changed`.
 
 ## More
 `docs/architecture.md`, `docs/agent-features.md`, `docs/adr/`, and `PROGRESS.md` (running build log).

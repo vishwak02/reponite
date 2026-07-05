@@ -1,5 +1,11 @@
 # Reponite — Architecture Extension (Agent-Facing Reads)
 
+> **Implementation status (2026-07-05):** `reponite_brief` (§8C), `reponite_rootcause_trace` (§8A.4),
+> `reponite_ximpact` (§8B, name-based), the grep layer (§10A) and the semantic rung (§10A.2, ADR-020)
+> are **built and merged to `main`**; intent linkage (§8A.6) ships as a git-blame provider. Deferred:
+> `ximpact`'s fleet `global.db`/`module_path` precision + Oracle signature-skew fusion. See
+> `docs/BUILD_PLAN.md` and `PROGRESS.md` for the per-phase log.
+
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*
 
 **Design stance carried forward:** none of these features add a new source of truth or weaken any invariant. They are (a) query-time assembly over the existing three-hash/graph/manifest core, plus (b) a few small pieces of extra indexing (`is_test`, `external_refs`, and a raw-file trigram index for grep) captured cheaply when the indexer already has the data. The "never lie" principle (§Design Principles) governs all four: every bundled fact keeps its own `resolution_method`/`confidence`, and confidence propagates to the aggregate.

@@ -1,8 +1,13 @@
 # reponite — Phased Build Plan
 
-> **Status (2026-07-05):** Phases **1, 2, 3 are built** (pure core tested in-sandbox; tree-sitter/
-> sqlite/go-git/mcp adapters CI-verified). Phases **4–6 remain**. See `PROGRESS.md` for the log and
-> the status table in `goat_roadmap.md`. Release binaries publish once a tag is pushed (1c).
+> **Status (2026-07-05):** Phases **1–4** and **5a/5b/6a/6c** are **built and merged to `main`**
+> (PRs #3/#4/#5, all CI-green) and **v0.2.0 is released** with 4-platform binaries. Delivered:
+> multi-language parsing, auto-index-on-mount, `brief`, `rootcause_trace`, intent linkage,
+> `changed_callees`, diff filters, `ci-check`, `ximpact` (name-based), web dashboard (`serve`),
+> VS Code extension, semantic search (ADR-020), and ROS `.msg`/`.srv`/`.action` interface compat.
+> **Remaining (large infra, not started):** Phase 4 fleet registry (`module_path` + `global.db` +
+> Oracle signature-skew fusion), SCIP high-confidence edges (4.3), shared team server (4.2). See
+> `PROGRESS.md` for the per-phase log.
 
 
 Derived from `goat_roadmap.md` (the "GOAT roadmap"), reconciled against the **actual

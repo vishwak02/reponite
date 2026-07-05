@@ -35,6 +35,9 @@ reponite brief Charge                  # one bundle to edit Charge: body + calle
 reponite diff v0.1.0 HEAD --changed-only --package internal/query   # scoped, changed-only delta
 reponite ci-check --base main --head HEAD   # non-zero exit on any exported API break (PR gate)
 reponite grep validateCard             # trigram search; each hit fused with its symbol
+reponite semsearch "where we charge a card"   # semantic search — no model/network needed
+reponite ximpact getUserV2             # who across every indexed repo calls this external symbol
+reponite serve .                       # read-only web dashboard at http://127.0.0.1:8899
 
 # use it from an AI agent (dogfooding):
 reponite setup .                       # register as an MCP server (Claude Desktop by default)
