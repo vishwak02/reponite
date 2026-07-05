@@ -27,12 +27,30 @@ type XImpactCaller struct {
 	Confidence float64
 }
 
-// XImpactResult is the fleet caller set for a target symbol name.
+// XImpactDef is one definition site of the target symbol in the store, with its
+// signature hash at that ref — the "what is the current contract" half of the
+// deploy-safety picture (§8B.3).
+type XImpactDef struct {
+	Repo          string
+	Ref           string
+	Symbol        string
+	SignatureHash string
+}
+
+// XImpactResult is the fleet caller set for a target symbol name, fused with the
+// target's own definition/contract state.
 type XImpactResult struct {
-	Target  string
+	Target string
+	// Callers depend on the target (external edges), grouped by repo/ref.
 	Callers []XImpactCaller
-	Note    string
-	Meta    Meta
+	// Definitions are where the target is itself defined+indexed in the store.
+	Definitions []XImpactDef
+	// ContractChanged is true when the target's signature differs across the refs
+	// it is defined at — i.e. the API shape moved, so callers pinned to older refs
+	// may expect a stale contract (the deploy-safety signal, §8B.3).
+	ContractChanged bool
+	Note            string
+	Meta            Meta
 }
 
 // XImpact finds every symbol, across all repos/refs in the store, that has an
@@ -41,6 +59,7 @@ type XImpactResult struct {
 // scanned. Results are sorted (repo, ref, caller) for determinism.
 func XImpact(s Store, target, ref string) XImpactResult {
 	res := XImpactResult{Target: target}
+	sigs := map[string]bool{} // distinct signatures across the target's definition sites
 	for _, repo := range s.Repos() {
 		refs := s.Refs(repo)
 		if ref != "" {
@@ -56,8 +75,27 @@ func XImpact(s Store, target, ref string) XImpactResult {
 					}
 				}
 			}
+			// Definition sites: symbols actually defined here whose bare name is the
+			// target, plus their signature hash (for the contract-change signal).
+			for name, facts := range snap.Symbols {
+				if baseName(name) == target {
+					res.Definitions = append(res.Definitions, XImpactDef{Repo: repo, Ref: rf, Symbol: name, SignatureHash: string(facts.SignatureHash)})
+					sigs[string(facts.SignatureHash)] = true
+				}
+			}
 		}
 	}
+	res.ContractChanged = len(sigs) > 1
+	sort.Slice(res.Definitions, func(i, j int) bool {
+		a, b := res.Definitions[i], res.Definitions[j]
+		if a.Repo != b.Repo {
+			return a.Repo < b.Repo
+		}
+		if a.Ref != b.Ref {
+			return a.Ref < b.Ref
+		}
+		return a.Symbol < b.Symbol
+	})
 	sort.Slice(res.Callers, func(i, j int) bool {
 		a, b := res.Callers[i], res.Callers[j]
 		if a.Repo != b.Repo {

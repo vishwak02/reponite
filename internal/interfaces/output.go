@@ -260,23 +260,37 @@ type ximpactCallerDTO struct {
 	Confidence float64 `json:"confidence"`
 }
 
-type ximpactDTO struct {
-	Target  string             `json:"target"`
-	Callers []ximpactCallerDTO `json:"callers"`
-	Note    string             `json:"note,omitempty"`
-	Meta    metaDTO            `json:"_meta"`
+type ximpactDefDTO struct {
+	Repo          string `json:"repo"`
+	Ref           string `json:"ref"`
+	Symbol        string `json:"symbol"`
+	SignatureHash string `json:"signature_hash,omitempty"`
 }
 
-// XImpactJSON renders the cross-repo caller set (ext §8B).
+type ximpactDTO struct {
+	Target          string             `json:"target"`
+	Callers         []ximpactCallerDTO `json:"callers"`
+	Definitions     []ximpactDefDTO    `json:"definitions,omitempty"`
+	ContractChanged bool               `json:"contract_changed"`
+	Note            string             `json:"note,omitempty"`
+	Meta            metaDTO            `json:"_meta"`
+}
+
+// XImpactJSON renders the cross-repo caller set fused with the target's contract
+// state (ext §8B).
 func XImpactJSON(r query.XImpactResult) (string, error) {
 	dto := ximpactDTO{
-		Target:  r.Target,
-		Callers: make([]ximpactCallerDTO, 0, len(r.Callers)),
-		Note:    r.Note,
-		Meta:    metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Target:          r.Target,
+		Callers:         make([]ximpactCallerDTO, 0, len(r.Callers)),
+		ContractChanged: r.ContractChanged,
+		Note:            r.Note,
+		Meta:            metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
 	}
 	for _, c := range r.Callers {
 		dto.Callers = append(dto.Callers, ximpactCallerDTO{Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Confidence: c.Confidence})
+	}
+	for _, d := range r.Definitions {
+		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, SignatureHash: d.SignatureHash})
 	}
 	return marshal(dto)
 }
