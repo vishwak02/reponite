@@ -104,4 +104,23 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 - ✓ `processing.LangRules` + `processing.RulesForExt(ext) (LangRules, bool)` — per-language node-type rules; registry keyed by file extension
 - ✓ rule tables: `GoRules`, `PythonRules`, `JavaScriptRules`, `TypeScriptRules`, `JavaRules`
 - ✓ `processing.Extract(root content.AST, r LangRules, normVer int) []Symbol` — generic engine (recurses into classes for nested methods); `ExtractGo` now wraps `Extract(…, GoRules, …)`
-- ⟳ grammar binding per language (parser layer, tagged) + IndexDir multi-extension + per-language CI parse tests; C/C++ (declarator names, NameByDesc) and HTML (structural tier) to follow
+- ✓ grammar binding per language (`parser.go grammarForExt`: Go/Python/JS/TS+TSX/Java) + `IndexDir`/`IndexGitRef` multi-extension dispatch + per-language CI parse tests. C/C++/HTML still to follow.
+
+## Phases 1–6 — agent reads, surfaces, ROS (✓ merged to main, PRs #3/#4/#5)
+Query layer (pure):
+- ✓ `query.Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProvider) BriefResult` — token-budgeted editing bundle (§8C/ADR-014)
+- ✓ `query.RootCauseTrace(s Store, repo, from, to, trace string) RootCauseTraceResult` + `ParseStackTrace(trace) []TraceFrame` (§8A.4/ADR-015)
+- ✓ `query.XImpact(s Store, target, ref string) XImpactResult` + `const ExternalResolution` (§8B/ADR-016, name-based; fleet registry deferred)
+- ✓ `query.SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) []SemanticHit` + `query.Embedder` / `TermEmbedder` (§10A.2/ADR-020)
+- ✓ `query.ChangedCallees(symbol string, from, to RefSnapshot) []string` — attached to behavior_changed verdicts (CompatResult.ChangedCallees)
+- ✓ `query.DiffOptions{ChangedOnly,Package,MinConfidence}` + `FilterChanges`; `DiffRefsBy(...)` now takes DiffOptions
+- ✓ `query.IntentProvider` / `IntentRecord` / `ParseIntentMessage(commit, msg) IntentRecord` (§8A.6/ADR-017, linkage-only)
+Adapters / surfaces:
+- ✓ `processing.GitIntent` implements `query.IntentProvider` via go-git blame (`-tags treesitter`)
+- ✓ `processing.rosFile` / `IsROSFile` — ROS `.msg`/`.srv`/`.action` → type symbols (pure; ros.go); routed by IndexDir/IndexGitRef (roadmap 4.1)
+- ✓ `interfaces.WebHandler{Store,Repo,Intent}.Routes() *http.ServeMux` — dashboard + JSON API; `reponite serve` (`-tags "sqlite treesitter"`, net/http)
+- ✓ `interfaces.BriefJSON / RootCauseTraceJSON / XImpactJSON / SemanticJSON`; `interfaces.CompactOutput` (MCP single-line JSON)
+- ✓ MCP tools: `reponite_brief / reponite_rootcause_trace / reponite_ximpact / reponite_semsearch` + diff filter args
+- ✓ CLI: `brief / rootcause-trace / ci-check / ximpact / semsearch / serve` (+ `diff --changed-only/--package/--confidence-min`, `setup --client`)
+- ✓ `editors/vscode/` — VS Code extension (brief/compat/serve commands)
+- ⟳ Remaining: Phase 4 fleet registry (`module_path` + `global.db` + Oracle skew-fusion), SCIP edges (4.3), shared team server (4.2)
