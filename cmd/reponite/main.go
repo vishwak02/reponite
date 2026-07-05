@@ -31,9 +31,9 @@ func main() {
 		mcpCommand(os.Args[2:])
 	case "watch":
 		watchCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "rootcause", "rootcause-trace", "ci-check", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "rootcause", "rootcause-trace", "ci-check", "ximpact", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
-	case "init", "impact", "ximpact", "why", "arch",
+	case "init", "impact", "why", "arch",
 		"sync", "status", "gc", "serve":
 		notImplemented(os.Args[1])
 	default:
@@ -64,6 +64,7 @@ index-backed (build with `+"`make cli`"+`):
   compat <symbol> [ref]   compatibility verdicts across the repo's other refs
   diff <from> <to> [--changed-only] [--package P] [--confidence-min F]   symbol delta between two refs
   ci-check --base <ref> --head <ref>   exit non-zero on any exported API break (PR gate)
+  ximpact <symbol> [--ref R]   who across every indexed repo calls this external symbol
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
   context <symbol> [ref]  direct callers/callees, each edge with resolution_method + confidence

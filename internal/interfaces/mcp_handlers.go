@@ -61,6 +61,8 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	case "reponite_brief":
 		budget, _ := strconv.Atoi(args["budget"])
 		return BriefJSON(query.Brief(t.Store, t.Repo, ref, args["symbol"], budget, t.Intent))
+	case "reponite_ximpact":
+		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
 	case "reponite_refs":
 		return RefsJSON(t.Repo, t.Store.Refs(t.Repo))
 	default:

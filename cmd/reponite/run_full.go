@@ -33,6 +33,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdRootCauseTrace(args)
 	case "ci-check":
 		cmdCICheck(args)
+	case "ximpact":
+		cmdXImpact(args)
 	case "brief":
 		cmdBrief(args)
 	case "context":
@@ -213,6 +215,17 @@ func cmdCICheck(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("reponite ci-check: no exported API breaks between %s and %s\n", baseRef, headRef)
+}
+
+// cmdXImpact reports who across every indexed repo calls an external symbol.
+func cmdXImpact(args []string) {
+	ref, args := popValue(args, "--ref")
+	if len(args) < 1 {
+		fail(fmt.Errorf("usage: reponite ximpact <symbol> [--ref R]"))
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.XImpactJSON(query.XImpact(st, args[0], ref)))
 }
 
 func cmdBrief(args []string) {
