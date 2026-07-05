@@ -281,6 +281,22 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 	return marshal(dto)
 }
 
+type semanticHitDTO struct {
+	Path   string  `json:"path"`
+	Symbol string  `json:"symbol"`
+	Line   int     `json:"line"`
+	Score  float64 `json:"score"`
+}
+
+// SemanticJSON renders semantic-search hits (ext §10A.2, the semantic rung).
+func SemanticJSON(hits []query.SemanticHit) (string, error) {
+	out := make([]semanticHitDTO, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, semanticHitDTO{Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
+	}
+	return marshal(out)
+}
+
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {
