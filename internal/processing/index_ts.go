@@ -36,6 +36,21 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 			}
 			return nil
 		}
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			rel = path
+		}
+		// ROS interface files (.msg/.srv/.action) are pure text, not tree-sitter.
+		if IsROSFile(path) {
+			src, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if pf, ok := rosFile(rel, string(src)); ok {
+				files = append(files, pf)
+			}
+			return nil
+		}
 		rules, ok := RulesForExt(filepath.Ext(path))
 		if !ok {
 			return nil
@@ -53,10 +68,6 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 		}
 		if rules.Name == "go" {
 			hasGo = true
-		}
-		rel, relErr := filepath.Rel(dir, path)
-		if relErr != nil {
-			rel = path
 		}
 		files = append(files, ParsedFile{Path: rel, Content: string(src), Lang: rules.Name, Symbols: Extract(root, rules, normVer), Spans: spans})
 		return nil
