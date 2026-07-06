@@ -2,18 +2,32 @@
 
 package main
 
-import "github.com/vishwak02/reponite/internal/interfaces"
+import (
+	"github.com/vishwak02/reponite/internal/interfaces"
+	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
+)
 
 func mcpCommand(args []string) {
-	dir := "."
-	if len(args) > 0 {
-		dir = args[0]
+	dirs := args
+	if len(dirs) == 0 {
+		dirs = []string{"."}
 	}
-	st := openStore(dir)
-	defer st.Close()
-	repo := repoName(dir)
-	autoIndexIfEmpty(st, repo, dir) // self-index on first mount so tools aren't silently empty
-	ts := &interfaces.ToolServer{Store: st, Repo: repo, Intent: newIntentProvider(dir)}
+	var stores []query.Store
+	var repos []string
+	for _, dir := range dirs {
+		st := openStore(dir)
+		defer st.Close()
+		repo := repoName(dir)
+		autoIndexIfEmpty(st, repo, dir) // self-index on first mount so tools aren't silently empty
+		stores = append(stores, st)
+		repos = append(repos, repo)
+	}
+	store := stores[0]
+	if len(stores) > 1 {
+		store = storage.NewMultiStore(stores...)
+	}
+	ts := &interfaces.ToolServer{Store: store, Repo: repos[0], Intent: newIntentProvider(dirs[0])}
 	if err := interfaces.ServeStdio(ts); err != nil {
 		fail(err)
 	}

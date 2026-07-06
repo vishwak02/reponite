@@ -40,25 +40,30 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithDescription("Structural symbol-name search at a ref."),
 		mcp.WithString("query", mcp.Required(), mcp.Description("substring of the symbol name")),
 		mcp.WithString("ref", mcp.Description("ref to search (default HEAD)")),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("tests", mcp.Description(`"true" to include Test*/Benchmark*/Example*/Fuzz* symbols (default excluded)`))))
 	add(mcp.NewTool("reponite_grep",
 		mcp.WithDescription("Trigram-prefiltered literal/regex search; each hit fused with its enclosing symbol."),
 		mcp.WithString("pattern", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("fixed", mcp.Description(`"true" for literal (default), else regex`))))
 	add(mcp.NewTool("reponite_compat",
 		mcp.WithDescription("Compatibility verdicts (absent/shape/behavior/compatible) for a symbol across the repo's other refs."),
 		mcp.WithString("symbol", mcp.Required()),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("ref", mcp.Description("origin ref (default HEAD)"))))
 	add(mcp.NewTool("reponite_context",
 		mcp.WithDescription("Direct callers and callees of a symbol at a ref."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("tests", mcp.Description(`"true" to include test callers/callees (default excluded)`))))
 	add(mcp.NewTool("reponite_diff",
 		mcp.WithDescription("Per-symbol delta between two refs (added/removed/shape/behavior/unchanged)."),
 		mcp.WithString("from", mcp.Required()),
 		mcp.WithString("to", mcp.Required()),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("changed_only", mcp.Description(`"true" to hide unchanged symbols`)),
 		mcp.WithString("package", mcp.Description("keep only symbols whose package has this prefix")),
 		mcp.WithString("confidence_min", mcp.Description("hide changes below this confidence (0..1)"))))
@@ -66,28 +71,33 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithDescription("Walk a behavior-changed symbol to its mutation-site frontier between two refs."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("from", mcp.Required()),
-		mcp.WithString("to", mcp.Required())))
+		mcp.WithString("to", mcp.Required()),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))
 	add(mcp.NewTool("reponite_rootcause_trace",
 		mcp.WithDescription("Paste a stack trace (Go/Python/JS/Java); maps frames to symbols and drills down the failing path to the mutation site between two refs."),
 		mcp.WithString("stacktrace", mcp.Required(), mcp.Description("the raw stack trace / traceback")),
 		mcp.WithString("from", mcp.Required()),
-		mcp.WithString("to", mcp.Required())))
+		mcp.WithString("to", mcp.Required()),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))
 	add(mcp.NewTool("reponite_brief",
 		mcp.WithDescription("Everything needed to edit a symbol in one token-budgeted bundle: full body, callees+callers (preview+handle), covering tests, and the compat snapshot. Replaces 5-6 file reads."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("budget", mcp.Description("token budget (default 3000)"))))
 	add(mcp.NewTool("reponite_semsearch",
 		mcp.WithDescription("Semantic symbol search — 'where is the thing that does X'. Ranks symbols by identifier-aware similarity to a natural-language query (no model needed)."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("limit", mcp.Description("max hits (default 10)"))))
 	add(mcp.NewTool("reponite_ximpact",
 		mcp.WithDescription("Cross-repo impact: who across every indexed repo calls this (external) symbol — the question before changing an exported API. Source-call-graph, name-based (RPC invisible)."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("restrict each repo to this ref (default: all indexed refs)"))))
 	add(mcp.NewTool("reponite_refs",
-		mcp.WithDescription("List indexed refs for the repo.")))
+		mcp.WithDescription("List indexed refs for the repo."),
+		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))
 
 	return server.ServeStdio(s)
 }
