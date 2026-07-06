@@ -254,21 +254,25 @@ func RootCauseTraceJSON(r query.RootCauseTraceResult) (string, error) {
 }
 
 type ximpactCallerDTO struct {
-	Repo       string  `json:"repo"`
-	Ref        string  `json:"ref"`
-	Caller     string  `json:"caller"`
-	Confidence float64 `json:"confidence"`
+	Repo             string  `json:"repo"`
+	Ref              string  `json:"ref"`
+	Caller           string  `json:"caller"`
+	Module           string  `json:"module,omitempty"`
+	ResolutionMethod string  `json:"resolution_method"`
+	Confidence       float64 `json:"confidence"`
 }
 
 type ximpactDefDTO struct {
 	Repo          string `json:"repo"`
 	Ref           string `json:"ref"`
 	Symbol        string `json:"symbol"`
+	Module        string `json:"module,omitempty"`
 	SignatureHash string `json:"signature_hash,omitempty"`
 }
 
 type ximpactDTO struct {
 	Target          string             `json:"target"`
+	Modules         []string           `json:"modules,omitempty"`
 	Callers         []ximpactCallerDTO `json:"callers"`
 	Definitions     []ximpactDefDTO    `json:"definitions,omitempty"`
 	ContractChanged bool               `json:"contract_changed"`
@@ -277,20 +281,25 @@ type ximpactDTO struct {
 }
 
 // XImpactJSON renders the cross-repo caller set fused with the target's contract
-// state (ext §8B).
+// state (ext §8B). Each caller carries its resolution_method so an agent can
+// tell module-resolved (precise) callers from name-based (fallback) ones.
 func XImpactJSON(r query.XImpactResult) (string, error) {
 	dto := ximpactDTO{
 		Target:          r.Target,
+		Modules:         r.Modules,
 		Callers:         make([]ximpactCallerDTO, 0, len(r.Callers)),
 		ContractChanged: r.ContractChanged,
 		Note:            r.Note,
 		Meta:            metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
 	}
 	for _, c := range r.Callers {
-		dto.Callers = append(dto.Callers, ximpactCallerDTO{Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Confidence: c.Confidence})
+		dto.Callers = append(dto.Callers, ximpactCallerDTO{
+			Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Module: c.Module,
+			ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence,
+		})
 	}
 	for _, d := range r.Definitions {
-		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, SignatureHash: d.SignatureHash})
+		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash})
 	}
 	return marshal(dto)
 }

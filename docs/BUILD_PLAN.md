@@ -1,13 +1,15 @@
 # reponite — Phased Build Plan
 
-> **Status (2026-07-05):** Phases **1–4** and **5a/5b/6a/6c** are **built and merged to `main`**
-> (PRs #3/#4/#5, all CI-green) and **v0.2.0 is released** with 4-platform binaries. Delivered:
+> **Status (2026-07-06):** Phases **1–4** and **5a/5b/6a/6c** are **built and merged to `main`**
+> (PRs #3–#8, all CI-green) and **v0.2.0 is released** with 4-platform binaries. Delivered:
 > multi-language parsing, auto-index-on-mount, `brief`, `rootcause_trace`, intent linkage,
-> `changed_callees`, diff filters, `ci-check`, `ximpact` (name-based), web dashboard (`serve`),
-> VS Code extension, semantic search (ADR-020), and ROS `.msg`/`.srv`/`.action` interface compat.
-> **Remaining (large infra, not started):** Phase 4 fleet registry (`module_path` + `global.db` +
-> Oracle signature-skew fusion), SCIP high-confidence edges (4.3), shared team server (4.2). See
-> `PROGRESS.md` for the per-phase log.
+> `changed_callees`, diff filters, `ci-check`, `ximpact` (now **module-path precise** —
+> `external_refs` capture + per-repo `module_path` from go.mod/package.json/pyproject.toml/pom.xml,
+> fused with the name-based fallback), web dashboard (`serve`), VS Code extension, semantic search
+> (ADR-020), and ROS `.msg`/`.srv`/`.action` interface compat. **Remaining (large infra, not
+> started):** a persistent cross-run `global.db` registry (the `serve` MultiStore covers the
+> multi-dir fleet case today), SCIP high-confidence edges (4.3), shared team-server persistence
+> (4.2). See `PROGRESS.md` for the per-phase log.
 
 
 Derived from `goat_roadmap.md` (the "GOAT roadmap"), reconciled against the **actual
@@ -200,17 +202,25 @@ reuse of the compat Oracle + diff.
 > The deploy-safety answer: "who across the fleet depends on this symbol?" Capture is cheap and can
 > be pulled early; the query needs a global registry (milestone M7).
 
-- **4a. `external_refs` capture at index time (cheap, pull early).** §9A.2. At resolve time, any
-  reference resolving *outside* the repo → row in an `external_refs` table `(from_hash, from_repo,
-  target_module, target_name, target_signature_hash?, resolution_method, confidence)`. "Data you have
-  anyway." Can land alongside Phase 1a's resolver work.
-- **4b. `module_path` in registry + global denorm.** Add `module_path` to per-repo `registry.db`;
-  denormalize `(module_path → repo, ref)` into `global.db`.
-- **4c. `reponite_ximpact` fleet query.** Match a symbol's `(module_path, name, signature_hash)`
-  against every repo's `external_refs`; group callers by repo/ref with confidence; **fuse with the
-  Oracle** ("4 services call getUserV2; 3 still expect the old signature"). State honest limits in
-  `_meta`: source-call-graph only (RPC/HTTP/gRPC/queue invisible), version-skew defaults to each
-  caller's pinned ref, most cross-repo edges medium-confidence.
+- **4a. `external_refs` capture at index time (cheap, pull early). ✅ DONE.** §9A.2. `imports.go`
+  extracts per-language import bindings; `extract.go` emits per-symbol `QualifiedCall`s; `resolve.go`
+  `resolveExternalRefs` maps a call that resolves *through an import* to a `(module, name)` external
+  reference (`import-resolved`@0.75) — deduped, name un-aliased. Stored per-ref in `external_refs`
+  (sqlite/mem), cleared on reindex. Behavior graph still keys off `Callees`, so no hash perturbs.
+- **4b. `module_path` in registry. ✅ DONE.** `module.go` `DetectModulePath` reads the repo's identity
+  from `go.mod`/`package.json`/`pyproject.toml`/`pom.xml` (root-most wins); `IndexDir`/`IndexGitRef`
+  collect the manifest + `SetModulePath`. `Store.ModulePath(repo)` serves it. A persistent cross-run
+  `global.db` denorm is still deferred — the `serve` **MultiStore** aggregates several per-repo stores
+  into one fleet view today (fan-out `ExternalRefsTo`), covering the multi-dir case.
+- **4c. `reponite_ximpact` fleet query. ✅ DONE (name → module-precise).** `ximpact.go` fuses two
+  tiers: **(1) module-resolved** — match `external_refs` on the target's own `module_path` + name
+  (precise, `import-resolved`, listed first; a caller precisely bound to a *different* module no
+  longer collides); **(2) name-based** unresolved-external (fallback, deduped by caller). Contract
+  fusion (§8B.3, from phase4b) still flags `contract_changed` across definition refs. Honest limits
+  stay in `note`: source-call-graph only (RPC/HTTP/gRPC/queue invisible), version-skew defaults to
+  each caller's indexed ref. **Deferred:** SCIP would raise cross-boundary edges above name/path
+  confidence (Phase 6b); per-caller *expected-signature* skew needs the caller's own captured
+  `target_signature_hash` (not yet recorded).
 
 ---
 

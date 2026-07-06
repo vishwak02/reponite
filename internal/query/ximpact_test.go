@@ -67,3 +67,75 @@ func TestXImpactContractFusion(t *testing.T) {
 		t.Fatal("identical signature across refs must be ContractChanged=false")
 	}
 }
+
+// The precision upgrade: when the target's repo has a known module_path, callers
+// that resolved the dependency through their imports (import-resolved external
+// refs) are matched on (module, name) — precise, higher-confidence, listed first
+// — and fused with the name-based fallback, deduped by caller.
+func TestXImpactModuleResolvedFusion(t *testing.T) {
+	m := storage.NewMem()
+	// api defines getUser and declares its module identity.
+	m.Put("api", "HEAD", "api.getUser", rc("g", "sig", "b", 1))
+	if err := m.SetModulePath("api", "github.com/acme/api"); err != nil {
+		t.Fatal(err)
+	}
+	imp := func(from string) query.ExternalRef {
+		return query.ExternalRef{From: from, Module: "github.com/acme/api", Name: "getUser", ResolutionMethod: query.ImportResolution, Confidence: 0.75}
+	}
+	// web depends on it precisely (import-resolved).
+	m.PutExternalRefs("web", "HEAD", []query.ExternalRef{imp("web.fetch")})
+	// worker depends on it BOTH precisely and via a name-based edge → dedup once.
+	m.PutExternalRefs("worker", "HEAD", []query.ExternalRef{imp("worker.run")})
+	m.Put("worker", "HEAD", "worker.run", ext("wr", "getUser"))
+	// legacy depends only via a name-based unresolved-external edge (no imports captured).
+	m.Put("legacy", "HEAD", "legacy.old", ext("lo", "getUser"))
+
+	res := query.XImpact(m, "getUser", "")
+
+	if len(res.Modules) != 1 || res.Modules[0] != "github.com/acme/api" {
+		t.Fatalf("target module = %v; want [github.com/acme/api]", res.Modules)
+	}
+	if len(res.Callers) != 3 {
+		t.Fatalf("want 3 deduped callers (web, worker, legacy), got %+v", res.Callers)
+	}
+	// Precise tier first: web.fetch, worker.run (both import-resolved).
+	for i, c := range res.Callers[:2] {
+		if c.ResolutionMethod != query.ImportResolution || c.Module != "github.com/acme/api" {
+			t.Fatalf("caller[%d]=%+v; want import-resolved to the api module", i, c)
+		}
+	}
+	if res.Callers[2].Caller != "legacy.old" || res.Callers[2].ResolutionMethod != query.ExternalResolution {
+		t.Fatalf("caller[2]=%+v; want legacy.old as name-based fallback", res.Callers[2])
+	}
+	// worker.run appears exactly once (precise wins over its name-based edge).
+	workerCount := 0
+	for _, c := range res.Callers {
+		if c.Caller == "worker.run" {
+			workerCount++
+		}
+	}
+	if workerCount != 1 {
+		t.Fatalf("worker.run must be deduped to one entry, got %d", workerCount)
+	}
+}
+
+// The false-positive guard the OLD name-based ximpact couldn't give: a caller in
+// an unrelated module that imports a DIFFERENT package's getUser is matched only
+// when its own module matches the target's — a distinct module never collides.
+func TestXImpactModuleDistinguishesCollisions(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("api", "HEAD", "api.getUser", rc("g", "sig", "b", 1))
+	m.SetModulePath("api", "github.com/acme/api")
+	// This caller precisely depends on a *different* module's getUser.
+	m.PutExternalRefs("unrelated", "HEAD", []query.ExternalRef{
+		{From: "unrelated.x", Module: "github.com/other/pkg", Name: "getUser", ResolutionMethod: query.ImportResolution, Confidence: 0.75},
+	})
+
+	res := query.XImpact(m, "getUser", "")
+	// The precise scan for the api module must NOT return the other-module caller.
+	for _, c := range res.Callers {
+		if c.Caller == "unrelated.x" && c.ResolutionMethod == query.ImportResolution {
+			t.Fatalf("a precise dependency on a different module must not match api.getUser: %+v", c)
+		}
+	}
+}

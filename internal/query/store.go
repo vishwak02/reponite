@@ -25,4 +25,11 @@ type Store interface {
 	Files(repo, ref string) []File
 	// Manifest returns a ref's content manifest.
 	Manifest(repo, ref string) (content.Manifest, bool)
+	// ModulePath returns repo's module/package path (go.mod module, package.json
+	// name, ...), or "" if unknown. A symbol's cross-repo identity is
+	// (ModulePath, name), so this is how ximpact resolves the target's module.
+	ModulePath(repo string) string
+	// ExternalRefsTo returns every captured external reference resolving to
+	// (module, name): the fleet-wide callers of that exported symbol (§8B).
+	ExternalRefsTo(module, name string) []ExternalRefHit
 }

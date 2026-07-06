@@ -190,3 +190,53 @@ func TestIndexFilesDiffAndGrep(t *testing.T) {
 		t.Fatalf("grep via indexed store: %+v err=%v", g.Matches, err)
 	}
 }
+
+// A file's imports + a caller's qualified calls become module-resolved external
+// references at index time (§8B): a qualified call to an imported package, and a
+// from-imported symbol called unqualified, both resolve to (module, name); an
+// intra-repo call (its qualifier isn't imported) yields nothing.
+func TestIndexFilesExternalRefs(t *testing.T) {
+	m := storage.NewMem()
+	caller := Symbol{
+		Name: "Handler", Kind: "function", Signature: "func Handler()", CanonBody: []byte("b"),
+		Callees: []string{"Do", "helper", "internal"},
+		QualifiedCalls: []QualifiedCall{
+			{Qualifier: "bar", Name: "Do"},   // bar.Do() -> module bar
+			{Name: "helper"},                 // from-imported helper() -> module util
+			{Qualifier: "x", Name: "Method"}, // x is a local, not imported -> dropped
+		},
+	}
+	files := []ParsedFile{{
+		Path: "svc/handler.go", Content: "x", Lang: "go",
+		Symbols: []Symbol{caller},
+		Imports: []ImportBinding{
+			{Local: "bar", Module: "github.com/x/bar"},
+			{Local: "helper", Module: "util", Symbol: "helper"},
+		},
+	}}
+	if err := IndexFiles(m, "svc", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+
+	do := m.ExternalRefsTo("github.com/x/bar", "Do")
+	if len(do) != 1 || do[0].Caller != "svc.Handler" || do[0].ResolutionMethod != MethodImport {
+		t.Fatalf("external ref for bar.Do: %+v", do)
+	}
+	if h := m.ExternalRefsTo("util", "helper"); len(h) != 1 || h[0].Caller != "svc.Handler" {
+		t.Fatalf("external ref for helper(): %+v", h)
+	}
+	// The intra-repo call produced no external ref of any module.
+	if got := m.ExternalRefsTo("", "Method"); len(got) != 0 {
+		t.Fatalf("local call must not produce an external ref, got %+v", got)
+	}
+
+	// Reindexing with the import removed clears the stale external ref.
+	files[0].Imports = nil
+	files[0].Symbols[0].QualifiedCalls = nil
+	if err := IndexFiles(m, "svc", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.ExternalRefsTo("github.com/x/bar", "Do"); len(got) != 0 {
+		t.Fatalf("reindex without imports must clear external refs, got %+v", got)
+	}
+}

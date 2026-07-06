@@ -22,6 +22,22 @@ type Symbol struct {
 	CanonBody []byte
 	Doc       []byte
 	Callees   []string
+	// QualifiedCalls carries each call site's leftmost qualifier + trailing name
+	// (Qualifier empty for an unqualified call). It exists ONLY to resolve
+	// cross-repo dependencies against import bindings (external_refs, §8B); the
+	// behavior graph still keys off Callees, so this never perturbs any hash.
+	QualifiedCalls []QualifiedCall
+}
+
+// QualifiedCall is one call site reduced to the two identifiers that matter for
+// import resolution: the leftmost object (Qualifier — a package/namespace/class
+// alias, empty when the call is unqualified) and the invoked member (Name).
+// e.g. Go "bar.Do()" → {bar, Do}; Python "baz()" → {"", baz}; Java "Bar.x()" →
+// {Bar, x}. "this."/"self." receivers are not identifiers, so they yield an
+// empty Qualifier and are correctly ignored as intra-repo calls.
+type QualifiedCall struct {
+	Qualifier string
+	Name      string
 }
 
 func isCommentType(t string) bool { return strings.Contains(t, "comment") }
@@ -82,9 +98,11 @@ func joinDoc(doc [][]byte) []byte {
 func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte, enclosing string) Symbol {
 	var canonBody []byte
 	var callees []string
+	var qcalls []QualifiedCall
 	if body := firstChildAny(fn, r.BodyTypes); body != nil {
 		canonBody = content.Canon(body, normVer)
 		callees = calleesWithRules(body, r)
+		qcalls = qualifiedCallsWithRules(body, r)
 	}
 	recv := ""
 	if kind == "method" {
@@ -94,13 +112,14 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		recv = enclosing // class-based languages: qualify by the enclosing class
 	}
 	return Symbol{
-		Name:      nameOf(fn, r),
-		Recv:      recv,
-		Kind:      kind,
-		Signature: string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
-		CanonBody: canonBody,
-		Doc:       doc,
-		Callees:   callees,
+		Name:           nameOf(fn, r),
+		Recv:           recv,
+		Kind:           kind,
+		Signature:      string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
+		CanonBody:      canonBody,
+		Doc:            doc,
+		Callees:        callees,
+		QualifiedCalls: qcalls,
 	}
 }
 
@@ -151,6 +170,52 @@ func calleesWithRules(body content.AST, r LangRules) []string {
 	}
 	return out
 }
+
+// qualifiedCallsWithRules returns each call site's (leftmost qualifier, trailing
+// name), deduped by the pair. Unlike calleesWithRules it keeps the qualifier so
+// a call can be matched to an import binding for cross-repo resolution (§8B).
+// It reads the identifiers appearing before the call's argument list, treating
+// the first as the qualifier when there are two or more and the last as the
+// invoked name — a shape that fits selector/attribute/member callee expressions
+// (Go/Python/JS/TS) and Java's flat method_invocation alike.
+func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
+	seen := map[QualifiedCall]bool{}
+	var out []QualifiedCall
+	for _, call := range descendantsAny(body, r.CallTypes) {
+		ids := calleeIdents(call, r)
+		if len(ids) == 0 {
+			continue
+		}
+		qc := QualifiedCall{Name: ids[len(ids)-1]}
+		if len(ids) >= 2 {
+			qc.Qualifier = ids[0]
+		}
+		if r.Builtins[qc.Name] || seen[qc] {
+			continue
+		}
+		seen[qc] = true
+		out = append(out, qc)
+	}
+	return out
+}
+
+// calleeIdents returns the name-type identifier leaves of a call's callee
+// expression, in source order, stopping at the argument list (so argument
+// identifiers and nested calls — handled by their own iteration — are excluded).
+func calleeIdents(call content.AST, r LangRules) []string {
+	var ids []string
+	for _, c := range call.Children() {
+		if isArgNode(c.Type()) {
+			break
+		}
+		ids = append(ids, identLeaves(c, r.NameTypes)...)
+	}
+	return ids
+}
+
+// isArgNode reports whether a node type is a call's argument list. tree-sitter
+// names these "argument_list" (Go/Python/Java) or "arguments" (JS/TS).
+func isArgNode(t string) bool { return strings.Contains(t, "argument") }
 
 // extractCallees is the Go-specific callee helper kept for existing tests.
 func extractCallees(body content.AST) []string { return calleesWithRules(body, GoRules) }

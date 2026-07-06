@@ -72,13 +72,22 @@ func cmdIndex(args []string) {
 		if err := st.AddRef(repo, ref, commit, ""); err != nil {
 			fail(err)
 		}
-		fmt.Printf("indexed %s@%s (git %s @ %s) — refs now: %v\n", repo, ref, gitRev, shortHash(commit), st.Refs(repo))
+		fmt.Printf("indexed %s@%s (git %s @ %s)%s — refs now: %v\n", repo, ref, gitRev, shortHash(commit), moduleNote(st, repo), st.Refs(repo))
 		return
 	}
 	if err := processing.IndexDir(st, repo, ref, dir, version.NormVer); err != nil {
 		fail(err)
 	}
-	fmt.Printf("indexed %s@%s — refs now: %v\n", repo, ref, st.Refs(repo))
+	fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))
+}
+
+// moduleNote reports the detected module path for cross-repo impact, or a hint
+// when none was found (so a user knows ximpact will fall back to name matching).
+func moduleNote(st interface{ ModulePath(string) string }, repo string) string {
+	if m := st.ModulePath(repo); m != "" {
+		return " [module " + m + "]"
+	}
+	return " [no module manifest — ximpact name-based]"
 }
 
 func shortHash(h string) string {

@@ -1,10 +1,12 @@
 # Reponite — Architecture Extension (Agent-Facing Reads)
 
-> **Implementation status (2026-07-05):** `reponite_brief` (§8C), `reponite_rootcause_trace` (§8A.4),
-> `reponite_ximpact` (§8B, name-based), the grep layer (§10A) and the semantic rung (§10A.2, ADR-020)
-> are **built and merged to `main`**; intent linkage (§8A.6) ships as a git-blame provider. Deferred:
-> `ximpact`'s fleet `global.db`/`module_path` precision + Oracle signature-skew fusion. See
-> `docs/BUILD_PLAN.md` and `PROGRESS.md` for the per-phase log.
+> **Implementation status (2026-07-06):** `reponite_brief` (§8C), `reponite_rootcause_trace` (§8A.4),
+> `reponite_ximpact` (§8B, now **module-path precise** — `external_refs` captured from per-language
+> import bindings + per-repo `module_path`, fused with the name-based fallback), the grep layer
+> (§10A) and the semantic rung (§10A.2, ADR-020) are **built and merged to `main`**; intent linkage
+> (§8A.6) ships as a git-blame provider. Deferred: a persistent cross-run `global.db` registry (the
+> `serve` MultiStore aggregates a multi-dir fleet today), per-caller signature-skew, and SCIP-grade
+> cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*
 
@@ -66,6 +68,9 @@ SCIP resolves within a repo, not across the boundary (unless the dependency is m
 ### 8B.6 Split build (important)
 The `external_refs` **capture** is cheap and happens at resolve time from the first structural session (data you have anyway). The fleet-wide **query** needs the global registry and lands in the team/cross-repo milestone. Capture early, query later.
 
+### 8B.7 As built (2026-07)
+Both halves shipped. **Capture:** a caller file's import bindings (`imports.go`, per language) resolve its qualified/from-imported call sites (`Symbol.QualifiedCalls`) to `(module_path, name)` external references at index time (`resolveExternalRefs`, `import-resolved`@0.75), stored per-ref in `external_refs` and cleared on reindex. A repo's `module_path` is detected from its ecosystem manifest (`module.go`: `go.mod`/`package.json`/`pyproject.toml`/`pom.xml`, root-most wins). **Query:** `XImpact` fuses tier 1 module-resolved callers (match `external_refs` on the target's own `module_path` — so a same-named symbol in an unrelated module does **not** collide) with tier 2 the original name-based `unresolved-external` scan (fallback, deduped by caller); each caller carries its `resolution_method` so the precise and heuristic tiers are distinguishable. The `serve` **MultiStore** fans `ExternalRefsTo` across several per-repo stores for a live multi-dir fleet view. **Still deferred:** a persistent cross-run `global.db` (so separately-invoked CLI indexes share a registry without `serve`); recording each caller's `target_signature_hash` for per-caller expected-signature skew (§8B.3 currently detects contract drift across the *target's* definition refs, not per caller); SCIP to lift cross-boundary edges above name/path confidence (§8B.4, Phase 6b).
+
 ---
 
 ## §8C — Editing-Brief Bundle (coding-agent flagship)
@@ -115,6 +120,8 @@ CREATE TABLE external_refs (
 CREATE INDEX idx_extref_target ON external_refs(target_module, target_name);
 ```
 Repo module identity: add `module_path TEXT` to the per-repo registry (`registry.db`) and denormalize `(module_path → repo, ref)` into `global.db` so a symbol's `(module_path, name)` resolves to candidate caller repos fleet-wide.
+
+**As built:** the SQLite adapter keys `external_refs` by `(repo, ref, from_name, target_module, target_name)` with `resolution_method`+`confidence` (symbols are keyed by package-qualified id, not `symbol_hash`, so `from_name` is the caller's qid), indexed on `(target_module, target_name)`; `target_signature_hash` is not yet captured (per-caller skew deferred, §8B.7). `module_path` lives in a per-repo `repo_modules(repo, module_path)` table; the cross-run `global.db` denorm is deferred in favor of the runtime `serve` MultiStore.
 
 ### 9A.3 Intent linkage promoted (feeds §8A cause + §8C intent)
 No schema change — the base `intent` table (§9.2) already has `commit_hash`, `pr_numbers`, `ticket_ids`. The change is that **linkage rows are populated on the critical path with `summary` NULL**, independent of any LLM. Add:
