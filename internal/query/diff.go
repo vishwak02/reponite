@@ -23,6 +23,7 @@ const (
 // SymbolChange is one symbol's delta between refs A and B.
 type SymbolChange struct {
 	Name       string
+	Lang       string // language of the symbol (from whichever ref it is present at)
 	Kind       ChangeKind
 	Confidence float64
 }
@@ -53,12 +54,16 @@ func DiffRefs(a, b map[string]SymbolRef) []SymbolChange {
 		bv, bok := b[n]
 		switch {
 		case aok && !bok:
-			out = append(out, SymbolChange{Name: n, Kind: ChangeRemoved, Confidence: 1.0})
+			out = append(out, SymbolChange{Name: n, Lang: av.Lang, Kind: ChangeRemoved, Confidence: 1.0})
 		case !aok && bok:
-			out = append(out, SymbolChange{Name: n, Kind: ChangeAdded, Confidence: 1.0})
+			out = append(out, SymbolChange{Name: n, Lang: bv.Lang, Kind: ChangeAdded, Confidence: 1.0})
 		default:
 			r := Compat(av, bv)
-			out = append(out, SymbolChange{Name: n, Kind: verdictToChange(r.Verdict), Confidence: r.Confidence})
+			lang := bv.Lang
+			if lang == "" {
+				lang = av.Lang
+			}
+			out = append(out, SymbolChange{Name: n, Lang: lang, Kind: verdictToChange(r.Verdict), Confidence: r.Confidence})
 		}
 	}
 	return out

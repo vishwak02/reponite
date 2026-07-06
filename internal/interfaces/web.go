@@ -27,6 +27,8 @@ type WebHandler struct {
 func (h *WebHandler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
+	mux.HandleFunc("/style.css", asset("text/css; charset=utf-8", dashboardCSS))
+	mux.HandleFunc("/app.js", asset("application/javascript; charset=utf-8", dashboardJS))
 	mux.HandleFunc("/api/repos", h.apiRepos)
 	mux.HandleFunc("/api/refs", h.apiRefs)
 	mux.HandleFunc("/api/search", h.apiSearch)
@@ -68,6 +70,15 @@ func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, dashboardHTML)
+}
+
+// asset serves an embedded static file (the dashboard's CSS/JS) with a fixed
+// content type.
+func asset(contentType, body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentType)
+		io.WriteString(w, body)
+	}
 }
 
 func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {

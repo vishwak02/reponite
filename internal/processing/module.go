@@ -16,7 +16,7 @@ import (
 
 // manifestName is a manifest filename in ecosystem-priority order; the first
 // one present (root-most copy) wins. A repo is almost always one ecosystem.
-var manifestNames = []string{"go.mod", "package.json", "pyproject.toml", "pom.xml"}
+var manifestNames = []string{"go.mod", "package.json", "pyproject.toml", "pom.xml", "Cargo.toml"}
 
 // DetectModulePath returns the repo's module path given its candidate manifest
 // files keyed by repo-relative path. When several copies of a manifest exist
@@ -59,6 +59,33 @@ func parseModule(base string, content []byte) (string, bool) {
 		return pyprojectName(content)
 	case "pom.xml":
 		return pomCoordinates(content)
+	case "Cargo.toml":
+		return cargoName(content)
+	}
+	return "", false
+}
+
+// cargoName reads the crate name from a Cargo.toml [package] table.
+func cargoName(content []byte) (string, bool) {
+	section := ""
+	for _, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.Trim(line, "[]")
+			continue
+		}
+		if section != "package" {
+			continue
+		}
+		if strings.HasPrefix(line, "name") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "name"))
+			if strings.HasPrefix(rest, "=") {
+				name := strings.Trim(strings.TrimSpace(strings.TrimPrefix(rest, "=")), "\"'")
+				if name != "" {
+					return name, true
+				}
+			}
+		}
 	}
 	return "", false
 }

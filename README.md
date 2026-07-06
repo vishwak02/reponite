@@ -107,7 +107,7 @@ reponite ximpact getUserV2
 - 🌐 **Cross-repo impact** — who across the fleet calls a symbol, and whether their expected contract still matches
 - 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (no model needed) → compat
 - 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break, drops straight into a PR workflow
-- 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, and **ROS** interface files (`.msg`/`.srv`/`.action`)
+- 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, and **ROS** interface files (`.msg`/`.srv`/`.action`)
 - 📡 **Four surfaces** — CLI · MCP server (11 tools) · web dashboard · VS Code extension
 
 ---

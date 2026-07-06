@@ -34,6 +34,11 @@ func TestDetectModulePath(t *testing.T) {
 			want:  "com.acme:billing",
 		},
 		{
+			name:  "Cargo.toml package name",
+			files: map[string][]byte{"Cargo.toml": []byte("[package]\nname = \"acme-rs\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n")},
+			want:  "acme-rs",
+		},
+		{
 			name:  "none",
 			files: map[string][]byte{"README.md": []byte("hi")},
 			want:  "",

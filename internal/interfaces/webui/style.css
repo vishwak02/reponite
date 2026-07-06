@@ -1,0 +1,30 @@
+:root{--bg:#fff;--fg:#1a1a1a;--muted:#666;--line:#e2e2e2;--panel:#f7f7f8;--accent:#2d6cdf;
+      --add:#1a7f37;--rem:#cf222e;--beh:#bf8700;--shape:#8250df}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--line:#30363d;
+      --panel:#161b22;--accent:#589bff;--add:#3fb950;--rem:#f85149;--beh:#d29922;--shape:#a371f7}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;color:var(--fg);background:var(--bg)}
+header{display:flex;gap:12px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:16px;margin:0;font-weight:700;letter-spacing:.2px}
+header .repo{color:var(--muted)}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:none;border:1px solid transparent;color:var(--muted);padding:5px 12px;border-radius:7px;cursor:pointer;font-size:13px}
+nav button.on{background:var(--panel);border-color:var(--line);color:var(--fg);font-weight:600}
+select,input{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:5px 8px}
+main{display:grid;grid-template-columns:minmax(260px,1fr) 2fr;gap:0;height:calc(100vh - 54px)}
+.side{border-right:1px solid var(--line);overflow:auto;padding:12px}
+.detail{overflow:auto;padding:16px 20px}
+.view{display:none}.view.on{display:block}
+.row{padding:6px 9px;border-radius:7px;cursor:pointer;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row:hover{background:var(--panel)}
+.tag{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:10px;margin-right:6px;vertical-align:middle}
+.added{color:var(--add);border:1px solid var(--add)} .removed{color:var(--rem);border:1px solid var(--rem)}
+.behavior_changed{color:var(--beh);border:1px solid var(--beh)} .shape_changed{color:var(--shape);border:1px solid var(--shape)}
+.compatible,.unchanged{color:var(--muted);border:1px solid var(--line)} .absent{color:var(--muted);border:1px dashed var(--line)}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:18px 0 8px}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px;overflow:auto;font-size:12.5px;margin:0}
+.k{color:var(--muted)} .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.pill{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:10px;padding:1px 7px;margin-left:6px}
+.pill.precise{color:var(--add);border-color:var(--add)}
+.empty{color:var(--muted);padding:20px 4px}
+a{color:var(--accent);text-decoration:none;cursor:pointer}
