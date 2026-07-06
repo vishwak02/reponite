@@ -60,3 +60,28 @@ func TestMultiStoreUnknownRepo(t *testing.T) {
 		t.Fatal("unknown repo SymbolAt must be false")
 	}
 }
+
+// Fleet-wide module-resolved ximpact across backing stores: the target's module
+// is read from the store that owns it, and its precise callers are gathered by
+// fanning out ExternalRefsTo over every backing store.
+func TestMultiStoreModuleResolvedXImpact(t *testing.T) {
+	a := storage.NewMem()
+	a.Put("api", "HEAD", "api.getUser", def("g", "sig"))
+	a.SetModulePath("api", "github.com/acme/api")
+	b := storage.NewMem()
+	b.PutExternalRefs("web", "HEAD", []query.ExternalRef{
+		{From: "web.fetch", Module: "github.com/acme/api", Name: "getUser", ResolutionMethod: query.ImportResolution, Confidence: 0.75},
+	})
+	ms := storage.NewMultiStore(a, b)
+
+	if ms.ModulePath("api") != "github.com/acme/api" {
+		t.Fatalf("ModulePath must route to the owning store; got %q", ms.ModulePath("api"))
+	}
+	res := query.XImpact(ms, "getUser", "")
+	if len(res.Callers) != 1 || res.Callers[0].Caller != "web.fetch" || res.Callers[0].ResolutionMethod != query.ImportResolution {
+		t.Fatalf("fleet module-resolved caller = %+v", res.Callers)
+	}
+	if len(res.Modules) != 1 || res.Modules[0] != "github.com/acme/api" {
+		t.Fatalf("fleet target module = %v", res.Modules)
+	}
+}

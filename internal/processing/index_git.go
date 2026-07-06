@@ -40,8 +40,15 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 	}
 
 	var files []ParsedFile
+	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
 		if skipPath(f.Name) {
+			return nil
+		}
+		if IsManifestFile(f.Name) {
+			if src, err := f.Contents(); err == nil {
+				manifests[f.Name] = []byte(src)
+			}
 			return nil
 		}
 		if IsROSFile(f.Name) {
@@ -69,7 +76,10 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 		if root == nil {
 			return nil // no grammar bound for this extension; skip
 		}
-		files = append(files, ParsedFile{Path: f.Name, Content: src, Lang: rules.Name, Symbols: Extract(root, rules, normVer), Spans: spans})
+		files = append(files, ParsedFile{
+			Path: f.Name, Content: src, Lang: rules.Name,
+			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
+		})
 		return nil
 	})
 	if err != nil {
@@ -77,6 +87,11 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 	}
 	if err := IndexFiles(w, repo, ref, normVer, files); err != nil {
 		return "", err
+	}
+	if mod, ok := DetectModulePath(manifests); ok {
+		if err := w.SetModulePath(repo, mod); err != nil {
+			return "", err
+		}
 	}
 	return h.String(), nil
 }

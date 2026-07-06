@@ -28,21 +28,25 @@ type refKey struct{ repo, ref string }
 
 // Mem is an in-memory query.Store.
 type Mem struct {
-	repos map[string]struct{}
-	refs  map[string]map[string]struct{}
-	syms  map[refKey]map[string]SymbolRecord
-	files map[refKey][]query.File
-	mans  map[refKey]content.Manifest
+	repos   map[string]struct{}
+	refs    map[string]map[string]struct{}
+	syms    map[refKey]map[string]SymbolRecord
+	files   map[refKey][]query.File
+	mans    map[refKey]content.Manifest
+	extrefs map[refKey][]query.ExternalRef
+	modules map[string]string // repo -> module_path (§8B)
 }
 
 // NewMem returns an empty in-memory store.
 func NewMem() *Mem {
 	return &Mem{
-		repos: map[string]struct{}{},
-		refs:  map[string]map[string]struct{}{},
-		syms:  map[refKey]map[string]SymbolRecord{},
-		files: map[refKey][]query.File{},
-		mans:  map[refKey]content.Manifest{},
+		repos:   map[string]struct{}{},
+		refs:    map[string]map[string]struct{}{},
+		syms:    map[refKey]map[string]SymbolRecord{},
+		files:   map[refKey][]query.File{},
+		mans:    map[refKey]content.Manifest{},
+		extrefs: map[refKey][]query.ExternalRef{},
+		modules: map[string]string{},
 	}
 }
 
@@ -57,11 +61,12 @@ func (m *Mem) touch(repo, ref string) {
 	}
 }
 
-// ClearRef drops a ref's symbols and files so a reindex replaces them.
+// ClearRef drops a ref's symbols, files, and external refs so a reindex replaces them.
 func (m *Mem) ClearRef(repo, ref string) error {
 	k := refKey{repo, ref}
 	delete(m.syms, k)
 	delete(m.files, k)
+	delete(m.extrefs, k)
 	return nil
 }
 
@@ -84,6 +89,27 @@ func (m *Mem) PutFile(repo, ref string, f query.File) error {
 func (m *Mem) PutManifest(repo, ref string, man content.Manifest) error {
 	m.touch(repo, ref)
 	m.mans[refKey{repo, ref}] = man
+	return nil
+}
+
+// PutExternalRefs records a ref's cross-repo dependency edges (§8B).
+func (m *Mem) PutExternalRefs(repo, ref string, refs []query.ExternalRef) error {
+	m.touch(repo, ref)
+	k := refKey{repo, ref}
+	if len(refs) == 0 {
+		delete(m.extrefs, k)
+		return nil
+	}
+	m.extrefs[k] = refs
+	return nil
+}
+
+// SetModulePath records repo's module/package identity.
+func (m *Mem) SetModulePath(repo, modulePath string) error {
+	m.repos[repo] = struct{}{}
+	if modulePath != "" {
+		m.modules[repo] = modulePath
+	}
 	return nil
 }
 
@@ -128,6 +154,36 @@ func (m *Mem) Files(repo, ref string) []query.File { return m.files[refKey{repo,
 func (m *Mem) Manifest(repo, ref string) (content.Manifest, bool) {
 	man, ok := m.mans[refKey{repo, ref}]
 	return man, ok
+}
+
+func (m *Mem) ModulePath(repo string) string { return m.modules[repo] }
+
+// ExternalRefsTo returns every external reference resolving to (module, name),
+// across all repos/refs, sorted (repo, ref, caller) for determinism.
+func (m *Mem) ExternalRefsTo(module, name string) []query.ExternalRefHit {
+	var out []query.ExternalRefHit
+	for k, refs := range m.extrefs {
+		for _, r := range refs {
+			if r.Module == module && r.Name == name {
+				out = append(out, query.ExternalRefHit{
+					Repo: k.repo, Ref: k.ref, Caller: r.From,
+					Module: r.Module, Name: r.Name,
+					ResolutionMethod: r.ResolutionMethod, Confidence: r.Confidence,
+				})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Repo != b.Repo {
+			return a.Repo < b.Repo
+		}
+		if a.Ref != b.Ref {
+			return a.Ref < b.Ref
+		}
+		return a.Caller < b.Caller
+	})
+	return out
 }
 
 func asRef(rec SymbolRecord) query.SymbolRef {

@@ -15,11 +15,15 @@ import (
 // Indexer is the write surface the indexer needs; satisfied by storage.Mem and
 // the SQLite adapter (storage/sqlite).
 type Indexer interface {
-	// ClearRef drops a ref's existing symbols/files so a reindex replaces rather
-	// than accumulates (symbols that vanished must not linger as stale rows).
+	// ClearRef drops a ref's existing symbols/files/external-refs so a reindex
+	// replaces rather than accumulates (vanished rows must not linger).
 	ClearRef(repo, ref string) error
 	Put(repo, ref, name string, rec storage.SymbolRecord) error
 	PutFile(repo, ref string, f query.File) error
+	// PutExternalRefs records a ref's cross-repo dependency edges (§8B).
+	PutExternalRefs(repo, ref string, refs []query.ExternalRef) error
+	// SetModulePath records repo's module/package identity (idempotent per repo).
+	SetModulePath(repo, modulePath string) error
 }
 
 var _ Indexer = (*storage.Mem)(nil)
@@ -32,6 +36,9 @@ type ParsedFile struct {
 	Lang    string // language name (lang.go); empty defaults to "go" for back-compat
 	Symbols []Symbol
 	Spans   []query.SymbolSpan
+	// Imports are the file's external import bindings (imports.go), used to
+	// resolve qualified calls to (module, name) external references (§8B).
+	Imports []ImportBinding
 }
 
 // IndexFiles indexes all files of one repo ref with name-based edge resolution.
@@ -55,12 +62,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	var order []string              // qualified ids, first-seen order
 	byQID := map[string]computed{}  // qid -> facts
 	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
+	var extRefs []query.ExternalRef // cross-repo dependency edges (§8B)
 	for _, f := range files {
 		pkg := pkgOf(f.Path)
 		lang := f.Lang
 		if lang == "" {
 			lang = "go" // back-compat: pure callers/tests predate the Lang field
 		}
+		byLocal := importsByLocal(f.Imports)
 		for _, s := range f.Symbols {
 			// Methods qualify by receiver too (pkg.Recv.name) so same-named methods
 			// on different types are distinct; edge resolution still keys off the
@@ -76,6 +85,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				byBase[s.Name] = append(byBase[s.Name], qid)
 			}
 			byQID[qid] = computed{sym: s, pkg: pkg, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id)}
+			if len(byLocal) > 0 {
+				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, byLocal)...)
+			}
 		}
 	}
 
@@ -125,6 +137,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		if err := w.PutFile(repo, ref, query.File{Path: f.Path, Content: f.Content, Symbols: f.Spans}); err != nil {
 			return err
 		}
+	}
+	if err := w.PutExternalRefs(repo, ref, extRefs); err != nil {
+		return err
 	}
 	return nil
 }

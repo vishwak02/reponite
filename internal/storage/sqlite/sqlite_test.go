@@ -123,6 +123,56 @@ func TestSQLiteClearRef(t *testing.T) {
 	}
 }
 
+// External refs + module_path survive a store round-trip and drive the
+// module-resolved half of ximpact (§8B). ClearRef drops a ref's external refs.
+func TestSQLiteExternalRefsAndModulePath(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	if err := st.SetModulePath("web", "github.com/acme/web"); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.ModulePath("web"); got != "github.com/acme/web" {
+		t.Fatalf("ModulePath round-trip = %q", got)
+	}
+	if st.ModulePath("nope") != "" {
+		t.Fatal("unknown repo module must be empty")
+	}
+
+	refs := []query.ExternalRef{
+		{From: "web.fetch", Module: "github.com/acme/api", Name: "getUser", ResolutionMethod: "import-resolved", Confidence: 0.75},
+		{From: "web.fetch", Module: "github.com/acme/api", Name: "listUsers", ResolutionMethod: "import-resolved", Confidence: 0.75},
+	}
+	if err := st.PutExternalRefs("web", "HEAD", refs); err != nil {
+		t.Fatal(err)
+	}
+	hits := st.ExternalRefsTo("github.com/acme/api", "getUser")
+	if len(hits) != 1 || hits[0].Repo != "web" || hits[0].Caller != "web.fetch" || hits[0].Confidence != 0.75 {
+		t.Fatalf("ExternalRefsTo round-trip: %+v", hits)
+	}
+	if len(st.ExternalRefsTo("github.com/acme/api", "listUsers")) != 1 {
+		t.Fatal("second external ref must round-trip independently")
+	}
+	// Reindex replaces: PutExternalRefs for the ref drops the prior set.
+	if err := st.PutExternalRefs("web", "HEAD", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.ExternalRefsTo("github.com/acme/api", "getUser")) != 0 {
+		t.Fatal("empty PutExternalRefs must clear the ref's external refs")
+	}
+	// ClearRef also removes external refs.
+	st.PutExternalRefs("web", "HEAD", refs)
+	if err := st.ClearRef("web", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.ExternalRefsTo("github.com/acme/api", "getUser")) != 0 {
+		t.Fatal("ClearRef must remove external refs")
+	}
+}
+
 // Files are content-addressed: identical content across refs stores one blob,
 // distinct content stores another — storage ∝ unique content (§4.3/§9).
 func TestSQLiteFileContentAddressedDedup(t *testing.T) {

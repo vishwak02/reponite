@@ -27,6 +27,11 @@ const (
 	// MethodTypes: proven by the Go type checker (reserved for precise
 	// resolution; assigned confidence 1.0 when that path lands).
 	MethodTypes = "go-types"
+	// MethodImport: a cross-repo reference resolved through the caller file's
+	// import bindings to a (module_path, name) — precise about *which* module,
+	// but still name/path-based across the repo boundary, not type-proven
+	// (§8B.4). Used for external_refs, not for in-repo CALLS edges.
+	MethodImport = "import-resolved"
 )
 
 // Confidence per resolution method (§7, invariant 5), monotonic with certainty:
@@ -34,6 +39,7 @@ const (
 const (
 	ConfTypes     = 1.0
 	ConfResolved  = 0.9
+	ConfImport    = 0.75
 	ConfExternal  = 0.6
 	ConfAmbiguous = 0.5
 )
@@ -98,4 +104,56 @@ func resolveEdges(callerPkg string, callees []string, nodeSet map[string]bool, b
 		}
 	}
 	return out
+}
+
+// resolveExternalRefs maps a caller's qualified call sites to cross-repo
+// external references, using the caller file's import bindings (byLocal). A
+// call is external only when it resolves through an import:
+//   - qualified (pkg.Do): the qualifier names a whole-module/namespace/class
+//     import → (that module, the called member); or if the qualifier is itself
+//     an imported symbol used as a receiver → (its module, the imported name).
+//   - unqualified (baz): the bare name is a from/named/static import → (its
+//     module, the imported symbol's real name).
+//
+// Calls whose qualifier/name is a local variable or an in-repo definition
+// resolve to nothing here — they are not cross-repo dependencies. The result is
+// deduped by (module, name) so N calls to the same external symbol count once.
+func resolveExternalRefs(caller string, qcalls []QualifiedCall, byLocal map[string]ImportBinding) []query.ExternalRef {
+	seen := map[[2]string]bool{}
+	var out []query.ExternalRef
+	for _, qc := range qcalls {
+		module, name, ok := resolveImportedCall(qc, byLocal)
+		if !ok {
+			continue
+		}
+		key := [2]string{module, name}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, query.ExternalRef{
+			From: caller, Module: module, Name: name,
+			ResolutionMethod: MethodImport, Confidence: ConfImport,
+		})
+	}
+	return out
+}
+
+func resolveImportedCall(qc QualifiedCall, byLocal map[string]ImportBinding) (module, name string, ok bool) {
+	if qc.Qualifier != "" {
+		b, found := byLocal[qc.Qualifier]
+		if !found {
+			return "", "", false // qualifier is a local var / in-repo — not external
+		}
+		if b.Symbol != "" {
+			return b.Module, b.Symbol, true // imported symbol used as a receiver (e.g. from foo import Bar; Bar.m())
+		}
+		return b.Module, qc.Name, true // whole-module handle (bar.Do, np.array, ns.thing)
+	}
+	// Unqualified call: external only if the name is itself an imported symbol
+	// (from-import / named / static import).
+	if b, found := byLocal[qc.Name]; found && b.Symbol != "" {
+		return b.Module, b.Symbol, true
+	}
+	return "", "", false
 }

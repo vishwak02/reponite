@@ -94,3 +94,22 @@ func (m *MultiStore) Manifest(repo, ref string) (content.Manifest, bool) {
 	}
 	return content.Manifest{}, false
 }
+
+func (m *MultiStore) ModulePath(repo string) string {
+	if s := m.owner[repo]; s != nil {
+		return s.ModulePath(repo)
+	}
+	return ""
+}
+
+// ExternalRefsTo fans out across every backing store — a symbol's callers can
+// live in any repo of the fleet — and concatenates the hits. Each store returns
+// its own hits sorted; the union is not globally re-sorted here, but ximpact
+// (its only caller) sorts the merged caller set (repo, ref, caller).
+func (m *MultiStore) ExternalRefsTo(module, name string) []query.ExternalRefHit {
+	var out []query.ExternalRefHit
+	for _, s := range m.stores {
+		out = append(out, s.ExternalRefsTo(module, name)...)
+	}
+	return out
+}

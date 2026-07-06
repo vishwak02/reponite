@@ -1,39 +1,52 @@
 // ximpact.go answers "who across the fleet depends on this symbol" (architecture
-// ext §8B / ADR-016): the question before changing an exported API. It reuses
-// the external CALLS edges the resolver already records — a call that doesn't
-// resolve inside its own repo is an unresolved-external edge (resolve.go), i.e. a
-// dependency on something outside. Scanning every repo/ref in the store for
-// external edges to a given name yields the cross-repo caller set with no new
-// indexing. Pure over the Store, tested in-sandbox (ADR-018).
+// ext §8B / ADR-016): the question before changing an exported API. It fuses two
+// caller signals over the Store, in decreasing precision:
 //
-// Honest scope (stated in Note, per §8B.5): this is source-call-graph impact,
-// name-based — RPC/HTTP/gRPC/queue calls are invisible, and matching is by
-// exported name, not module path (the module-resolved precision upgrade and the
-// fleet-wide global registry are the deferred "Large" half of §8B).
+//  1. Module-resolved (import-path precise). At index time each caller file's
+//     imports resolve its qualified calls to (module_path, name) external
+//     references (§9A.2). If the target is itself defined+indexed, we know its
+//     repo's module_path, so we match external_refs on (module, name) — a caller
+//     in another repo that imports THIS module and calls THIS name, not merely a
+//     name collision. This is the fleet-registry precision half of §8B.
+//  2. Name-based (fallback). The original signal: any unresolved-external CALLS
+//     edge whose bare name matches the target. Kept for callers whose imports
+//     weren't captured (older indexes, dynamic dispatch) and for targets with no
+//     indexed definition (unknown module). Deduped against (1) by repo/ref/caller.
+//
+// Pure over the Store, tested in-sandbox (ADR-018). Honest scope stays in Note
+// (§8B.5): source-call-graph only — RPC/HTTP/gRPC/queue calls are invisible.
 package query
 
 import "sort"
 
 // ExternalResolution is the resolution_method the resolver stamps on a call that
 // does not resolve within its own repo (mirrors processing.MethodExternal). Such
-// edges are exactly the cross-repo dependency signal ximpact consumes.
+// edges are the name-based cross-repo signal (fallback tier).
 const ExternalResolution = "unresolved-external"
 
-// XImpactCaller is one caller (in some repo/ref) of an external symbol.
+// ImportResolution is the resolution_method stamped on an import-path-resolved
+// external reference (mirrors processing.MethodImport) — the precise tier.
+const ImportResolution = "import-resolved"
+
+// XImpactCaller is one caller (in some repo/ref) of an external symbol, labeled
+// with how the dependency was resolved (invariant 5: never overclaim).
 type XImpactCaller struct {
-	Repo       string
-	Ref        string
-	Caller     string
-	Confidence float64
+	Repo             string
+	Ref              string
+	Caller           string
+	Module           string  // resolved target module ("" for a name-only match)
+	ResolutionMethod string  // import-resolved (precise) | unresolved-external (name-based)
+	Confidence       float64 // module-resolved > name-based
 }
 
 // XImpactDef is one definition site of the target symbol in the store, with its
-// signature hash at that ref — the "what is the current contract" half of the
-// deploy-safety picture (§8B.3).
+// signature hash and its repo's module path — the "what is the current contract,
+// and under what module identity" half of the deploy-safety picture (§8B.3).
 type XImpactDef struct {
 	Repo          string
 	Ref           string
 	Symbol        string
+	Module        string
 	SignatureHash string
 }
 
@@ -41,53 +54,117 @@ type XImpactDef struct {
 // target's own definition/contract state.
 type XImpactResult struct {
 	Target string
-	// Callers depend on the target (external edges), grouped by repo/ref.
+	// Modules are the distinct module paths the target is defined under (usually
+	// one); module-resolved callers matched against these.
+	Modules []string
+	// Callers depend on the target, grouped by repo/ref, precise tier first.
 	Callers []XImpactCaller
 	// Definitions are where the target is itself defined+indexed in the store.
 	Definitions []XImpactDef
 	// ContractChanged is true when the target's signature differs across the refs
-	// it is defined at — i.e. the API shape moved, so callers pinned to older refs
-	// may expect a stale contract (the deploy-safety signal, §8B.3).
+	// it is defined at — the API shape moved, so callers pinned to older refs may
+	// expect a stale contract (the deploy-safety signal, §8B.3).
 	ContractChanged bool
 	Note            string
 	Meta            Meta
 }
 
-// XImpact finds every symbol, across all repos/refs in the store, that has an
-// unresolved-external CALLS edge to target (matched by bare name). ref, if
-// non-empty, restricts each repo to that ref; otherwise every indexed ref is
-// scanned. Results are sorted (repo, ref, caller) for determinism.
+// XImpact finds every caller of target across the store, fusing module-resolved
+// external references (precise) with the name-based unresolved-external fallback.
+// ref, if non-empty, restricts each repo to that ref for the name-based scan and
+// the definition scan; the module-resolved scan is inherently fleet-wide.
 func XImpact(s Store, target, ref string) XImpactResult {
 	res := XImpactResult{Target: target}
-	sigs := map[string]bool{} // distinct signatures across the target's definition sites
+
+	// --- definition sites + the target's module identity/contract state ---
+	sigs := map[string]bool{}
+	moduleSet := map[string]bool{}
 	for _, repo := range s.Repos() {
-		refs := s.Refs(repo)
-		if ref != "" {
-			refs = []string{ref}
-		}
-		for _, rf := range refs {
+		module := s.ModulePath(repo)
+		for _, rf := range refsOf(s, repo, ref) {
 			snap := s.Snapshot(repo, rf)
-			for caller, callees := range snap.Callees {
-				for _, c := range callees {
-					if c.ResolutionMethod == ExternalResolution && baseName(c.Name) == target {
-						res.Callers = append(res.Callers, XImpactCaller{Repo: repo, Ref: rf, Caller: caller, Confidence: c.Confidence})
-						break
-					}
-				}
-			}
-			// Definition sites: symbols actually defined here whose bare name is the
-			// target, plus their signature hash (for the contract-change signal).
 			for name, facts := range snap.Symbols {
 				if baseName(name) == target {
-					res.Definitions = append(res.Definitions, XImpactDef{Repo: repo, Ref: rf, Symbol: name, SignatureHash: string(facts.SignatureHash)})
+					res.Definitions = append(res.Definitions, XImpactDef{
+						Repo: repo, Ref: rf, Symbol: name, Module: module,
+						SignatureHash: string(facts.SignatureHash),
+					})
 					sigs[string(facts.SignatureHash)] = true
+					if module != "" {
+						moduleSet[module] = true
+					}
 				}
 			}
 		}
 	}
 	res.ContractChanged = len(sigs) > 1
-	sort.Slice(res.Definitions, func(i, j int) bool {
-		a, b := res.Definitions[i], res.Definitions[j]
+	res.Modules = sortedSet(moduleSet)
+
+	// --- tier 1: module-resolved callers (precise), fleet-wide ---
+	seen := map[[3]string]bool{} // (repo, ref, caller) already counted
+	for _, module := range res.Modules {
+		for _, h := range s.ExternalRefsTo(module, target) {
+			key := [3]string{h.Repo, h.Ref, h.Caller}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			res.Callers = append(res.Callers, XImpactCaller{
+				Repo: h.Repo, Ref: h.Ref, Caller: h.Caller, Module: h.Module,
+				ResolutionMethod: h.ResolutionMethod, Confidence: h.Confidence,
+			})
+		}
+	}
+
+	// --- tier 2: name-based unresolved-external callers (fallback) ---
+	for _, repo := range s.Repos() {
+		for _, rf := range refsOf(s, repo, ref) {
+			snap := s.Snapshot(repo, rf)
+			for caller, callees := range snap.Callees {
+				key := [3]string{repo, rf, caller}
+				if seen[key] {
+					continue // already counted precisely
+				}
+				for _, c := range callees {
+					if c.ResolutionMethod == ExternalResolution && baseName(c.Name) == target {
+						seen[key] = true
+						res.Callers = append(res.Callers, XImpactCaller{
+							Repo: repo, Ref: rf, Caller: caller,
+							ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence,
+						})
+						break
+					}
+				}
+			}
+		}
+	}
+
+	sortDefs(res.Definitions)
+	sortCallers(res.Callers)
+	res.Note = ximpactNote(len(res.Modules) > 0)
+	res.Meta = Meta{Repo: "", Ref: ref}
+	return res
+}
+
+func refsOf(s Store, repo, ref string) []string {
+	if ref != "" {
+		return []string{ref}
+	}
+	return s.Refs(repo)
+}
+
+func sortedSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortDefs(defs []XImpactDef) {
+	sort.Slice(defs, func(i, j int) bool {
+		a, b := defs[i], defs[j]
 		if a.Repo != b.Repo {
 			return a.Repo < b.Repo
 		}
@@ -96,8 +173,17 @@ func XImpact(s Store, target, ref string) XImpactResult {
 		}
 		return a.Symbol < b.Symbol
 	})
-	sort.Slice(res.Callers, func(i, j int) bool {
-		a, b := res.Callers[i], res.Callers[j]
+}
+
+// sortCallers orders callers precise-tier-first (import-resolved before
+// name-based), then by (repo, ref, caller) for determinism.
+func sortCallers(callers []XImpactCaller) {
+	sort.Slice(callers, func(i, j int) bool {
+		a, b := callers[i], callers[j]
+		ap, bp := a.ResolutionMethod == ImportResolution, b.ResolutionMethod == ImportResolution
+		if ap != bp {
+			return ap // precise tier first
+		}
 		if a.Repo != b.Repo {
 			return a.Repo < b.Repo
 		}
@@ -106,7 +192,12 @@ func XImpact(s Store, target, ref string) XImpactResult {
 		}
 		return a.Caller < b.Caller
 	})
-	res.Note = "source-call-graph impact via unresolved-external edges (name-based; RPC/HTTP invisible; module-path resolution + fleet registry deferred, §8B)"
-	res.Meta = Meta{Repo: "", Ref: ref}
-	return res
+}
+
+func ximpactNote(moduleResolved bool) string {
+	base := "source-call-graph impact (RPC/HTTP invisible; version skew defaults to each caller's indexed ref, §8B.5)"
+	if moduleResolved {
+		return "module-resolved callers (import-path precise) fused with name-based fallback; " + base
+	}
+	return "name-based only — target module unknown (not indexed), so callers matched by bare name; " + base
 }

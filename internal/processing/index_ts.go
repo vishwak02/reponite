@@ -24,6 +24,7 @@ import (
 func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 	var files []ParsedFile
 	hasGo := false
+	manifests := map[string][]byte{} // module-manifest files (go.mod, package.json, ...) by rel path
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -39,6 +40,14 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 		rel, relErr := filepath.Rel(dir, path)
 		if relErr != nil {
 			rel = path
+		}
+		// Module manifests carry the repo's identity, not symbols; collect for
+		// module_path detection (§8B.2). They are never source, so return after.
+		if IsManifestFile(path) {
+			if src, readErr := os.ReadFile(path); readErr == nil {
+				manifests[rel] = src
+			}
+			return nil
 		}
 		// ROS interface files (.msg/.srv/.action) are pure text, not tree-sitter.
 		if IsROSFile(path) {
@@ -69,7 +78,10 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 		if rules.Name == "go" {
 			hasGo = true
 		}
-		files = append(files, ParsedFile{Path: rel, Content: string(src), Lang: rules.Name, Symbols: Extract(root, rules, normVer), Spans: spans})
+		files = append(files, ParsedFile{
+			Path: rel, Content: string(src), Lang: rules.Name,
+			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
+		})
 		return nil
 	})
 	if err != nil {
@@ -82,7 +94,13 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 	if hasGo {
 		precise = TypeResolvedEdges(dir)
 	}
-	return indexFiles(w, repo, ref, normVer, files, precise)
+	if err := indexFiles(w, repo, ref, normVer, files, precise); err != nil {
+		return err
+	}
+	if mod, ok := DetectModulePath(manifests); ok {
+		return w.SetModulePath(repo, mod)
+	}
+	return nil
 }
 
 // parseFileRules parses source with the grammar for ext, returning the

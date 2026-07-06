@@ -69,6 +69,21 @@ CREATE TABLE IF NOT EXISTS manifest_blobs (
   repo TEXT NOT NULL, ref TEXT NOT NULL, blob TEXT NOT NULL,
   PRIMARY KEY (repo, ref, blob)
 );
+-- Cross-repo dependency edges (§8B/§9A.2): a caller symbol's reference to a
+-- symbol outside its own repo, resolved through the caller's import bindings.
+-- Indexed by (target_module, target_name) so ximpact matches fleet-wide callers.
+CREATE TABLE IF NOT EXISTS external_refs (
+  repo TEXT NOT NULL, ref TEXT NOT NULL, from_name TEXT NOT NULL,
+  target_module TEXT NOT NULL, target_name TEXT NOT NULL,
+  resolution_method TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0.6,
+  PRIMARY KEY (repo, ref, from_name, target_module, target_name)
+);
+CREATE INDEX IF NOT EXISTS idx_extref_target ON external_refs(target_module, target_name);
+-- Per-repo module/package identity (§8B.2): a symbol's cross-repo identity is
+-- (module_path, name), so a target's module resolves its precise fleet callers.
+CREATE TABLE IF NOT EXISTS repo_modules (
+  repo TEXT PRIMARY KEY, module_path TEXT NOT NULL
+);
 `
 
 // Open opens (creating if needed) a SQLite-backed store at path (use
@@ -138,6 +153,7 @@ func (s *Store) ClearRef(repo, ref string) error {
 		`DELETE FROM callees WHERE repo=? AND ref=?`,
 		`DELETE FROM ref_files WHERE repo=? AND ref=?`,
 		`DELETE FROM file_symbols WHERE repo=? AND ref=?`,
+		`DELETE FROM external_refs WHERE repo=? AND ref=?`,
 	} {
 		if _, err := tx.Exec(q, repo, ref); err != nil {
 			tx.Rollback()
@@ -241,10 +257,74 @@ func (s *Store) PutManifest(repo, ref string, man content.Manifest) error {
 	return tx.Commit()
 }
 
+// PutExternalRefs replaces a ref's cross-repo dependency edges (§8B).
+func (s *Store) PutExternalRefs(repo, ref string, refs []query.ExternalRef) error {
+	if err := s.upsertRef(repo, ref); err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM external_refs WHERE repo=? AND ref=?`, repo, ref); err != nil {
+		tx.Rollback()
+		return err
+	}
+	for _, r := range refs {
+		if _, err := tx.Exec(
+			`INSERT OR REPLACE INTO external_refs(repo, ref, from_name, target_module, target_name, resolution_method, confidence)
+			 VALUES(?,?,?,?,?,?,?)`,
+			repo, ref, r.From, r.Module, r.Name, r.ResolutionMethod, r.Confidence); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetModulePath records repo's module/package identity (§8B.2).
+func (s *Store) SetModulePath(repo, modulePath string) error {
+	if modulePath == "" {
+		return nil
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO repo_modules(repo, module_path) VALUES(?,?)
+		 ON CONFLICT(repo) DO UPDATE SET module_path=excluded.module_path`,
+		repo, modulePath)
+	return err
+}
+
 // --- reads (query.Store) ---
 
 func (s *Store) Repos() []string {
 	return s.scanStrings(`SELECT DISTINCT repo FROM refs ORDER BY repo`)
+}
+
+func (s *Store) ModulePath(repo string) string {
+	var mod sql.NullString
+	if err := s.db.QueryRow(`SELECT module_path FROM repo_modules WHERE repo=?`, repo).Scan(&mod); err != nil {
+		return ""
+	}
+	return mod.String
+}
+
+func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
+	rows, err := s.db.Query(
+		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence
+		 FROM external_refs WHERE target_module=? AND target_name=?
+		 ORDER BY repo, ref, from_name`, module, name)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []query.ExternalRefHit
+	for rows.Next() {
+		var h query.ExternalRefHit
+		if rows.Scan(&h.Repo, &h.Ref, &h.Caller, &h.Module, &h.Name, &h.ResolutionMethod, &h.Confidence) == nil {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func (s *Store) Refs(repo string) []string {
