@@ -6,6 +6,7 @@ package interfaces
 import (
 	"encoding/json"
 	"sort"
+	"strconv"
 
 	"github.com/vishwak02/reponite/internal/query"
 )
@@ -117,6 +118,7 @@ func RootCauseJSON(r query.RootCauseResult) (string, error) {
 }
 
 type matchDTO struct {
+	Repo   string `json:"repo,omitempty"`
 	Path   string `json:"path"`
 	Line   int    `json:"line"`
 	Text   string `json:"text"`
@@ -135,7 +137,7 @@ type grepDTO struct {
 func GrepJSON(r query.GrepResult) (string, error) {
 	dto := grepDTO{Total: r.Total, Truncated: r.Truncated, Scanned: r.Scanned, Note: r.Note}
 	for _, m := range r.Matches {
-		dto.Matches = append(dto.Matches, matchDTO{Path: m.Path, Line: m.Line, Text: m.Text, Symbol: m.Symbol})
+		dto.Matches = append(dto.Matches, matchDTO{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: m.Text, Symbol: m.Symbol})
 	}
 	return marshal(dto)
 }
@@ -306,6 +308,7 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 }
 
 type semanticHitDTO struct {
+	Repo   string  `json:"repo,omitempty"`
 	Path   string  `json:"path"`
 	Symbol string  `json:"symbol"`
 	Line   int     `json:"line"`
@@ -318,6 +321,34 @@ func ReposJSON(repos []string) (string, error) {
 		repos = []string{}
 	}
 	return marshal(map[string][]string{"repos": repos})
+}
+
+type suggestionDTO struct {
+	Repo string `json:"repo,omitempty"`
+	Name string `json:"name"`
+}
+
+// SuggestJSON renders a self-healing "not found" envelope: instead of an empty
+// result, the tool tells the agent the query missed and offers the nearest
+// indexed names (fleet-wide), each with its repo — so it can retry precisely
+// (§ agent-optimized UX). kind labels what was being looked up ("symbol"/"search").
+func SuggestJSON(kind, query string, suggestions []query.SearchHit) (string, error) {
+	sug := make([]suggestionDTO, 0, len(suggestions))
+	for _, s := range suggestions {
+		sug = append(sug, suggestionDTO{Repo: s.Repo, Name: s.Name})
+	}
+	msg := "no " + kind + " matched " + strconv.Quote(query)
+	if len(sug) > 0 {
+		msg += " — did you mean one of these?"
+	} else {
+		msg += " and nothing similar is indexed"
+	}
+	return marshal(map[string]interface{}{
+		"found":        false,
+		"query":        query,
+		"message":      msg,
+		"did_you_mean": sug,
+	})
 }
 
 type dbTableDTO struct {
@@ -383,7 +414,7 @@ func sortedTables(counts map[string]int64) []dbTableDTO {
 func SemanticJSON(hits []query.SemanticHit) (string, error) {
 	out := make([]semanticHitDTO, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, semanticHitDTO{Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
+		out = append(out, semanticHitDTO{Repo: h.Repo, Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
 	}
 	return marshal(out)
 }
@@ -391,13 +422,14 @@ func SemanticJSON(hits []query.SemanticHit) (string, error) {
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {
+		Repo   string `json:"repo,omitempty"`
 		Name   string `json:"name"`
 		Ref    string `json:"ref"`
 		IsTest bool   `json:"is_test"`
 	}
 	out := make([]hitDTO, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, hitDTO{Name: h.Name, Ref: h.Ref, IsTest: h.IsTest})
+		out = append(out, hitDTO{Repo: h.Repo, Name: h.Name, Ref: h.Ref, IsTest: h.IsTest})
 	}
 	return marshal(out)
 }

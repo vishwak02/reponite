@@ -34,15 +34,17 @@ func (TermEmbedder) Embed(text string) map[string]float64 {
 
 // SemanticHit is one ranked symbol.
 type SemanticHit struct {
+	Repo   string
 	Path   string
 	Symbol string
 	Line   int
 	Score  float64
 }
 
-// SemanticSearch ranks a ref's symbols by similarity of (name + body) to query,
-// returning the top limit (default 10) with score > 0. emb defaults to
-// TermEmbedder. Pure over the Store's files (same source spans grep/brief use).
+// SemanticSearch ranks symbols by similarity of (name + body) to query,
+// returning the top limit (default 10) with score > 0. repo may be FleetRepo
+// ("*") to rank across every repo in the store. emb defaults to TermEmbedder.
+// Pure over the Store's files (same source spans grep/brief use).
 func SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) []SemanticHit {
 	if emb == nil {
 		emb = TermEmbedder{}
@@ -55,18 +57,23 @@ func SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) [
 		return nil
 	}
 	var hits []SemanticHit
-	for _, f := range s.Files(repo, ref) {
-		for _, sp := range f.Symbols {
-			body := sliceLines(f.Content, sp.StartLine, sp.EndLine)
-			score := cosine(qv, emb.Embed(sp.Name+" "+body))
-			if score > 0 {
-				hits = append(hits, SemanticHit{Path: f.Path, Symbol: sp.Name, Line: sp.StartLine, Score: score})
+	for _, rp := range reposFor(s, repo) {
+		for _, f := range s.Files(rp, ref) {
+			for _, sp := range f.Symbols {
+				body := sliceLines(f.Content, sp.StartLine, sp.EndLine)
+				score := cosine(qv, emb.Embed(sp.Name+" "+body))
+				if score > 0 {
+					hits = append(hits, SemanticHit{Repo: rp, Path: f.Path, Symbol: sp.Name, Line: sp.StartLine, Score: score})
+				}
 			}
 		}
 	}
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {
 			return hits[i].Score > hits[j].Score
+		}
+		if hits[i].Repo != hits[j].Repo {
+			return hits[i].Repo < hits[j].Repo
 		}
 		if hits[i].Path != hits[j].Path {
 			return hits[i].Path < hits[j].Path

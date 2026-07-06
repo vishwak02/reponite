@@ -98,6 +98,8 @@ func ServeStdio(ts *ToolServer) error {
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("List indexed refs for the repo."),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))
+	add(mcp.NewTool("reponite_repos",
+		mcp.WithDescription("Fleet orientation: every indexed repo with its module path and per-ref stats (symbols, call edges, files). Call this first to learn what's mounted and where a feature might live — search/grep/semsearch then default to fleet-wide.")))
 
 	return server.ServeStdio(s)
 }

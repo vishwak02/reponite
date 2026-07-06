@@ -146,41 +146,99 @@ func RootCauseBy(s Store, repo, target, from, to string) RootCauseResult {
 	return res
 }
 
-// GrepRepo builds the ref's trigram index and runs a search.
+// GrepRepo builds the ref's trigram index and runs a search. repo may be
+// FleetRepo ("*") to grep every repo in the store, each match tagged with its
+// repo; per-repo Totals/Scanned are summed and the merged matches re-sorted.
 func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, error) {
-	res, err := BuildTrigramIndex(s.Files(repo, ref)).Grep(pattern, opt)
-	if err != nil {
-		return GrepResult{}, err
+	repos := reposFor(s, repo)
+	if len(repos) == 1 {
+		res, err := BuildTrigramIndex(s.Files(repos[0], ref)).Grep(pattern, opt)
+		if err != nil {
+			return GrepResult{}, err
+		}
+		for i := range res.Matches {
+			res.Matches[i].Repo = repos[0]
+		}
+		if !refIndexed(s, repos[0], ref) {
+			res.Note = strings.TrimSpace(res.Note + " (ref not indexed)")
+		}
+		return res, nil
 	}
-	if !refIndexed(s, repo, ref) {
-		res.Note = strings.TrimSpace(res.Note + " (ref not indexed)")
+	var out GrepResult
+	for _, rp := range repos {
+		res, err := BuildTrigramIndex(s.Files(rp, ref)).Grep(pattern, opt)
+		if err != nil {
+			return GrepResult{}, err
+		}
+		for i := range res.Matches {
+			res.Matches[i].Repo = rp
+		}
+		out.Matches = append(out.Matches, res.Matches...)
+		out.Total += res.Total
+		out.Scanned += res.Scanned
+		out.Truncated = out.Truncated || res.Truncated
 	}
-	return res, nil
+	sort.Slice(out.Matches, func(i, j int) bool {
+		a, b := out.Matches[i], out.Matches[j]
+		if a.Repo != b.Repo {
+			return a.Repo < b.Repo
+		}
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		return a.Line < b.Line
+	})
+	out.Note = strings.TrimSpace(out.Note + " (fleet-wide)")
+	return out, nil
 }
 
-// SearchHit is a structural name-search result.
+// SearchHit is a structural name-search result. Repo is set so fleet-wide
+// searches (repo="*") stay attributable to their source repo.
 type SearchHit struct {
+	Repo   string
 	Name   string
 	Ref    string
 	IsTest bool
 }
 
-// SearchName returns symbols whose name contains substr, sorted. Go test entry
-// points (Test*/Benchmark*/Example*/Fuzz*) are excluded unless includeTests, so
+// FleetRepo is the wildcard repo selector: passing it (or "") to a search-style
+// coordinator scans every repo in the store — the "boundary-less" default an
+// agent wants when it doesn't yet know where a feature lives (§ fleet awareness).
+const FleetRepo = "*"
+
+// reposFor expands a repo selector: FleetRepo → every repo in the store, else
+// just that repo.
+func reposFor(s Store, repo string) []string {
+	if repo == FleetRepo || repo == "" {
+		return s.Repos()
+	}
+	return []string{repo}
+}
+
+// SearchName returns symbols whose name contains substr, sorted. repo may be
+// FleetRepo ("*") to search every repo in the store. Go test entry points
+// (Test*/Benchmark*/Example*/Fuzz*) are excluded unless includeTests, so
 // code-intelligence queries aren't drowned in test noise.
 func SearchName(s Store, repo, ref, substr string, includeTests bool) []SearchHit {
 	hits := []SearchHit{}
-	for name := range s.SymbolsAt(repo, ref) {
-		if !strings.Contains(name, substr) {
-			continue
+	for _, rp := range reposFor(s, repo) {
+		for name := range s.SymbolsAt(rp, ref) {
+			if !strings.Contains(name, substr) {
+				continue
+			}
+			test := IsTestName(baseName(name))
+			if test && !includeTests {
+				continue
+			}
+			hits = append(hits, SearchHit{Repo: rp, Name: name, Ref: ref, IsTest: test})
 		}
-		test := IsTestName(baseName(name))
-		if test && !includeTests {
-			continue
-		}
-		hits = append(hits, SearchHit{Name: name, Ref: ref, IsTest: test})
 	}
-	sort.Slice(hits, func(i, j int) bool { return hits[i].Name < hits[j].Name })
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Repo != hits[j].Repo {
+			return hits[i].Repo < hits[j].Repo
+		}
+		return hits[i].Name < hits[j].Name
+	})
 	return hits
 }
 
