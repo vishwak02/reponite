@@ -91,6 +91,11 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return BriefJSON(query.Brief(t.Store, repo, ref, args["symbol"], budget, t.Intent))
 	case "reponite_ximpact":
 		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
+	case "reponite_blast_radius":
+		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
+			return notFound("symbol", args["symbol"])
+		}
+		return BlastRadiusJSON(query.BlastRadius(t.Store, repo, ref, args["symbol"]))
 	case "reponite_semsearch":
 		limit, _ := strconv.Atoi(args["limit"])
 		return SemanticJSON(query.SemanticSearch(t.Store, discoverRepo, ref, args["query"], limit, nil))

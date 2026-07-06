@@ -307,6 +307,56 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 	return marshal(dto)
 }
 
+type blastCompatDTO struct {
+	Ref        string  `json:"ref"`
+	Verdict    string  `json:"verdict"`
+	Confidence float64 `json:"confidence"`
+}
+
+type blastDTO struct {
+	Symbol          string             `json:"symbol"`
+	Repo            string             `json:"repo"`
+	Summary         string             `json:"summary"`
+	Modules         []string           `json:"modules,omitempty"`
+	ContractChanged bool               `json:"contract_changed"`
+	Definitions     []ximpactDefDTO    `json:"definitions,omitempty"`
+	InRepoCallers   []string           `json:"in_repo_callers"`
+	FleetCallers    []ximpactCallerDTO `json:"fleet_callers"`
+	CoveringTests   []string           `json:"covering_tests"`
+	Compat          []blastCompatDTO   `json:"compat_across_refs,omitempty"`
+	Note            string             `json:"note,omitempty"`
+	Meta            metaDTO            `json:"_meta"`
+}
+
+// BlastRadiusJSON renders the pre-edit impact dossier (§2): everything that
+// could break if the symbol changes, in one payload.
+func BlastRadiusJSON(r query.BlastRadiusResult) (string, error) {
+	dto := blastDTO{
+		Symbol: r.Symbol, Repo: r.Repo, Summary: r.Summary, Modules: r.Modules,
+		ContractChanged: r.ContractChanged, Note: r.Note,
+		InRepoCallers: nonNil(r.InRepoCallers), CoveringTests: nonNil(r.CoveringTests),
+		FleetCallers: make([]ximpactCallerDTO, 0, len(r.FleetCallers)),
+		Meta:         metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, c := range r.FleetCallers {
+		dto.FleetCallers = append(dto.FleetCallers, ximpactCallerDTO{Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Module: c.Module, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
+	}
+	for _, d := range r.Definitions {
+		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash})
+	}
+	for _, v := range r.Compat {
+		dto.Compat = append(dto.Compat, blastCompatDTO{Ref: v.Ref, Verdict: string(v.Verdict), Confidence: v.Confidence})
+	}
+	return marshal(dto)
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
 type semanticHitDTO struct {
 	Repo   string  `json:"repo,omitempty"`
 	Path   string  `json:"path"`

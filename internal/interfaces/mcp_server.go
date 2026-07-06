@@ -95,6 +95,11 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithDescription("Cross-repo impact: who across every indexed repo calls this (external) symbol — the question before changing an exported API. Source-call-graph, name-based (RPC invisible)."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("restrict each repo to this ref (default: all indexed refs)"))))
+	add(mcp.NewTool("reponite_blast_radius",
+		mcp.WithDescription("Pre-edit macro: everything that could break if you change this symbol, in one call — in-repo callers, cross-repo (fleet) callers, covering tests, and whether the API contract already moved across refs. Call this BEFORE editing a load-bearing symbol."),
+		mcp.WithString("symbol", mcp.Required()),
+		mcp.WithString("repo", mcp.Description("repo that defines the symbol (defaults to current)")),
+		mcp.WithString("ref", mcp.Description("default HEAD"))))
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("List indexed refs for the repo."),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))

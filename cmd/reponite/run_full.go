@@ -35,6 +35,10 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdCICheck(args)
 	case "ximpact":
 		cmdXImpact(args)
+	case "blast-radius":
+		cmdBlastRadius(args)
+	case "repos":
+		cmdRepos(args)
 	case "semsearch":
 		cmdSemSearch(args)
 	case "brief":
@@ -274,6 +278,26 @@ func cmdXImpact(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.XImpactJSON(query.XImpact(st, pos[0], ref)))
+}
+
+// cmdBlastRadius fuses in-repo callers, fleet callers, covering tests, and
+// cross-ref contract state into one pre-edit impact dossier.
+func cmdBlastRadius(args []string) {
+	pos := parseCmd("blast-radius", "blast-radius <symbol> [ref]", args, nil)
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite blast-radius <symbol> [ref]"))
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(st, repoName("."), arg(pos, 1, "HEAD"), pos[0])))
+}
+
+// cmdRepos lists every indexed repo with its module + per-ref stats.
+func cmdRepos(args []string) {
+	parseCmd("repos", "repos", args, nil)
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.OverviewJSON(query.Overview(st), nil))
 }
 
 func cmdBrief(args []string) {
