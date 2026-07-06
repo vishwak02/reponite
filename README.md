@@ -2,25 +2,34 @@
 
 # Reponite
 
-**Ref-aware code intelligence for AI agents and teams.**
-One small binary that knows whether a symbol still *exists*, kept its *shape*, and kept its *behavior* — across every ref and repo you index.
-
 [![CI](https://github.com/vishwak02/reponite/actions/workflows/go.yml/badge.svg)](https://github.com/vishwak02/reponite/actions/workflows/go.yml)
 [![Release](https://img.shields.io/github/v/release/vishwak02/reponite?color=00ADD8)](https://github.com/vishwak02/reponite/releases)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](go.mod)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
+**Ref-aware code intelligence for AI agents and teams** — one small binary that knows whether a symbol still *exists*, kept its *shape*, and kept its *behavior* across every ref and repo you index.
+
 </div>
 
----
+## Table of Contents
+
+- [Background](#background)
+- [Features](#features)
+- [Install](#install)
+- [Usage](#usage)
+  - [CLI](#cli)
+  - [AI agents (MCP)](#ai-agents-mcp)
+- [Architecture](#architecture)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Background
 
 Structural and semantic code search is a commodity — plenty of tools do it well. Reponite matches that layer and then owns the dimension none of them address: it indexes **many refs** (tags, branches, deployed commits) of **many repositories** as content-addressed, deduplicated snapshots, and answers questions *across* them — most importantly, **did this change break anyone?**
 
-It runs as a **CLI**, an **MCP server** an AI agent mounts, a **web dashboard**, and a **VS Code extension** — all over the same pure core.
-
-## The moat — the Compatibility Oracle
-
-Given a symbol at one ref, Reponite returns, for every other ref and repo, exactly one verdict:
+That question is the **Compatibility Oracle**. Given a symbol at one ref, it returns, for every other ref and repo, exactly one verdict:
 
 | Verdict | Meaning |
 |---|---|
@@ -29,7 +38,7 @@ Given a symbol at one ref, Reponite returns, for every other ref and repo, exact
 | `behavior_changed` | identical signature, but the **resolved call graph underneath differs** — same interface, different behavior (a dependency was patched or regressed) |
 | `compatible` | same shape *and* behavior |
 
-That third tier is the whole point, and nothing else computes it. It falls out of a Merkle **`behavior_hash`** over the call graph: a callee's change propagates to every transitive caller. Every verdict carries a **confidence and its provenance** — the Oracle never claims more certainty than it actually computed (a stdlib call it can't see caps the floor; a type-checker-proven edge is `1.0`).
+That third tier is the whole point, and nothing else computes it. It falls out of a Merkle **`behavior_hash`** over the call graph: a callee's change propagates to every transitive caller. Every verdict carries a **confidence and its provenance** — the Oracle never claims more certainty than it computed (an unseen stdlib call caps the floor; a type-checker-proven edge is `1.0`).
 
 ```jsonc
 // reponite compat Charge
@@ -49,12 +58,12 @@ That third tier is the whole point, and nothing else computes it. It falls out o
 
 - **Multi-language** — Go, Python, JavaScript, TypeScript, Java, plus **ROS** interface files (`.msg`/`.srv`/`.action`) indexed as typed contracts.
 - **Compatibility Oracle** — `absent` / `shape_changed` / `behavior_changed` / `compatible` across refs and repos, with honest confidence.
-- **Root-cause drill-down** — walk a behavior change down to its mutation site; seed it straight from a **pasted stack trace** (`rootcause-trace`).
+- **Root-cause drill-down** — walk a behavior change to its mutation site; seed it straight from a **pasted stack trace** (`rootcause-trace`).
 - **Editing brief** — one token-budgeted bundle (body + callees + callers + covering tests + compat snapshot) that replaces 5–6 file reads for an agent.
-- **Cross-repo impact** (`ximpact`) — who across the fleet calls this symbol, and whether its **contract changed**.
+- **Cross-repo impact** (`ximpact`) — who across the fleet calls a symbol, and whether its **contract changed**.
 - **Retrieval ladder** — `grep` (trigram + regex, each hit fused with its enclosing symbol) → structural → **semantic** (`semsearch`, no model needed) → intent → compat.
 - **CI gate** (`ci-check`) — non-zero exit on any exported API break, ready to drop into a PR workflow.
-- **Surfaces** — CLI · MCP server (11 tools) · web dashboard (`serve`) · VS Code extension · shared **team/fleet** view across many repos.
+- **Four surfaces** — CLI · MCP server (11 tools) · web dashboard (`serve`) · VS Code extension, plus a shared **team/fleet** view across many repos.
 
 ## Install
 
@@ -66,7 +75,9 @@ curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh 
 make cli        # → bin/reponite
 ```
 
-## Quickstart
+## Usage
+
+### CLI
 
 ```sh
 reponite index .                     # index HEAD (Go/Python/JS/TS/Java + ROS .msg/.srv/.action)
@@ -82,13 +93,13 @@ reponite ximpact getUserV2           # who across indexed repos depends on this 
 reponite serve .                     # web dashboard → http://127.0.0.1:8899  (serve a b c = team view)
 ```
 
-## Use it from an AI agent (MCP)
+### AI agents (MCP)
 
 Reponite is designed to be the single interface an agent reaches for — cheapest rung first, so it can often skip reading files entirely.
 
 ```sh
-reponite setup .                     # register as an MCP server (--client claude-desktop|claude-code|cursor|windsurf)
-reponite mcp .                       # what the agent runs; self-indexes HEAD on first mount
+reponite setup .     # register as an MCP server (--client claude-desktop|claude-code|cursor|windsurf)
+reponite mcp .       # what the agent runs; self-indexes HEAD on first mount
 ```
 
 It exposes 11 tools: `search`, `grep`, `compat`, `context`, `diff`, `rootcause`, `rootcause_trace`, `brief`, `ximpact`, `semsearch`, `refs`.
@@ -130,12 +141,25 @@ CI verifies every layer independently: `core` (the pure packages), `sqlite`, `tr
 - [Build plan & roadmap](docs/BUILD_PLAN.md)
 - [Architecture Decision Records](docs/adr/)
 
-## Status & roadmap
+## Roadmap
 
 **Shipped** (CI-verified, `v0.2.0`): five languages + ROS contracts · the Oracle · brief · root-cause (+ stack-trace seeding) · cross-repo impact with contract fusion · the retrieval ladder incl. semantic search · `ci-check` · web dashboard · VS Code extension · MCP server · shared team/fleet read view.
 
-**On the roadmap:** a persistent cross-repo registry (`module_path` capture + `global.db` + per-caller signature-skew) for full fleet queries, and SCIP integration to raise cross-file edge confidence to `1.0` for non-Go languages.
+**Next:** a persistent cross-repo registry (`module_path` capture + `global.db` + per-caller signature-skew) for full fleet queries, and SCIP integration to raise cross-file edge confidence to `1.0` for non-Go languages.
+
+## Contributing
+
+Contributions are welcome. Open an [issue](https://github.com/vishwak02/reponite/issues) to ask a question or propose a change, and send a pull request for fixes and features.
+
+```sh
+go build ./...     # pure core (no external deps)
+go test ./...      # pure-core tests
+make cli           # full binary with all adapters
+make sqlite | make treesitter | make mcp | make e2e   # per-adapter checks (mirror CI)
+```
+
+Please keep all CI jobs green and respect the project invariants — correctness-critical logic stays pure/stdlib behind interfaces; external dependencies live in thin, build-tagged adapters ([ADR-018](docs/adr/ADR-018-pure-core-thin-adapters.md)). See [CLAUDE.md](CLAUDE.md) for a short orientation to the codebase.
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE) © reponite contributors.
