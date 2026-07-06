@@ -44,6 +44,13 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(get("/"), "<title>reponite") {
 		t.Fatal("dashboard HTML not served at /")
 	}
+	// The embedded CSS/JS assets are served (proves //go:embed wired correctly).
+	if !strings.Contains(get("/style.css"), "--accent") {
+		t.Fatal("/style.css not served from embedded asset")
+	}
+	if !strings.Contains(get("/app.js"), "async function brief") {
+		t.Fatal("/app.js not served from embedded asset")
+	}
 	if !strings.Contains(get("/api/refs"), "HEAD") {
 		t.Fatal("/api/refs missing HEAD")
 	}

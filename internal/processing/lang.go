@@ -19,12 +19,17 @@ type LangRules struct {
 	BodyTypes  []string // callable body node types (dropped from the signature)
 	CallTypes  []string // call-expression node types
 	SortChild  []string // node types whose children are order-independent (import lists)
-	NameByDesc bool     // find the name via first matching descendant (e.g. C/C++ declarators)
-	Builtins   map[string]bool
+	NameByDesc bool     // find the name via first matching descendant (e.g. C/C++ type names)
+	DeclNameIn []string // if set, a callable's name is the last NameTypes leaf inside this child
+	// node (the declarator), excluding the parameter list — resolves C/C++ names
+	// nested in a function_declarator and C++ qualified names (ns::T::m -> m).
+	ScopeDecl []string // node types that scope nested methods by their own name without
+	// emitting a symbol themselves (e.g. a Rust `impl T { ... }` block qualifies its fns by T).
+	Builtins map[string]bool
 }
 
 // languages is the registry consulted by RulesForExt.
-var languages = []LangRules{GoRules, PythonRules, JavaScriptRules, TypeScriptRules, JavaRules}
+var languages = []LangRules{GoRules, PythonRules, JavaScriptRules, TypeScriptRules, JavaRules, CRules, CppRules, RustRules}
 
 // RulesForExt returns the language rules for a file extension (".go", ".py", …).
 func RulesForExt(ext string) (LangRules, bool) {
@@ -112,4 +117,59 @@ var JavaRules = LangRules{
 	BodyTypes:  []string{"block", "constructor_body"},
 	CallTypes:  []string{"method_invocation"},
 	Builtins:   map[string]bool{},
+}
+
+var cBuiltins = map[string]bool{
+	"printf": true, "fprintf": true, "sprintf": true, "snprintf": true, "scanf": true, "sscanf": true,
+	"malloc": true, "calloc": true, "realloc": true, "free": true,
+	"memcpy": true, "memmove": true, "memset": true, "memcmp": true,
+	"strlen": true, "strcmp": true, "strncmp": true, "strcpy": true, "strncpy": true, "strcat": true, "strncat": true,
+	"fopen": true, "fclose": true, "fread": true, "fwrite": true, "fgets": true, "fputs": true,
+	"exit": true, "abort": true, "assert": true, "sizeof": true,
+}
+
+// CRules extracts C functions and struct/union/enum/typedef types. A function's
+// name is nested in a function_declarator (not a direct child), so DeclNameIn
+// points name resolution there — this also skips the return type, so
+// `struct Point make()` is named "make", not "Point".
+var CRules = LangRules{
+	Name: "c", Exts: []string{".c", ".h"},
+	FuncDecl:   []string{"function_definition"},
+	TypeDecl:   []string{"struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
+	NameTypes:  []string{"identifier", "type_identifier"},
+	BodyTypes:  []string{"compound_statement"},
+	CallTypes:  []string{"call_expression"},
+	NameByDesc: true, // type names: descend (typedef alias is not a direct child)
+	DeclNameIn: []string{"function_declarator"},
+	Builtins:   cBuiltins,
+}
+
+// CppRules extends C with classes and namespaced/qualified definitions. The same
+// DeclNameIn declarator rule yields the last identifier of a qualified name
+// (ns::Widget::draw -> "draw"). In-class method *definitions* (function_definition)
+// are captured; forward declarations are not (they carry no body/behavior).
+var CppRules = LangRules{
+	Name: "cpp", Exts: []string{".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"},
+	FuncDecl:   []string{"function_definition"},
+	TypeDecl:   []string{"class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
+	NameTypes:  []string{"identifier", "type_identifier"},
+	BodyTypes:  []string{"compound_statement"},
+	CallTypes:  []string{"call_expression"},
+	NameByDesc: true,
+	DeclNameIn: []string{"function_declarator"},
+	Builtins:   cBuiltins,
+}
+
+// RustRules extracts functions, structs/enums/unions/traits/type-aliases, and
+// methods inside `impl T { ... }` blocks (ScopeDecl qualifies them by T without
+// emitting T twice). Trait methods are function_signature_item bodies-less sigs.
+var RustRules = LangRules{
+	Name: "rust", Exts: []string{".rs"},
+	FuncDecl:  []string{"function_item", "function_signature_item"},
+	TypeDecl:  []string{"struct_item", "enum_item", "union_item", "trait_item", "type_item"},
+	NameTypes: []string{"identifier", "type_identifier"},
+	BodyTypes: []string{"block"},
+	CallTypes: []string{"call_expression"},
+	ScopeDecl: []string{"impl_item"},
+	Builtins:  map[string]bool{},
 }

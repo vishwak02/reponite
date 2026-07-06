@@ -3,10 +3,10 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/interfaces"
@@ -48,16 +48,51 @@ func indexBackedCommand(cmd string, args []string) {
 	}
 }
 
-func cmdIndex(args []string) {
-	gitRev, args := popValue(args, "--git")
-	dir := "."
-	if len(args) > 0 {
-		dir = args[0]
+// parseCmd defines a per-command flag set and parses args so flags may appear
+// before OR after the positional arguments (reponite commands interleave them,
+// e.g. `diff v1 v2 --changed-only`). It returns the positionals in order. On an
+// unknown flag or `-h`/`--help` it prints the command's usage and exits — every
+// command gets validation and a --help for free (replacing ad-hoc popValue).
+func parseCmd(name, usage string, args []string, define func(fs *flag.FlagSet)) []string {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "usage: reponite %s\n", usage)
+		fs.PrintDefaults()
 	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
-	} else if gitRev != "" {
+	if define != nil {
+		define(fs)
+	}
+	var positional []string
+	rest := args
+	for len(rest) > 0 {
+		// ExitOnError: a bad flag or -h prints usage and exits here.
+		_ = fs.Parse(rest)
+		rest = fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		positional = append(positional, rest[0]) // consume one positional, keep parsing
+		rest = rest[1:]
+	}
+	return positional
+}
+
+// arg returns the i-th positional or a default when absent.
+func arg(pos []string, i int, def string) string {
+	if i < len(pos) {
+		return pos[i]
+	}
+	return def
+}
+
+func cmdIndex(args []string) {
+	var gitRev string
+	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&gitRev, "git", "", "index a git revision's tree (tag/branch/SHA/HEAD~3) instead of the working tree")
+	})
+	dir := arg(pos, 0, ".")
+	ref := arg(pos, 1, "HEAD")
+	if len(pos) < 2 && gitRev != "" {
 		ref = gitRev // default the ref label to the revision
 	}
 	repo := repoName(dir)
@@ -81,6 +116,13 @@ func cmdIndex(args []string) {
 	fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))
 }
 
+func shortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
+}
+
 // moduleNote reports the detected module path for cross-repo impact, or a hint
 // when none was found (so a user knows ximpact will fall back to name matching).
 func moduleNote(st interface{ ModulePath(string) string }, repo string) string {
@@ -90,36 +132,12 @@ func moduleNote(st interface{ ModulePath(string) string }, repo string) string {
 	return " [no module manifest — ximpact name-based]"
 }
 
-func shortHash(h string) string {
-	if len(h) > 12 {
-		return h[:12]
-	}
-	return h
-}
-
-// popValue removes "flag value" from args, returning the value ("" if absent).
-func popValue(args []string, flag string) (string, []string) {
-	rest := make([]string, 0, len(args))
-	val := ""
-	for i := 0; i < len(args); i++ {
-		if args[i] == flag && i+1 < len(args) {
-			val = args[i+1]
-			i++
-			continue
-		}
-		rest = append(rest, args[i])
-	}
-	return val, rest
-}
-
 func cmdCompat(args []string) {
-	if len(args) < 1 {
+	pos := parseCmd("compat", "compat <symbol> [ref]", args, nil)
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite compat <symbol> [ref]"))
 	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
-	}
+	ref := arg(pos, 1, "HEAD")
 	repo := repoName(".")
 	st := openStore(".")
 	defer st.Close()
@@ -129,7 +147,7 @@ func cmdCompat(args []string) {
 			targets = append(targets, query.RepoRef{Repo: repo, Ref: r})
 		}
 	}
-	rep, err := query.CompatSymbol(st, query.RepoRef{Repo: repo, Ref: ref}, args[0], targets)
+	rep, err := query.CompatSymbol(st, query.RepoRef{Repo: repo, Ref: ref}, pos[0], targets)
 	if err != nil {
 		fail(err)
 	}
@@ -137,33 +155,31 @@ func cmdCompat(args []string) {
 }
 
 func cmdDiff(args []string) {
-	changedOnly, args := popFlag(args, "--changed-only")
-	pkg, args := popValue(args, "--package")
-	confStr, args := popValue(args, "--confidence-min")
-	if len(args) < 2 {
+	var changedOnly bool
+	var pkg string
+	var conf float64
+	pos := parseCmd("diff", "diff <from-ref> <to-ref> [--changed-only] [--package P] [--confidence-min F]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&changedOnly, "changed-only", false, "drop unchanged symbols")
+		fs.StringVar(&pkg, "package", "", "keep only symbols whose package has this prefix")
+		fs.Float64Var(&conf, "confidence-min", 0, "drop changes below this confidence")
+	})
+	if len(pos) < 2 {
 		fail(fmt.Errorf("usage: reponite diff <from-ref> <to-ref> [--changed-only] [--package P] [--confidence-min F]"))
-	}
-	conf := 0.0
-	if confStr != "" {
-		conf, _ = strconv.ParseFloat(confStr, 64)
 	}
 	opt := query.DiffOptions{ChangedOnly: changedOnly, Package: pkg, MinConfidence: conf}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.DiffJSON(query.DiffRefsBy(st, repoName("."), args[0], args[1], opt)))
+	printJSON(interfaces.DiffJSON(query.DiffRefsBy(st, repoName("."), pos[0], pos[1], opt)))
 }
 
 func cmdGrep(args []string) {
-	if len(args) < 1 {
+	pos := parseCmd("grep", "grep <pattern> [ref]", args, nil)
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite grep <pattern> [ref]"))
-	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
 	}
 	st := openStore(".")
 	defer st.Close()
-	res, err := query.GrepRepo(st, repoName("."), ref, args[0], query.GrepOptions{Fixed: true})
+	res, err := query.GrepRepo(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: true})
 	if err != nil {
 		fail(err)
 	}
@@ -171,34 +187,38 @@ func cmdGrep(args []string) {
 }
 
 func cmdSearch(args []string) {
-	tests, args := popFlag(args, "--tests")
-	if len(args) < 1 {
+	var tests bool
+	pos := parseCmd("search", "search <substr> [ref] [--tests]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&tests, "tests", false, "include test symbols (Test*/Benchmark*/…)")
+	})
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite search <substr> [ref] [--tests]"))
-	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.SearchJSON(query.SearchName(st, repoName("."), ref, args[0], tests)))
+	printJSON(interfaces.SearchJSON(query.SearchName(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], tests)))
 }
 
 func cmdRootCause(args []string) {
-	if len(args) < 3 {
+	pos := parseCmd("rootcause", "rootcause <symbol> <from-ref> <to-ref>", args, nil)
+	if len(pos) < 3 {
 		fail(fmt.Errorf("usage: reponite rootcause <symbol> <from-ref> <to-ref>"))
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.RootCauseJSON(query.RootCauseBy(st, repoName("."), args[0], args[1], args[2])))
+	printJSON(interfaces.RootCauseJSON(query.RootCauseBy(st, repoName("."), pos[0], pos[1], pos[2])))
 }
 
 // cmdCICheck exits non-zero if any exported symbol broke (removed or
 // shape_changed) between base and head — the obvious PR gate. Behavior changes
-// are not treated as breaks (they don't break the API contract).
+// are not treated as breaks (they don't break the API contract). "Exported" is
+// decided per language (query.IsExportedName), not by the Go uppercase rule.
 func cmdCICheck(args []string) {
-	baseRef, args := popValue(args, "--base")
-	headRef, args := popValue(args, "--head")
+	var baseRef, headRef string
+	parseCmd("ci-check", "ci-check --base <ref> --head <ref>", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&baseRef, "base", "", "baseline ref")
+		fs.StringVar(&headRef, "head", "", "candidate ref")
+	})
 	if baseRef == "" || headRef == "" {
 		fail(fmt.Errorf("usage: reponite ci-check --base <ref> --head <ref>"))
 	}
@@ -214,7 +234,7 @@ func cmdCICheck(args []string) {
 		if i := strings.LastIndex(base, "."); i >= 0 {
 			base = base[i+1:]
 		}
-		if base != "" && base[0] >= 'A' && base[0] <= 'Z' { // exported (Go convention)
+		if query.IsExportedName(c.Lang, base) { // per-language public-API rule
 			breaks = append(breaks, c)
 		}
 	}
@@ -230,66 +250,62 @@ func cmdCICheck(args []string) {
 
 // cmdSemSearch ranks symbols by semantic similarity to a natural-language query.
 func cmdSemSearch(args []string) {
-	limStr, args := popValue(args, "--limit")
-	if len(args) < 1 {
+	var limit int
+	pos := parseCmd("semsearch", "semsearch <query> [ref] [--limit N]", args, func(fs *flag.FlagSet) {
+		fs.IntVar(&limit, "limit", 0, "max results (0 = default)")
+	})
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite semsearch <query> [ref] [--limit N]"))
-	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
-	}
-	limit := 0
-	if limStr != "" {
-		limit, _ = strconv.Atoi(limStr)
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.SemanticJSON(query.SemanticSearch(st, repoName("."), ref, args[0], limit, nil)))
+	printJSON(interfaces.SemanticJSON(query.SemanticSearch(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], limit, nil)))
 }
 
 // cmdXImpact reports who across every indexed repo calls an external symbol.
 func cmdXImpact(args []string) {
-	ref, args := popValue(args, "--ref")
-	if len(args) < 1 {
+	var ref string
+	pos := parseCmd("ximpact", "ximpact <symbol> [--ref R]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&ref, "ref", "", "restrict each repo to this ref")
+	})
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite ximpact <symbol> [--ref R]"))
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.XImpactJSON(query.XImpact(st, args[0], ref)))
+	printJSON(interfaces.XImpactJSON(query.XImpact(st, pos[0], ref)))
 }
 
 func cmdBrief(args []string) {
-	budgetStr, args := popValue(args, "--budget")
-	if len(args) < 1 {
+	var budget int
+	pos := parseCmd("brief", "brief <symbol> [ref] [--budget N]", args, func(fs *flag.FlagSet) {
+		fs.IntVar(&budget, "budget", 0, "token budget (0 = default ~3000)")
+	})
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite brief <symbol> [ref] [--budget N]"))
-	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
-	}
-	budget := 0
-	if budgetStr != "" {
-		budget, _ = strconv.Atoi(budgetStr)
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.BriefJSON(query.Brief(st, repoName("."), ref, args[0], budget, processing.NewGitIntent("."))))
+	printJSON(interfaces.BriefJSON(query.Brief(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], budget, processing.NewGitIntent("."))))
 }
 
 // cmdRootCauseTrace reads a stack trace (from a file arg or stdin) and drills
 // down along the failing path between two refs.
 func cmdRootCauseTrace(args []string) {
-	fromRef, args := popValue(args, "--from")
-	toRef, args := popValue(args, "--to")
+	var fromRef, toRef string
+	pos := parseCmd("rootcause-trace", "rootcause-trace <file|-> --from <ref> --to <ref>", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&fromRef, "from", "", "ref the trace worked at")
+		fs.StringVar(&toRef, "to", "", "ref the trace fails at")
+	})
 	if fromRef == "" || toRef == "" {
 		fail(fmt.Errorf("usage: reponite rootcause-trace <file|-> --from <ref> --to <ref>"))
 	}
 	var data []byte
 	var err error
-	if len(args) == 0 || args[0] == "-" {
+	if len(pos) == 0 || pos[0] == "-" {
 		data, err = io.ReadAll(os.Stdin)
 	} else {
-		data, err = os.ReadFile(args[0])
+		data, err = os.ReadFile(pos[0])
 	}
 	if err != nil {
 		fail(err)
@@ -300,34 +316,20 @@ func cmdRootCauseTrace(args []string) {
 }
 
 func cmdContext(args []string) {
-	tests, args := popFlag(args, "--tests")
-	if len(args) < 1 {
+	var tests bool
+	pos := parseCmd("context", "context <symbol> [ref] [--tests]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&tests, "tests", false, "include test symbols among callers")
+	})
+	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite context <symbol> [ref] [--tests]"))
-	}
-	ref := "HEAD"
-	if len(args) > 1 {
-		ref = args[1]
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.ContextJSON(query.Context(st, repoName("."), ref, args[0], tests)))
-}
-
-// popFlag removes flag from args, reporting whether it was present.
-func popFlag(args []string, flag string) (bool, []string) {
-	rest := make([]string, 0, len(args))
-	found := false
-	for _, a := range args {
-		if a == flag {
-			found = true
-			continue
-		}
-		rest = append(rest, a)
-	}
-	return found, rest
+	printJSON(interfaces.ContextJSON(query.Context(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], tests)))
 }
 
 func cmdRefs(args []string) {
+	parseCmd("refs", "refs", args, nil)
 	st := openStore(".")
 	defer st.Close()
 	repo := repoName(".")

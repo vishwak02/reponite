@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reponite</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>reponite</h1><span class="repo" id="repo"></span>
+  <label class="k">ref <select id="ref"></select></label>
+  <nav>
+    <button data-v="explore" class="on">Explore</button>
+    <button data-v="diff">Diff</button>
+    <button data-v="impact">Impact</button>
+  </nav>
+</header>
+<main>
+  <div class="side">
+    <div id="explore-side">
+      <input id="q" placeholder="search symbols…" style="width:100%">
+      <div id="hits" style="margin-top:10px"></div>
+    </div>
+    <div id="diff-side" style="display:none">
+      <label class="k">from <select id="from"></select></label><br><br>
+      <label class="k">to <select id="to"></select></label><br><br>
+      <label class="k"><input type="checkbox" id="changed" checked> changed only</label>
+      <div id="changes" style="margin-top:12px"></div>
+    </div>
+    <div id="impact-side" style="display:none">
+      <input id="xq" placeholder="external symbol name…" style="width:100%">
+      <p class="k" style="font-size:12px">Who across indexed repos calls this symbol.</p>
+      <div id="xcallers"></div>
+    </div>
+  </div>
+  <div class="detail">
+    <div id="explore" class="view on"><div class="empty">Search and pick a symbol to see its brief.</div></div>
+    <div id="diff" class="view"><div class="empty">Pick two refs to diff.</div></div>
+    <div id="impact" class="view"><div class="empty">Enter a symbol to see cross-repo callers.</div></div>
+  </div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

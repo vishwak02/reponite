@@ -61,6 +61,18 @@ class C { void f() { Bar.x(); helper(); local(); } }
 			wantRefs:   []ExternalRefKey{{"com.foo", "x"}, {"com.foo.Util", "helper"}},
 			absentRefs: []ExternalRefKey{{"", "local"}},
 		},
+		{
+			name: "rust", ext: ".rs",
+			src: `use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
+use crate::internal::thing;
+fn build() { HashMap::new(); Serialize(); thing(); }
+`,
+			// HashMap.new -> std::collections.HashMap (imported symbol as receiver);
+			// Serialize() -> serde.Serialize (from-import). crate:: is intra-repo.
+			wantRefs:   []ExternalRefKey{{"std::collections", "HashMap"}, {"serde", "Serialize"}},
+			absentRefs: []ExternalRefKey{{"crate::internal", "thing"}},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

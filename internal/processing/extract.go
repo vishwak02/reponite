@@ -78,6 +78,10 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 					nested = nameOf(child, r)
 				}
 				walk(child, nested)
+			case containsStr(r.ScopeDecl, t):
+				// A scope block (e.g. Rust `impl T`) qualifies its nested methods by
+				// its own name, but is not itself a symbol.
+				walk(child, nameOf(child, r))
 			default:
 				walk(child, enclosing)
 			}
@@ -252,7 +256,43 @@ func firstDescAny(n content.AST, types []string) content.AST {
 	return nil
 }
 
-func nameOf(n content.AST, r LangRules) string { return nameOfNode(n, r.NameTypes, r.NameByDesc) }
+func nameOf(n content.AST, r LangRules) string {
+	// A callable whose name is nested in a declarator (C/C++): the name is the
+	// last NameTypes leaf inside the declarator, excluding the parameter list —
+	// so a return type is skipped and a qualified name reduces to its last segment.
+	if len(r.DeclNameIn) > 0 {
+		if d := firstChildAny(n, r.DeclNameIn); d != nil {
+			if name := declaratorName(d, r); name != "" {
+				return name
+			}
+		}
+	}
+	return nameOfNode(n, r.NameTypes, r.NameByDesc)
+}
+
+// declaratorName returns the last NameTypes leaf inside a declarator, skipping
+// any parameter list (whose identifiers are parameter names, not the callable's).
+func declaratorName(d content.AST, r LangRules) string {
+	var ids []string
+	var walk func(content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			if strings.Contains(c.Type(), "parameter") {
+				continue // parameter_list / parameters: names within are params
+			}
+			if containsStr(r.NameTypes, c.Type()) {
+				ids = append(ids, c.Text())
+				continue
+			}
+			walk(c)
+		}
+	}
+	walk(d)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[len(ids)-1]
+}
 
 func nameOfNode(n content.AST, types []string, byDesc bool) string {
 	var node content.AST

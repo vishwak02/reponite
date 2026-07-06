@@ -13,10 +13,13 @@ import (
 	"context"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	cgrammar "github.com/smacker/go-tree-sitter/c"
+	cpp "github.com/smacker/go-tree-sitter/cpp"
 	golang "github.com/smacker/go-tree-sitter/golang"
 	java "github.com/smacker/go-tree-sitter/java"
 	javascript "github.com/smacker/go-tree-sitter/javascript"
 	python "github.com/smacker/go-tree-sitter/python"
+	rust "github.com/smacker/go-tree-sitter/rust"
 	tsx "github.com/smacker/go-tree-sitter/typescript/tsx"
 	typescript "github.com/smacker/go-tree-sitter/typescript/typescript"
 
@@ -60,6 +63,12 @@ func grammarForExt(ext string) *sitter.Language {
 		return tsx.GetLanguage()
 	case ".java":
 		return java.GetLanguage()
+	case ".c", ".h":
+		return cgrammar.GetLanguage()
+	case ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx":
+		return cpp.GetLanguage()
+	case ".rs":
+		return rust.GetLanguage()
 	}
 	return nil
 }

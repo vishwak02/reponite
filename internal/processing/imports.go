@@ -60,6 +60,8 @@ func Imports(root content.AST, r LangRules) []ImportBinding {
 		return jsImports(root)
 	case "java":
 		return javaImports(root)
+	case "rust":
+		return rustImports(root)
 	}
 	return nil
 }
@@ -293,6 +295,88 @@ func lastIdentLeaf(n content.AST) string {
 
 func isRelativeModule(p string) bool {
 	return strings.HasPrefix(p, ".") || strings.HasPrefix(p, "/")
+}
+
+// --- Rust: use_declaration ---
+
+func rustImports(root content.AST) []ImportBinding {
+	var out []ImportBinding
+	for _, decl := range descendantsAny(root, []string{"use_declaration"}) {
+		out = append(out, rustUseDecl(decl)...)
+	}
+	return out
+}
+
+func rustUseDecl(decl content.AST) []ImportBinding {
+	for _, c := range decl.Children() {
+		switch c.Type() {
+		case "scoped_identifier": // use a::b::Name;
+			if module, name, ok := splitRustPath(c.Text()); ok {
+				return []ImportBinding{{Local: name, Module: module, Symbol: name}}
+			}
+		case "use_as_clause": // use a::b::Name as Alias;
+			path := nameOfNode(c, []string{"scoped_identifier", "identifier"}, false)
+			alias := lastIdentLeaf(c)
+			if module, name, ok := splitRustPath(path); ok && alias != "" {
+				return []ImportBinding{{Local: alias, Module: module, Symbol: name}}
+			}
+		case "scoped_use_list": // use prefix::{A, B as C};
+			return rustUseList(c)
+		}
+	}
+	return nil
+}
+
+// rustUseList expands `prefix::{A, B as C}` into one binding per item, all under
+// the prefix module.
+func rustUseList(list content.AST) []ImportBinding {
+	prefix := ""
+	for _, c := range list.Children() {
+		if c.Type() == "identifier" || c.Type() == "scoped_identifier" {
+			prefix = c.Text()
+			break
+		}
+	}
+	if prefix == "" || isRustRelative(prefix) {
+		return nil
+	}
+	var out []ImportBinding
+	inner := firstChildAny(list, []string{"use_list"})
+	if inner == nil {
+		return nil
+	}
+	for _, item := range inner.Children() {
+		switch item.Type() {
+		case "identifier":
+			out = append(out, ImportBinding{Local: item.Text(), Module: prefix, Symbol: item.Text()})
+		case "use_as_clause":
+			orig := nameOfNode(item, []string{"identifier"}, false)
+			alias := lastIdentLeaf(item)
+			if orig != "" && alias != "" {
+				out = append(out, ImportBinding{Local: alias, Module: prefix, Symbol: orig})
+			}
+		}
+	}
+	return out
+}
+
+// splitRustPath splits "a::b::Name" into module "a::b" and name "Name". Paths
+// rooted at crate/self/super are intra-crate and resolve inside the repo, so
+// they are dropped (no external-module signal).
+func splitRustPath(path string) (module, name string, ok bool) {
+	if path == "" || isRustRelative(path) {
+		return "", "", false
+	}
+	i := strings.LastIndex(path, "::")
+	if i < 0 {
+		return "", "", false // a bare crate name binds no specific symbol
+	}
+	return path[:i], path[i+2:], true
+}
+
+func isRustRelative(path string) bool {
+	return strings.HasPrefix(path, "crate::") || strings.HasPrefix(path, "self::") ||
+		strings.HasPrefix(path, "super::") || path == "crate" || path == "self" || path == "super"
 }
 
 // --- Java: import_declaration ---

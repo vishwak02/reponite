@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS ref_history (
   present INTEGER NOT NULL DEFAULT 1,
   symbol_hash TEXT, signature_hash TEXT, behavior_hash TEXT, behavior_conf REAL,
   direct_conf REAL NOT NULL DEFAULT 1,
+  lang TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, ref, name)
 );
 CREATE INDEX IF NOT EXISTS idx_hist_symbol ON ref_history(repo, name);
@@ -112,6 +113,7 @@ func (s *Store) migrate() error {
 	for _, stmt := range []string{
 		`ALTER TABLE callees ADD COLUMN resolution_method TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ref_history ADD COLUMN direct_conf REAL NOT NULL DEFAULT 1`,
+		`ALTER TABLE ref_history ADD COLUMN lang TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
@@ -173,12 +175,12 @@ func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf)
-		 VALUES(?,?,?,1,?,?,?,?,?)
+		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf, lang)
+		 VALUES(?,?,?,1,?,?,?,?,?,?)
 		 ON CONFLICT(repo, ref, name) DO UPDATE SET
 		   present=1, symbol_hash=excluded.symbol_hash, signature_hash=excluded.signature_hash,
-		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf`,
-		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf); err != nil {
+		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf, lang=excluded.lang`,
+		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf, rec.Lang); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -333,16 +335,17 @@ func (s *Store) Refs(repo string) []string {
 
 func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 	var present int
-	var sig, beh sql.NullString
+	var sig, beh, lang sql.NullString
 	var conf, dconf sql.NullFloat64
 	err := s.db.QueryRow(
-		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf FROM ref_history WHERE repo=? AND ref=? AND name=?`,
-		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf)
+		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang FROM ref_history WHERE repo=? AND ref=? AND name=?`,
+		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf, &lang)
 	if err != nil {
 		return query.SymbolRef{Present: false}, false
 	}
 	return query.SymbolRef{
 		Present:       present == 1,
+		Lang:          lang.String,
 		SignatureHash: content.Hash(sig.String),
 		BehaviorHash:  content.Hash(beh.String),
 		BehaviorConf:  conf.Float64,
@@ -353,7 +356,7 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	out := map[string]query.SymbolRef{}
 	rows, err := s.db.Query(
-		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf FROM ref_history WHERE repo=? AND ref=?`,
+		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang FROM ref_history WHERE repo=? AND ref=?`,
 		repo, ref)
 	if err != nil {
 		return out
@@ -362,16 +365,16 @@ func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	for rows.Next() {
 		var name string
 		var present int
-		var sig, beh sql.NullString
+		var sig, beh, lang sql.NullString
 		var conf, dconf sql.NullFloat64
-		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf) != nil {
+		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf, &lang) != nil {
 			continue
 		}
 		if present != 1 {
 			continue
 		}
 		out[name] = query.SymbolRef{
-			Present: true, SignatureHash: content.Hash(sig.String),
+			Present: true, Lang: lang.String, SignatureHash: content.Hash(sig.String),
 			BehaviorHash: content.Hash(beh.String), BehaviorConf: conf.Float64, DirectConf: dconf.Float64,
 		}
 	}

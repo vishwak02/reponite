@@ -26,6 +26,7 @@ const (
 // SymbolRef is a symbol's identity at one ref (mirrors ref_history, §9.4).
 type SymbolRef struct {
 	Present       bool
+	Lang          string // language name (lang.go); drives per-language "exported" rules
 	SignatureHash content.Hash
 	BehaviorHash  content.Hash
 	BehaviorConf  float64 // transitive-subgraph minimum
