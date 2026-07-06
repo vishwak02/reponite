@@ -7,39 +7,88 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header>
-  <h1>reponite</h1><span class="repo" id="repo"></span>
-  <label class="k">ref <select id="ref"></select></label>
-  <nav>
-    <button data-v="explore" class="on">Explore</button>
-    <button data-v="diff">Diff</button>
-    <button data-v="impact">Impact</button>
+<div class="app">
+  <div class="brand">
+    <span class="logo">r</span><b>reponite</b><span class="ver" id="ver"></span>
+  </div>
+
+  <div class="topbar">
+    <span class="sel" id="repo-sel-wrap" hidden>repo
+      <select id="repo"></select>
+    </span>
+    <span class="sel">ref
+      <select id="ref"></select>
+    </span>
+    <span class="spacer"></span>
+    <span class="chip" id="idx-chip" title="indexed at the selected ref"></span>
+    <button class="iconbtn" id="theme" title="Toggle theme" aria-label="Toggle theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+
+  <nav class="rail">
+    <a data-view="overview" href="#/overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+      <span>Overview</span>
+    </a>
+    <a data-view="explore" href="#/explore">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+      <span>Explore</span>
+    </a>
+    <a data-view="diff" href="#/diff">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3v10M5 13a3 3 0 100 6 3 3 0 000-6zM19 21V11M19 11a3 3 0 100-6 3 3 0 000 6zM8 6h6a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Diff</span>
+    </a>
+    <a data-view="impact" href="#/impact">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.6l6.8-4M8.6 13.4l6.8 4" stroke-linecap="round"/></svg>
+      <span>Impact</span>
+    </a>
+    <div class="navhint">Views are deep-linkable — copy the URL to share. Press <kbd>/</kbd> to search.</div>
   </nav>
-</header>
-<main>
-  <div class="side">
-    <div id="explore-side">
-      <input id="q" placeholder="search symbols…" style="width:100%">
-      <div id="hits" style="margin-top:10px"></div>
+
+  <main>
+    <div id="overview" class="view"><div class="wrap" id="overview-body"></div></div>
+
+    <div id="explore" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+            <input id="q" placeholder="Search symbols…" autocomplete="off">
+          </div>
+          <div id="hits"></div>
+        </div>
+        <div class="detail" id="brief"></div>
+      </div>
     </div>
-    <div id="diff-side" style="display:none">
-      <label class="k">from <select id="from"></select></label><br><br>
-      <label class="k">to <select id="to"></select></label><br><br>
-      <label class="k"><input type="checkbox" id="changed" checked> changed only</label>
-      <div id="changes" style="margin-top:12px"></div>
+
+    <div id="diff" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="sel" style="margin-bottom:12px">from <select id="from"></select></div>
+          <div class="sel" style="margin-bottom:12px">to <select id="to"></select></div>
+          <label class="row" style="cursor:pointer"><input type="checkbox" id="changed" checked style="margin-right:4px"> changed only</label>
+          <div id="changes" style="margin-top:12px"></div>
+        </div>
+        <div class="detail" id="diff-detail"></div>
+      </div>
     </div>
-    <div id="impact-side" style="display:none">
-      <input id="xq" placeholder="external symbol name…" style="width:100%">
-      <p class="k" style="font-size:12px">Who across indexed repos calls this symbol.</p>
-      <div id="xcallers"></div>
+
+    <div id="impact" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.6l6.8-4M8.6 13.4l6.8 4" stroke-linecap="round"/></svg>
+            <input id="xq" placeholder="Exported symbol name…" autocomplete="off">
+          </div>
+          <p class="muted" style="font-size:12.5px;padding:0 2px">Who across every indexed repo depends on this symbol. Module-resolved callers are precise; name-based are the fallback tier.</p>
+        </div>
+        <div class="detail" id="impact-detail"></div>
+      </div>
     </div>
-  </div>
-  <div class="detail">
-    <div id="explore" class="view on"><div class="empty">Search and pick a symbol to see its brief.</div></div>
-    <div id="diff" class="view"><div class="empty">Pick two refs to diff.</div></div>
-    <div id="impact" class="view"><div class="empty">Enter a symbol to see cross-repo callers.</div></div>
-  </div>
-</main>
+  </main>
+</div>
+<div id="toast"></div>
 <script src="/app.js"></script>
 </body>
 </html>

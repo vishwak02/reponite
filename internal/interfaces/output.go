@@ -5,6 +5,7 @@ package interfaces
 
 import (
 	"encoding/json"
+	"sort"
 
 	"github.com/vishwak02/reponite/internal/query"
 )
@@ -317,6 +318,65 @@ func ReposJSON(repos []string) (string, error) {
 		repos = []string{}
 	}
 	return marshal(map[string][]string{"repos": repos})
+}
+
+type dbTableDTO struct {
+	Name string `json:"name"`
+	Rows int64  `json:"rows"`
+}
+
+type refStatDTO struct {
+	Ref     string `json:"ref"`
+	Commit  string `json:"commit,omitempty"`
+	Symbols int    `json:"symbols"`
+	Edges   int    `json:"edges"`
+	Files   int    `json:"files"`
+}
+
+type repoOverviewDTO struct {
+	Repo   string       `json:"repo"`
+	Module string       `json:"module,omitempty"`
+	DBPath string       `json:"db_path,omitempty"`
+	Tables []dbTableDTO `json:"tables,omitempty"`
+	Refs   []refStatDTO `json:"refs"`
+}
+
+// OverviewJSON renders the index summary for every repo (the dashboard's
+// Overview/database view): per-ref logical stats from query.Overview, enriched
+// with each repo's physical database path + per-table row counts via dbFor
+// (nil-safe — the in-memory store has no file, so those fields are omitted).
+func OverviewJSON(ovs []query.RepoOverview, dbFor func(repo string) (string, map[string]int64)) (string, error) {
+	repos := make([]repoOverviewDTO, 0, len(ovs))
+	for _, ov := range ovs {
+		dto := repoOverviewDTO{Repo: ov.Repo, Module: ov.Module, Refs: make([]refStatDTO, 0, len(ov.Refs))}
+		for _, rs := range ov.Refs {
+			dto.Refs = append(dto.Refs, refStatDTO{Ref: rs.Ref, Commit: rs.Commit, Symbols: rs.Symbols, Edges: rs.Edges, Files: rs.Files})
+		}
+		if dbFor != nil {
+			if path, tables := dbFor(ov.Repo); path != "" || len(tables) > 0 {
+				dto.DBPath = path
+				dto.Tables = sortedTables(tables)
+			}
+		}
+		repos = append(repos, dto)
+	}
+	return marshal(map[string][]repoOverviewDTO{"repos": repos})
+}
+
+// sortedTables renders table row-counts largest-first (the natural reading order
+// for the magnitude bars in the DB view).
+func sortedTables(counts map[string]int64) []dbTableDTO {
+	out := make([]dbTableDTO, 0, len(counts))
+	for name, rows := range counts {
+		out = append(out, dbTableDTO{Name: name, Rows: rows})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rows != out[j].Rows {
+			return out[i].Rows > out[j].Rows
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // SemanticJSON renders semantic-search hits (ext §10A.2, the semantic rung).

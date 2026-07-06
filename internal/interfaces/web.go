@@ -15,12 +15,23 @@ import (
 	"github.com/vishwak02/reponite/internal/query"
 )
 
+// DBStater optionally exposes the physical index database behind a store — its
+// file path and per-table row counts — for the dashboard's index/database view.
+// The SQLite store implements it; the in-memory store does not.
+type DBStater interface {
+	DBStats() (path string, tables map[string]int64)
+}
+
 // WebHandler answers dashboard + API requests against a Store, scoped to a repo.
 // Intent is optional provenance for the brief endpoint (nil = omitted).
+// RepoStores optionally maps each repo to its concrete backing store so the
+// Overview view can surface per-repo database facts (path + table counts); it is
+// nil in tests over a single in-memory store.
 type WebHandler struct {
-	Store  query.Store
-	Repo   string
-	Intent query.IntentProvider
+	Store      query.Store
+	Repo       string
+	Intent     query.IntentProvider
+	RepoStores map[string]query.Store
 }
 
 // Routes returns the handler's mux (dashboard at /, JSON under /api/*).
@@ -30,6 +41,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/style.css", asset("text/css; charset=utf-8", dashboardCSS))
 	mux.HandleFunc("/app.js", asset("application/javascript; charset=utf-8", dashboardJS))
 	mux.HandleFunc("/api/repos", h.apiRepos)
+	mux.HandleFunc("/api/overview", h.apiOverview)
 	mux.HandleFunc("/api/refs", h.apiRefs)
 	mux.HandleFunc("/api/search", h.apiSearch)
 	mux.HandleFunc("/api/context", h.apiContext)
@@ -61,6 +73,28 @@ func (h *WebHandler) repoOr(r *http.Request) string {
 func (h *WebHandler) apiRepos(w http.ResponseWriter, r *http.Request) {
 	body, err := ReposJSON(h.Store.Repos())
 	writeJSON(w, body, err)
+}
+
+// apiOverview returns the index summary for every repo — per-ref logical stats
+// plus, where the backing store is a real database, its file path and per-table
+// row counts (the dashboard's Overview/database view).
+func (h *WebHandler) apiOverview(w http.ResponseWriter, r *http.Request) {
+	body, err := OverviewJSON(query.Overview(h.Store), h.dbStatsFor)
+	writeJSON(w, body, err)
+}
+
+// dbStatsFor returns a repo's database path + table counts if its backing store
+// is a DBStater, else ("", nil). Falls back to the primary Store when no
+// per-repo store map is set (single-repo serve).
+func (h *WebHandler) dbStatsFor(repo string) (string, map[string]int64) {
+	var st query.Store = h.Store
+	if h.RepoStores != nil {
+		st = h.RepoStores[repo]
+	}
+	if ds, ok := st.(DBStater); ok {
+		return ds.DBStats()
+	}
+	return "", nil
 }
 
 func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {

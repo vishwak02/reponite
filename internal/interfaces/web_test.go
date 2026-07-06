@@ -61,6 +61,11 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(brief, "billing.Charge") || !strings.Contains(brief, "func Charge()") {
 		t.Fatalf("/api/brief incomplete: %s", brief)
 	}
+	// Overview: per-repo/ref index stats (the Overview/database view's data).
+	ov := get("/api/overview")
+	if !strings.Contains(ov, "billing") || !strings.Contains(ov, "symbols") {
+		t.Fatalf("/api/overview incomplete: %s", ov)
+	}
 }
 
 // A team server over a MultiStore lists every repo and routes the ?repo= param.

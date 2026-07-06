@@ -30,17 +30,20 @@ func serveCommand(args []string) {
 	}
 	var stores []query.Store
 	var repos []string
+	repoStores := map[string]query.Store{}
 	for _, dir := range dirs {
 		st := openStore(dir)
 		defer st.Close()
 		stores = append(stores, st)
-		repos = append(repos, repoName(dir))
+		repo := repoName(dir)
+		repos = append(repos, repo)
+		repoStores[repo] = st // concrete per-repo store, for the Overview DB view
 	}
 	store := stores[0]
 	if len(stores) > 1 {
 		store = storage.NewMultiStore(stores...)
 	}
-	h := &interfaces.WebHandler{Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0])}
+	h := &interfaces.WebHandler{Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0]), RepoStores: repoStores}
 	fmt.Printf("reponite serve: http://%s  (repos %v)\n", addr, repos)
 	if err := http.ListenAndServe(addr, h.Routes()); err != nil {
 		fail(err)

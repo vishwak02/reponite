@@ -24,7 +24,10 @@ import (
 var _ query.Store = (*Store)(nil)
 
 // Store is a SQLite-backed query.Store.
-type Store struct{ db *sql.DB }
+type Store struct {
+	db   *sql.DB
+	path string // on-disk path (":memory:" for tests), for the dashboard DB view
+}
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -98,12 +101,27 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, path: path}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return s, nil
+}
+
+// DBStats reports the index database's file path and per-table row counts, for
+// the dashboard's index/database view — making the stored model tangible. The
+// counts are the physical persistence behind the logical query.Overview.
+func (s *Store) DBStats() (string, map[string]int64) {
+	tables := []string{"refs", "ref_history", "callees", "external_refs", "repo_modules", "file_blobs", "ref_files", "file_symbols", "manifest_blobs"}
+	counts := make(map[string]int64, len(tables))
+	for _, t := range tables {
+		var n int64
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + t).Scan(&n); err == nil {
+			counts[t] = n
+		}
+	}
+	return s.path, counts
 }
 
 // migrate applies additive schema changes introduced after the initial schema,
