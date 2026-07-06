@@ -1,26 +1,33 @@
-<div align="center">
+<p align="center">
+  <img src="https://img.shields.io/badge/reponite-code%20intelligence-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="reponite" height="60"/>
+</p>
 
-# Reponite
+<h3 align="center">Code intelligence for AI agents — across every branch, tag, and repo.</h3>
 
-[![CI](https://github.com/vishwak02/reponite/actions/workflows/go.yml/badge.svg)](https://github.com/vishwak02/reponite/actions/workflows/go.yml)
-[![Release](https://img.shields.io/github/v/release/vishwak02/reponite?color=00ADD8)](https://github.com/vishwak02/reponite/releases)
-[![Go 1.22+](https://img.shields.io/badge/go-1.22%2B-00ADD8.svg)](go.mod)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/vishwak02/reponite/actions/workflows/go.yml"><img src="https://github.com/vishwak02/reponite/actions/workflows/go.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/vishwak02/reponite/releases"><img src="https://img.shields.io/github/v/release/vishwak02/reponite?color=00ADD8" alt="Release"></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/go-1.22%2B-00ADD8.svg" alt="Go 1.22+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
+</p>
 
-**Code intelligence for AI agents — across every branch, tag, and repo you care about.**
-
-*One small binary. No cloud. No LLM required.*
-
-</div>
+<p align="center">
+  <a href="#install">Install</a> •
+  <a href="#quickstart">Quickstart</a> •
+  <a href="#ai-agents-mcp">MCP / AI Agents</a> •
+  <a href="#how-it-works">How it works</a> •
+  <a href="#contributing">Contributing</a>
+</p>
 
 ---
 
-## The one thing no other tool does
+**Reponite** is a single binary that indexes your codebase across refs (tags, branches, commits) and answers the question every developer and AI agent eventually needs to ask:
 
-Every code search tool can tell you *where* something lives.  
-Reponite tells you *whether it changed* — and **whether that change broke anyone**.
+> *"Did this symbol change — and did that change break anyone?"*
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh | sh
+reponite index .
 reponite compat Charge
 ```
 
@@ -28,170 +35,189 @@ reponite compat Charge
 {
   "symbol": "billing.Charge",
   "verdicts": [
-    {
-      "ref": "prod",
-      "verdict": "behavior_changed",
-      "confidence": 0.9,
+    { "ref": "prod",   "verdict": "behavior_changed", "confidence": 0.9,
       "changed_callees": ["~validateCard"],
-      "detail": "identical signature; resolved call graph differs"
-    },
+      "detail": "identical signature; resolved call graph differs" },
     { "ref": "v1.0.0", "verdict": "absent", "confidence": 1 }
   ]
 }
 ```
 
-That `behavior_changed` verdict — with honest confidence — is something nothing else computes.
-
 ---
 
-## Why it matters
+## Why Reponite
 
-Structural code search is a commodity. Reponite does that, then goes further:
+Most code tools answer *"where is it?"*  
+Reponite answers *"is it still the same — and if not, who is broken?"*
 
-| Question | Other tools | Reponite |
-|---|---|---|
-| Where is `Charge` defined? | ✅ | ✅ |
-| Did its signature change between `v1` and `main`? | ❌ | ✅ |
+| | Other tools | Reponite |
+|---|:---:|:---:|
+| Find where a symbol is defined | ✅ | ✅ |
+| Did its API signature change between two refs? | ❌ | ✅ |
 | Did its *behavior* change even if the signature didn't? | ❌ | ✅ |
 | Which services across the fleet still expect the old shape? | ❌ | ✅ |
-| What's the root cause — the actual mutation site, not just the symptom? | ❌ | ✅ |
+| Root cause — actual mutation site, not just the symptom? | ❌ | ✅ |
+| Works across branches, tags, and multiple repos? | ❌ | ✅ |
 
 ---
 
 ## Install
 
-```sh
-# One-liner (Linux/macOS — no Go toolchain needed):
-curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh | sh
+**One-liner** (Linux / macOS, no Go toolchain needed):
 
-# Or build from source (Go 1.22+):
+```sh
+curl -fsSL https://raw.githubusercontent.com/vishwak02/reponite/main/install.sh | sh
+```
+
+**From source** (Go 1.22+):
+
+```sh
 make cli   # → bin/reponite
 ```
 
 ---
 
-## Core commands
+## Quickstart
 
 ```sh
-# Index your repo (Go, Python, JS, TS, Java, ROS)
-reponite index .
-reponite index . v2.3.0          # index a specific tag/branch/commit
+# 1. Index your repo
+reponite index .                      # indexes HEAD
+reponite index . v2.3.0              # index a tag, branch, or commit
 
-# The Oracle: did this symbol break anything?
-reponite compat Charge           # verdict across every indexed ref
+# 2. Check if a symbol is still compatible across refs
+reponite compat Charge
 
-# Root cause: what actually changed and why?
+# 3. Find the root cause of a behavior change
 reponite rootcause Charge v1 HEAD
 
-# Editing brief: everything you need to touch a symbol, in one bundle
+# 4. Get everything you need to safely edit a symbol
 reponite brief Charge
 
-# Cross-repo impact: who across the fleet calls this?
+# 5. Who across the fleet depends on this symbol?
 reponite ximpact getUserV2
-
-# Search (three rungs of the same ladder)
-reponite grep validateCard       # exact/regex, result fused with its symbol
-reponite semsearch "where we charge a card"   # semantic — no model or network
-reponite diff v0.1.0 HEAD --changed-only
-
-# CI gate: fail on any exported API break
-reponite ci-check --base main --head HEAD
-
-# Web dashboard
-reponite serve .                 # → http://127.0.0.1:8899
 ```
 
 ---
 
-## Built for AI agents (MCP)
+## Features
 
-Reponite exposes **11 MCP tools** so an agent can reach for the cheapest rung first — and often skip reading files entirely.
-
-```sh
-reponite setup .    # register as MCP server (Claude, Cursor, Windsurf, ...)
-reponite mcp .      # what the agent runs; auto-indexes HEAD on first mount
-```
-
-The retrieval ladder an agent sees:
-
-```
-grep → structural → semantic → intent → compat
- ↑                                        ↑
-cheapest                              most powerful
-(exact match, no tokens wasted)     (cross-ref behavior verdicts)
-```
-
-Every response is **token-budgeted** and carries a `_meta` block with confidence, freshness, and provenance — so the agent knows exactly how much to trust it.
+- 🔍 **Compatibility Oracle** — `absent` / `shape_changed` / `behavior_changed` / `compatible` across every indexed ref and repo, with honest confidence scores
+- 🧬 **Root-cause drill-down** — walks a behavior change to its exact mutation site; can be seeded directly from a pasted stack trace
+- 📦 **Editing brief** — one token-budgeted bundle (body + callees + callers + tests + compat snapshot) replacing 5–6 file reads for an agent
+- 🌐 **Cross-repo impact** — who across the fleet calls a symbol, and whether their expected contract still matches
+- 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (no model needed) → compat
+- 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break, drops straight into a PR workflow
+- 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, and **ROS** interface files (`.msg`/`.srv`/`.action`)
+- 📡 **Four surfaces** — CLI · MCP server (11 tools) · web dashboard · VS Code extension
 
 ---
 
 ## The four verdicts
 
-The **Compatibility Oracle** answers one question across every indexed ref and repo:
+The **Compatibility Oracle** gives you one of four verdicts for every indexed ref and repo:
 
-| Verdict | What it means |
+| Verdict | What happened |
 |---|---|
-| `compatible` | same shape *and* same behavior |
-| `shape_changed` | signature differs → **API break** |
-| `behavior_changed` | signature identical, but the call graph underneath changed → **silent regression** |
-| `absent` | symbol doesn't exist at that ref |
+| `compatible` | Same shape *and* same behavior — safe to ship |
+| `shape_changed` | Signature changed → **API break** |
+| `behavior_changed` | Signature unchanged, but the call graph underneath changed → **silent regression** |
+| `absent` | Symbol doesn't exist at that ref |
 
-Every verdict comes with **confidence and its provenance**. Reponite never claims more certainty than it computed.
-
----
-
-## How it works (briefly)
-
-Three hashes, computed over every symbol in every indexed ref:
-
-- **`symbol_hash`** — did the code text change? (storage dedup key)
-- **`signature_hash`** — did the API shape change?
-- **`behavior_hash`** — did the resolved call graph change? (Merkle hash: a callee's change propagates to every transitive caller)
-
-The behavior hash is what makes `behavior_changed` possible. It's also what makes root-cause cheap: a symbol whose `symbol_hash` changed is a **mutation site**; a symbol whose `behavior_hash` alone changed is merely **carried along**. Walk the frontier, find the origin.
+Every verdict carries a **confidence score and full provenance**. Reponite never claims more certainty than it computed.
 
 ---
 
-## Languages supported
+## Search
 
-Go · Python · JavaScript · TypeScript · Java · **ROS** (`.msg` / `.srv` / `.action` — indexed as typed contracts)
+Three rungs. Pick the cheapest one that answers your question:
+
+```sh
+# Exact / regex — result fused with its enclosing symbol
+reponite grep validateCard
+
+# Semantic — no model, no network
+reponite semsearch "where we charge a card"
+
+# Structural diff across refs
+reponite diff v0.1.0 HEAD --changed-only --package internal/query
+```
 
 ---
 
-## Architecture (the 30-second version)
+## AI agents (MCP)
+
+Reponite exposes **11 MCP tools** so an agent can answer code questions without reading source files.
+
+```sh
+reponite setup .   # register as MCP server (Claude, Cursor, Windsurf, ...)
+reponite mcp .     # what the agent runs — auto-indexes HEAD on first mount
+```
+
+**Tools:** `search` · `grep` · `compat` · `context` · `diff` · `rootcause` · `rootcause_trace` · `brief` · `ximpact` · `semsearch` · `refs`
+
+Every response is **token-budgeted** and carries a `_meta` envelope with confidence, freshness, and provenance — the agent always knows how much to trust it.
+
+---
+
+## Web dashboard
+
+```sh
+reponite serve .            # single-repo view → http://127.0.0.1:8899
+reponite serve repo-a repo-b repo-c   # shared team/fleet view
+```
+
+---
+
+## How it works
+
+Three hashes, computed over every symbol at every indexed ref:
+
+| Hash | Question it answers |
+|---|---|
+| `symbol_hash` | Did the code text change? (storage dedup key — identical code across refs stored once) |
+| `signature_hash` | Did the API shape change? |
+| `behavior_hash` | Did the call graph change? (Merkle: a callee's change propagates to every transitive caller) |
+
+The `behavior_hash` is what makes `behavior_changed` possible.  
+It's also what makes root-cause fast: a symbol whose `symbol_hash` changed is a **mutation site**; a symbol whose `behavior_hash` alone changed is merely **carried along**. Walk the frontier, find the origin.
 
 ```
   CLI  ·  MCP server  ·  web dashboard  ·  VS Code extension
-                        │
-  ┌─────────────────────▼───────────────────────────────────┐
-  │  PURE CORE  (stdlib only, zero CGO)                      │
+                      │
+  ┌───────────────────▼─────────────────────────────────────┐
+  │  PURE CORE  (stdlib only, zero CGO, 95+ unit tests)      │
   │  canon() · three-hash identity · behavior-hash Merkle    │
   │  Compat Oracle · diff · rootcause · grep · brief         │
-  └─────────────────────┬───────────────────────────────────┘
-                        │  thin build-tagged adapters
-          tree-sitter (CGO)  ·  SQLite  ·  go-git  ·  go/types
+  └───────────────────┬─────────────────────────────────────┘
+                      │  thin build-tagged adapters
+        tree-sitter (CGO)  ·  SQLite  ·  go-git  ·  go/types
 ```
 
-The correctness-critical core is **pure Go, standard-library only** — no external dependencies, no CGO, exhaustively unit-tested. External tools live in thin, isolated adapters. See [ADR-018](docs/adr/ADR-018-pure-core-thin-adapters.md).
+The correctness-critical core is **pure Go, standard-library only** — no external dependencies, no CGO, fully deterministic. See [ADR-018](docs/adr/ADR-018-pure-core-thin-adapters.md).
 
 ---
 
 ## Contributing
 
 ```sh
-go build ./...    # pure core — no deps, builds anywhere
+go build ./...    # pure core — zero deps, builds anywhere
 go test ./...     # 95+ unit tests
 make cli          # full binary (all adapters)
-make sqlite | make treesitter | make mcp | make e2e   # per-adapter (mirrors CI)
+
+# Per-adapter checks (mirrors CI):
+make sqlite | make treesitter | make mcp | make e2e
 ```
 
-Open an [issue](https://github.com/vishwak02/reponite/issues) to ask a question or propose a change. Keep all CI jobs green. The invariants in [CLAUDE.md](CLAUDE.md) are load-bearing — please read them before sending a PR.
+Open an [issue](https://github.com/vishwak02/reponite/issues) to ask a question or propose a feature.  
+Send a pull request for fixes. Keep all CI jobs green.
+
+The invariants in [CLAUDE.md](CLAUDE.md) are load-bearing — please read them before sending a PR.
 
 ---
 
-## More
+## Documentation
 
-- [Architecture deep-dive](docs/architecture.md)
+- [Architecture overview](docs/architecture.md)
 - [Agent-facing features](docs/agent-features.md) — brief, root-cause, cross-repo impact, retrieval ladder
 - [Architecture Decision Records](docs/adr/)
 
