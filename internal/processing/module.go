@@ -16,7 +16,7 @@ import (
 
 // manifestName is a manifest filename in ecosystem-priority order; the first
 // one present (root-most copy) wins. A repo is almost always one ecosystem.
-var manifestNames = []string{"go.mod", "package.json", "pyproject.toml", "pom.xml", "Cargo.toml"}
+var manifestNames = []string{"go.mod", "package.json", "pyproject.toml", "pom.xml", "Cargo.toml", "package.xml"}
 
 // DetectModulePath returns the repo's module path given its candidate manifest
 // files keyed by repo-relative path. When several copies of a manifest exist
@@ -61,6 +61,24 @@ func parseModule(base string, content []byte) (string, bool) {
 		return pomCoordinates(content)
 	case "Cargo.toml":
 		return cargoName(content)
+	case "package.xml":
+		return rosPackageName(content)
+	}
+	return "", false
+}
+
+// rosPackageName reads a catkin/ament package.xml's <name> (the ROS package
+// identity). Root-most wins like the other ecosystems, so a single-package ROS
+// repo gets its package name; a multi-package workspace gets its shallowest one.
+func rosPackageName(content []byte) (string, bool) {
+	var pkg struct {
+		Name string `xml:"name"`
+	}
+	if err := xml.Unmarshal(content, &pkg); err != nil {
+		return "", false
+	}
+	if name := strings.TrimSpace(pkg.Name); name != "" {
+		return name, true
 	}
 	return "", false
 }

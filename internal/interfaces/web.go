@@ -50,6 +50,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/diff", h.apiDiff)
 	mux.HandleFunc("/api/rootcause", h.apiRootcause)
 	mux.HandleFunc("/api/ximpact", h.apiXImpact)
+	mux.HandleFunc("/api/blast_radius", h.apiBlastRadius)
 	return mux
 }
 
@@ -123,7 +124,28 @@ func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {
 
 func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	body, err := SearchJSON(query.SearchName(h.Store, h.repoOr(r), h.refOr(r), q.Get("q"), q.Get("tests") == "true"))
+	repo, ref := h.repoOr(r), h.refOr(r)
+	hits := query.SearchName(h.Store, repo, ref, q.Get("q"), q.Get("tests") == "true")
+	if len(hits) == 0 && q.Get("q") != "" {
+		body, err := SuggestJSON("symbol", q.Get("q"), query.Suggest(h.Store, query.FleetRepo, ref, q.Get("q"), 6))
+		writeJSON(w, body, err)
+		return
+	}
+	body, err := SearchJSON(hits)
+	writeJSON(w, body, err)
+}
+
+// apiBlastRadius returns the pre-edit impact dossier for a symbol (§2 macro).
+func (h *WebHandler) apiBlastRadius(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo, ref := h.repoOr(r), h.refOr(r)
+	sym := q.Get("symbol")
+	if len(query.ResolveSymbol(h.Store, repo, ref, sym)) == 0 {
+		body, err := SuggestJSON("symbol", sym, query.Suggest(h.Store, query.FleetRepo, ref, sym, 6))
+		writeJSON(w, body, err)
+		return
+	}
+	body, err := BlastRadiusJSON(query.BlastRadius(h.Store, repo, ref, sym))
 	writeJSON(w, body, err)
 }
 
