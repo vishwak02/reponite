@@ -302,6 +302,14 @@ type semanticHitDTO struct {
 	Score  float64 `json:"score"`
 }
 
+// ReposJSON renders the list of repos in the store (team/fleet landing data).
+func ReposJSON(repos []string) (string, error) {
+	if repos == nil {
+		repos = []string{}
+	}
+	return marshal(map[string][]string{"repos": repos})
+}
+
 // SemanticJSON renders semantic-search hits (ext §10A.2, the semantic rung).
 func SemanticJSON(hits []query.SemanticHit) (string, error) {
 	out := make([]semanticHitDTO, 0, len(hits))

@@ -78,6 +78,6 @@ index-backed (build with `+"`make cli`"+`):
   mcp [dir]            serve the tools over MCP (stdio) for an AI agent
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
-  serve [dir] [--addr host:port]   read-only web dashboard + JSON API (default 127.0.0.1:8899)
+  serve [dir...] [--addr host:port]   web dashboard + JSON API (default 127.0.0.1:8899); multiple dirs = team/fleet view
 `)
 }

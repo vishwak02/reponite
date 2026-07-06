@@ -55,3 +55,36 @@ func TestWebHandler(t *testing.T) {
 		t.Fatalf("/api/brief incomplete: %s", brief)
 	}
 }
+
+// A team server over a MultiStore lists every repo and routes the ?repo= param.
+func TestWebHandlerTeam(t *testing.T) {
+	a := storage.NewMem()
+	a.Put("api", "HEAD", "api.GetUser", storage.SymbolRecord{SymbolHash: content.Hash("g"), SignatureHash: content.Hash("s"), BehaviorHash: content.Hash("b"), BehaviorConf: 1, DirectConf: 1})
+	b := storage.NewMem()
+	b.Put("svc", "HEAD", "svc.Handler", storage.SymbolRecord{SymbolHash: content.Hash("h"), SignatureHash: content.Hash("s"), BehaviorHash: content.Hash("b"), BehaviorConf: 1, DirectConf: 1})
+	ms := storage.NewMultiStore(a, b)
+
+	srv := httptest.NewServer((&interfaces.WebHandler{Store: ms, Repo: "api"}).Routes())
+	defer srv.Close()
+	get := func(path string) string {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
+	}
+
+	if repos := get("/api/repos"); !strings.Contains(repos, "api") || !strings.Contains(repos, "svc") {
+		t.Fatalf("/api/repos must list both repos: %s", repos)
+	}
+	// ?repo= routes search to the other repo in the fleet.
+	if s := get("/api/search?repo=svc&q=Handler"); !strings.Contains(s, "svc.Handler") {
+		t.Fatalf("/api/search?repo=svc did not reach the svc repo: %s", s)
+	}
+	// default (no repo param) uses the handler's repo.
+	if s := get("/api/search?q=GetUser"); !strings.Contains(s, "api.GetUser") {
+		t.Fatalf("default repo search failed: %s", s)
+	}
+}

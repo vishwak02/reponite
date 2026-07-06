@@ -27,6 +27,7 @@ type WebHandler struct {
 func (h *WebHandler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
+	mux.HandleFunc("/api/repos", h.apiRepos)
 	mux.HandleFunc("/api/refs", h.apiRefs)
 	mux.HandleFunc("/api/search", h.apiSearch)
 	mux.HandleFunc("/api/context", h.apiContext)
@@ -45,6 +46,21 @@ func (h *WebHandler) refOr(r *http.Request) string {
 	return "HEAD"
 }
 
+// repoOr returns the ?repo= query param (team/fleet view) or the handler's
+// default repo. Lets one server serve every repo in a MultiStore.
+func (h *WebHandler) repoOr(r *http.Request) string {
+	if v := r.URL.Query().Get("repo"); v != "" {
+		return v
+	}
+	return h.Repo
+}
+
+// apiRepos lists every repo in the store (the team-server landing data).
+func (h *WebHandler) apiRepos(w http.ResponseWriter, r *http.Request) {
+	body, err := ReposJSON(h.Store.Repos())
+	writeJSON(w, body, err)
+}
+
 func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -55,38 +71,39 @@ func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {
-	body, err := RefsJSON(h.Repo, h.Store.Refs(h.Repo))
+	repo := h.repoOr(r)
+	body, err := RefsJSON(repo, h.Store.Refs(repo))
 	writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	body, err := SearchJSON(query.SearchName(h.Store, h.Repo, h.refOr(r), q.Get("q"), q.Get("tests") == "true"))
+	body, err := SearchJSON(query.SearchName(h.Store, h.repoOr(r), h.refOr(r), q.Get("q"), q.Get("tests") == "true"))
 	writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiContext(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	body, err := ContextJSON(query.Context(h.Store, h.Repo, h.refOr(r), q.Get("symbol"), q.Get("tests") == "true"))
+	body, err := ContextJSON(query.Context(h.Store, h.repoOr(r), h.refOr(r), q.Get("symbol"), q.Get("tests") == "true"))
 	writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiBrief(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	budget, _ := strconv.Atoi(q.Get("budget"))
-	body, err := BriefJSON(query.Brief(h.Store, h.Repo, h.refOr(r), q.Get("symbol"), budget, h.Intent))
+	body, err := BriefJSON(query.Brief(h.Store, h.repoOr(r), h.refOr(r), q.Get("symbol"), budget, h.Intent))
 	writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiCompat(w http.ResponseWriter, r *http.Request) {
-	ref := h.refOr(r)
+	repo, ref := h.repoOr(r), h.refOr(r)
 	var targets []query.RepoRef
-	for _, rf := range h.Store.Refs(h.Repo) {
+	for _, rf := range h.Store.Refs(repo) {
 		if rf != ref {
-			targets = append(targets, query.RepoRef{Repo: h.Repo, Ref: rf})
+			targets = append(targets, query.RepoRef{Repo: repo, Ref: rf})
 		}
 	}
-	rep, err := query.CompatSymbol(h.Store, query.RepoRef{Repo: h.Repo, Ref: ref}, r.URL.Query().Get("symbol"), targets)
+	rep, err := query.CompatSymbol(h.Store, query.RepoRef{Repo: repo, Ref: ref}, r.URL.Query().Get("symbol"), targets)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -99,13 +116,13 @@ func (h *WebHandler) apiDiff(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	min, _ := strconv.ParseFloat(q.Get("confidence_min"), 64)
 	opt := query.DiffOptions{ChangedOnly: q.Get("changed_only") == "true", Package: q.Get("package"), MinConfidence: min}
-	body, err := DiffJSON(query.DiffRefsBy(h.Store, h.Repo, q.Get("from"), q.Get("to"), opt))
+	body, err := DiffJSON(query.DiffRefsBy(h.Store, h.repoOr(r), q.Get("from"), q.Get("to"), opt))
 	writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiRootcause(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	body, err := RootCauseJSON(query.RootCauseBy(h.Store, h.Repo, q.Get("symbol"), q.Get("from"), q.Get("to")))
+	body, err := RootCauseJSON(query.RootCauseBy(h.Store, h.repoOr(r), q.Get("symbol"), q.Get("from"), q.Get("to")))
 	writeJSON(w, body, err)
 }
 
