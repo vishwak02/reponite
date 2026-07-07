@@ -34,8 +34,8 @@ func Suggest(s Store, repo, ref, q string, limit int) []SearchHit {
 			switch {
 			case bl == ql:
 				sc = 1 // same name, different case/qualifier
-			case strings.Contains(bl, ql) || strings.Contains(ql, bl):
-				sc = 2 + abs(len(bl)-len(ql)) // substring either way
+			case substantialSubstring(ql, bl):
+				sc = 2 + abs(len(bl)-len(ql)) // one meaningfully contains the other
 			default:
 				d := levenshtein(ql, bl)
 				if d > 3 && d*3 > len(ql)+len(bl) { // too far to be a plausible typo
@@ -60,6 +60,21 @@ func Suggest(s Store, repo, ref, q string, limit int) []SearchHit {
 		out = append(out, c.hit)
 	}
 	return out
+}
+
+// substantialSubstring reports whether one name meaningfully contains the other:
+// the contained string is at least 4 runes AND at least half the length of the
+// container. This keeps "getUserV2" ~ "getUser" while dropping noise like "for"
+// matching "reposFor" — a short common fragment isn't a "did you mean".
+func substantialSubstring(a, b string) bool {
+	short, long := a, b
+	if len(short) > len(long) {
+		short, long = long, short
+	}
+	if len(short) < 4 || len(short)*2 < len(long) {
+		return false
+	}
+	return strings.Contains(long, short)
 }
 
 func abs(x int) int {
