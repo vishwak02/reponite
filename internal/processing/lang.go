@@ -7,17 +7,21 @@ package processing
 
 // LangRules tells the generic extractor which AST node types matter for a language.
 type LangRules struct {
-	Name       string
-	Exts       []string
-	FuncDecl   []string // function-like declarations
-	MethodDecl []string // methods (typically nested in classes)
-	TypeDecl   []string // type/class/struct/interface/enum declarations
-	TypeSpec   []string // inner spec node holding a type name (Go type_spec); empty => name is a direct child of TypeDecl
-	NameTypes  []string // node types holding a declared/callee name
-	RecvTypes  []string // method-receiver container node types (Go: the receiver parameter_list); empty => no receiver qualification
-	RecvName   []string // node types holding the receiver's type name within RecvTypes
-	BodyTypes  []string // callable body node types (dropped from the signature)
-	CallTypes  []string // call-expression node types
+	Name          string
+	Exts          []string
+	FuncDecl      []string // function-like declarations
+	MethodDecl    []string // methods (typically nested in classes)
+	TypeDecl      []string // type/class/struct/interface/enum declarations
+	TypeSpec      []string // inner spec node holding a type name (Go type_spec); empty => name is a direct child of TypeDecl
+	NameTypes     []string // node types holding a declared/callee name
+	RecvTypes     []string // method-receiver container node types (Go: the receiver parameter_list); empty => no receiver qualification
+	RecvName      []string // node types holding the receiver's type name within RecvTypes
+	BodyTypes     []string // callable body node types (dropped from the signature)
+	CallTypes     []string // call-expression node types
+	CallNameTypes []string // node types holding a callee/member name; empty => use NameTypes.
+	// Needed where the method name isn't a plain identifier: C/C++ member calls put
+	// it in a field_identifier that NameTypes deliberately excludes (else type/field
+	// declarations would mis-resolve), so the callee must look it up separately.
 	SortChild  []string // node types whose children are order-independent (import lists)
 	NameByDesc bool     // find the name via first matching descendant (e.g. C/C++ type names)
 	DeclNameIn []string // if set, a callable's name is the last NameTypes leaf inside this child
@@ -134,14 +138,15 @@ var cBuiltins = map[string]bool{
 // `struct Point make()` is named "make", not "Point".
 var CRules = LangRules{
 	Name: "c", Exts: []string{".c", ".h"},
-	FuncDecl:   []string{"function_definition"},
-	TypeDecl:   []string{"struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
-	NameTypes:  []string{"identifier", "type_identifier"},
-	BodyTypes:  []string{"compound_statement"},
-	CallTypes:  []string{"call_expression"},
-	NameByDesc: true, // type names: descend (typedef alias is not a direct child)
-	DeclNameIn: []string{"function_declarator"},
-	Builtins:   cBuiltins,
+	FuncDecl:      []string{"function_definition"},
+	TypeDecl:      []string{"struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
+	NameTypes:     []string{"identifier", "type_identifier"},
+	CallNameTypes: []string{"identifier", "field_identifier"}, // s->fn() function-pointer calls
+	BodyTypes:     []string{"compound_statement"},
+	CallTypes:     []string{"call_expression"},
+	NameByDesc:    true, // type names: descend (typedef alias is not a direct child)
+	DeclNameIn:    []string{"function_declarator"},
+	Builtins:      cBuiltins,
 }
 
 // CppRules extends C with classes and namespaced/qualified definitions. The same
@@ -150,14 +155,15 @@ var CRules = LangRules{
 // are captured; forward declarations are not (they carry no body/behavior).
 var CppRules = LangRules{
 	Name: "cpp", Exts: []string{".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"},
-	FuncDecl:   []string{"function_definition"},
-	TypeDecl:   []string{"class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
-	NameTypes:  []string{"identifier", "type_identifier"},
-	BodyTypes:  []string{"compound_statement"},
-	CallTypes:  []string{"call_expression"},
-	NameByDesc: true,
-	DeclNameIn: []string{"function_declarator"},
-	Builtins:   cBuiltins,
+	FuncDecl:      []string{"function_definition"},
+	TypeDecl:      []string{"class_specifier", "struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
+	NameTypes:     []string{"identifier", "type_identifier"},
+	CallNameTypes: []string{"identifier", "field_identifier"}, // obj.method()/ptr->method() member calls
+	BodyTypes:     []string{"compound_statement"},
+	CallTypes:     []string{"call_expression"},
+	NameByDesc:    true,
+	DeclNameIn:    []string{"function_declarator"},
+	Builtins:      cBuiltins,
 }
 
 // RustRules extracts functions, structs/enums/unions/traits/type-aliases, and

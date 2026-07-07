@@ -90,6 +90,52 @@ func wantType(t *testing.T, syms []Symbol, name string) {
 	}
 }
 
+// Member/method calls must resolve to the invoked method, not the receiver
+// variable (regression: C++ obj.method()/ptr->m() and Java Bar.x() used to
+// capture the receiver because the method name is a field_identifier / the last
+// ident of a flat method_invocation).
+func TestMemberCallResolvesToMethod(t *testing.T) {
+	t.Run("cpp", func(t *testing.T) {
+		src := `void run(Task* task, Frag frag) {
+  task->getAssignedAgent();
+  frag.getModel();
+  freeFn();
+}`
+		callees := extractCalleesOf(t, ".cpp", src, "run")
+		for _, want := range []string{"getAssignedAgent", "getModel", "freeFn"} {
+			if !hasCallee(callees, want) {
+				t.Errorf("cpp: callees %v missing %q (member call should resolve to the method)", callees, want)
+			}
+		}
+		for _, bad := range []string{"task", "frag"} {
+			if hasCallee(callees, bad) {
+				t.Errorf("cpp: callees %v wrongly include the receiver %q", callees, bad)
+			}
+		}
+	})
+	t.Run("java", func(t *testing.T) {
+		src := `class C { void run() { Bar.x(); obj.method(); helper(); } }`
+		callees := extractCalleesOf(t, ".java", src, "run")
+		for _, want := range []string{"x", "method", "helper"} {
+			if !hasCallee(callees, want) {
+				t.Errorf("java: callees %v missing %q", callees, want)
+			}
+		}
+		if hasCallee(callees, "Bar") || hasCallee(callees, "obj") {
+			t.Errorf("java: callees %v wrongly include a receiver", callees)
+		}
+	})
+}
+
+func extractCalleesOf(t *testing.T, ext, src, fn string) []string {
+	t.Helper()
+	s := find(extractSrc(t, ext, src), fn)
+	if s == nil {
+		t.Fatalf("function %q not extracted", fn)
+	}
+	return s.Callees
+}
+
 func findRecv(syms []Symbol, name, recv string) *Symbol {
 	for i := range syms {
 		if syms[i].Name == name && syms[i].Recv == recv {

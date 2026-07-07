@@ -158,19 +158,22 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 	}}
 }
 
-// calleesWithRules returns deduped callee names invoked in a body (name-based).
+// calleesWithRules returns deduped callee names invoked in a body (name-based),
+// derived from the same (qualifier, name) extraction qualifiedCallsWithRules uses
+// so the callee is the invoked member — not the receiver. This matters for
+// languages where the method name is the LAST identifier of the callee
+// expression rather than the first child: Java's flat method_invocation
+// (Bar.x() -> x) and C++/C member calls (obj.method()/ptr->m() -> method), whose
+// method name lives in a field_identifier (see CallNameTypes).
 func calleesWithRules(body content.AST, r LangRules) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, call := range descendantsAny(body, r.CallTypes) {
-		kids := call.Children()
-		if len(kids) == 0 {
+	for _, qc := range qualifiedCallsWithRules(body, r) {
+		if qc.Name == "" || seen[qc.Name] {
 			continue
 		}
-		if name := trailingIdent(kids[0], r.NameTypes); name != "" && !r.Builtins[name] && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
+		seen[qc.Name] = true
+		out = append(out, qc.Name)
 	}
 	return out
 }
@@ -203,18 +206,30 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 	return out
 }
 
-// calleeIdents returns the name-type identifier leaves of a call's callee
+// calleeIdents returns the callee-name identifier leaves of a call's callee
 // expression, in source order, stopping at the argument list (so argument
 // identifiers and nested calls — handled by their own iteration — are excluded).
+// Uses CallNameTypes when set (e.g. C/C++ include field_identifier so a member
+// method resolves to its own name), else NameTypes.
 func calleeIdents(call content.AST, r LangRules) []string {
+	types := callNameTypes(r)
 	var ids []string
 	for _, c := range call.Children() {
 		if isArgNode(c.Type()) {
 			break
 		}
-		ids = append(ids, identLeaves(c, r.NameTypes)...)
+		ids = append(ids, identLeaves(c, types)...)
 	}
 	return ids
+}
+
+// callNameTypes is the node-type set for callee/member names: CallNameTypes if
+// the language sets it, else NameTypes.
+func callNameTypes(r LangRules) []string {
+	if len(r.CallNameTypes) > 0 {
+		return r.CallNameTypes
+	}
+	return r.NameTypes
 }
 
 // isArgNode reports whether a node type is a call's argument list. tree-sitter
@@ -320,14 +335,6 @@ func descendantsAny(n content.AST, types []string) []content.AST {
 	}
 	walk(n)
 	return out
-}
-
-func trailingIdent(n content.AST, nameTypes []string) string {
-	ids := identLeaves(n, nameTypes)
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[len(ids)-1]
 }
 
 func identLeaves(n content.AST, nameTypes []string) []string {
