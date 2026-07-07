@@ -16,16 +16,28 @@ import (
 // reponite_brief (real under the treesitter tag; see the stub for other builds).
 func newIntentProvider(dir string) query.IntentProvider { return processing.NewGitIntent(dir) }
 
-// autoIndexIfEmpty indexes HEAD when the repo has no indexed refs yet, so a
-// freshly-mounted MCP server returns real results instead of silently-empty
-// ones (the "looks broken" failure the roadmap flagged). No-op once an index
-// exists — a prior `reponite index` or a running `reponite watch` owns it.
-func autoIndexIfEmpty(st *sqlite.Store, repo, dir string) {
-	if len(st.Refs(repo)) > 0 {
+// autoIndexOnMount keeps a mounted MCP server's index current. With no index yet
+// it indexes HEAD synchronously, so the first tool calls aren't silently empty.
+// If an index already exists (e.g. from a prior session) it refreshes HEAD in
+// the BACKGROUND — so restarting the agent picks up the current working tree
+// without a manual `reponite index` and without blocking startup. This fixes the
+// stale-mount trap (an agent got confident answers about outdated code). Note:
+// a background refresh briefly re-clears the ref, so that repo's results can be
+// momentarily partial right after mount; `reponite watch` gives continuous
+// mid-session freshness.
+func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
+	if len(st.Refs(repo)) == 0 {
+		fmt.Fprintf(os.Stderr, "reponite: no index for %q; indexing %s@HEAD on mount...\n", repo, dir)
+		if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
+			fmt.Fprintln(os.Stderr, "reponite: auto-index failed:", err)
+		}
 		return
 	}
-	fmt.Fprintf(os.Stderr, "reponite: no index for %q; indexing %s@HEAD on mount...\n", repo, dir)
-	if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
-		fmt.Fprintln(os.Stderr, "reponite: auto-index failed:", err)
-	}
+	go func() {
+		if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
+			fmt.Fprintln(os.Stderr, "reponite: background refresh failed:", err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "reponite: refreshed %s@HEAD on mount\n", repo)
+	}()
 }

@@ -14,10 +14,10 @@ import (
 // omits the intent section rather than failing.
 func newIntentProvider(dir string) query.IntentProvider { return nil }
 
-// autoIndexIfEmpty is a no-op in MCP builds without the tree-sitter indexer
+// autoIndexOnMount is a no-op in MCP builds without the tree-sitter indexer
 // (`-tags "sqlite mcp"`); it warns so an empty index isn't mistaken for a broken
-// server. Build with `make cli` (adds -tags treesitter) for auto-index on mount.
-func autoIndexIfEmpty(st *sqlite.Store, repo, dir string) {
+// server. Build with `make cli` (adds -tags treesitter) for index/refresh on mount.
+func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
 	if len(st.Refs(repo)) > 0 {
 		return
 	}

@@ -19,7 +19,7 @@ func mcpCommand(args []string) {
 		st := openStore(dir)
 		defer st.Close()
 		repo := repoName(dir)
-		autoIndexIfEmpty(st, repo, dir) // self-index on first mount so tools aren't silently empty
+		autoIndexOnMount(st, repo, dir) // index on first mount; refresh HEAD in the background otherwise
 		stores = append(stores, st)
 		repos = append(repos, repo)
 	}
