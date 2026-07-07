@@ -77,7 +77,11 @@ func XImpact(s Store, target, ref string) XImpactResult {
 	res := XImpactResult{Target: target}
 
 	// --- definition sites + the target's module identity/contract state ---
-	sigs := map[string]bool{}
+	// Signatures are grouped by the fully-qualified identity (repo, qid), so
+	// "contract changed" means the SAME symbol's shape moved across the refs it's
+	// defined at — not that two different symbols happen to share a bare name
+	// (e.g. storage.Mem.Put vs sqlite.Store.Put, or a C++ header decl vs its impl).
+	sigsByID := map[[2]string]map[string]bool{}
 	moduleSet := map[string]bool{}
 	for _, repo := range s.Repos() {
 		module := s.ModulePath(repo)
@@ -89,7 +93,11 @@ func XImpact(s Store, target, ref string) XImpactResult {
 						Repo: repo, Ref: rf, Symbol: name, Module: module,
 						SignatureHash: string(facts.SignatureHash),
 					})
-					sigs[string(facts.SignatureHash)] = true
+					id := [2]string{repo, name}
+					if sigsByID[id] == nil {
+						sigsByID[id] = map[string]bool{}
+					}
+					sigsByID[id][string(facts.SignatureHash)] = true
 					if module != "" {
 						moduleSet[module] = true
 					}
@@ -97,7 +105,12 @@ func XImpact(s Store, target, ref string) XImpactResult {
 			}
 		}
 	}
-	res.ContractChanged = len(sigs) > 1
+	for _, set := range sigsByID {
+		if len(set) > 1 { // one concrete symbol with >1 signature across refs = a real contract move
+			res.ContractChanged = true
+			break
+		}
+	}
 	res.Modules = sortedSet(moduleSet)
 
 	// --- tier 1: module-resolved callers (precise), fleet-wide ---

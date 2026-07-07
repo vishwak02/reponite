@@ -68,6 +68,24 @@ func TestXImpactContractFusion(t *testing.T) {
 	}
 }
 
+// Two DIFFERENT symbols sharing a bare name (storage.Mem.Put vs sqlite.Store.Put)
+// each with a stable signature must NOT be reported as a contract change — the
+// old code keyed the signature set on the bare name and cried wolf.
+func TestXImpactContractNoNameConflation(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "storage.Mem.Put", rc("m", "memSig", "b", 1))
+	m.Put("r", "prev", "storage.Mem.Put", rc("m", "memSig", "b", 1)) // stable
+	m.Put("r", "HEAD", "storage/sqlite.Store.Put", rc("s", "sqliteSig", "b", 1))
+	m.Put("r", "prev", "storage/sqlite.Store.Put", rc("s", "sqliteSig", "b", 1)) // stable
+	res := query.XImpact(m, "Put", "")
+	if res.ContractChanged {
+		t.Fatalf("distinct same-named methods (Mem.Put vs Store.Put) must not be a contract change; defs=%+v", res.Definitions)
+	}
+	if len(res.Definitions) != 4 {
+		t.Fatalf("expected 4 definition sites, got %d", len(res.Definitions))
+	}
+}
+
 // The precision upgrade: when the target's repo has a known module_path, callers
 // that resolved the dependency through their imports (import-resolved external
 // refs) are matched on (module, name) — precise, higher-confidence, listed first
