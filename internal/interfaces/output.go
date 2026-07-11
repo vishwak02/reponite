@@ -536,6 +536,65 @@ func UsagesJSON(r query.UsagesResult) (string, error) {
 	return marshal(dto)
 }
 
+type commEndpointDTO struct {
+	Repo    string `json:"repo,omitempty"`
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Role    string `json:"role"`
+	Name    string `json:"name"`
+	Raw     string `json:"raw,omitempty"`
+	MsgType string `json:"msg_type,omitempty"`
+	In      string `json:"in,omitempty"`
+	Text    string `json:"text,omitempty"`
+}
+
+type commGroupDTO struct {
+	Family     string            `json:"family"`
+	Name       string            `json:"name"`
+	Connected  bool              `json:"connected"`
+	Confidence float64           `json:"confidence"`
+	Producers  []commEndpointDTO `json:"producers"`
+	Consumers  []commEndpointDTO `json:"consumers"`
+}
+
+type topicsDTO struct {
+	Groups     []commGroupDTO `json:"groups"`
+	Endpoints  int            `json:"endpoints"`
+	Unresolved int            `json:"unresolved,omitempty"`
+	Note       string         `json:"note,omitempty"`
+	Meta       metaDTO        `json:"_meta"`
+}
+
+func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
+	out := make([]commEndpointDTO, 0, len(eps))
+	for _, e := range eps {
+		out = append(out, commEndpointDTO{
+			Repo: e.Repo, Path: e.Path, Line: e.Line, Role: e.Role,
+			Name: e.Name, Raw: e.Raw, MsgType: e.MsgType, In: e.In, Text: e.Text,
+		})
+	}
+	return out
+}
+
+// TopicsJSON renders the ROS communication graph — producers and consumers
+// linked by topic/service/action name, the cross-process edges the call graph
+// can't see.
+func TopicsJSON(r query.CommGraphResult) (string, error) {
+	dto := topicsDTO{
+		Endpoints: r.Endpoints, Unresolved: r.Unresolved, Note: r.Note,
+		Groups: make([]commGroupDTO, 0, len(r.Groups)),
+		Meta:   metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, g := range r.Groups {
+		dto.Groups = append(dto.Groups, commGroupDTO{
+			Family: g.Family, Name: g.Name, Connected: g.Connected(), Confidence: g.Confidence,
+			Producers: commEndpointsToDTO(g.Producers),
+			Consumers: commEndpointsToDTO(g.Consumers),
+		})
+	}
+	return marshal(dto)
+}
+
 type editImpactDTO struct {
 	Symbol string     `json:"symbol"`
 	Kind   string     `json:"kind"`

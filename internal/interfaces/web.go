@@ -56,6 +56,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/blast_radius", h.apiBlastRadius)
 	mux.HandleFunc("/api/investigate", h.apiInvestigate)
 	mux.HandleFunc("/api/usages", h.apiUsages)
+	mux.HandleFunc("/api/topics", h.apiTopics)
 	mux.HandleFunc("/api/verify_edit", h.apiVerifyEdit)
 	return mux
 }
@@ -172,6 +173,23 @@ func (h *WebHandler) apiUsages(w http.ResponseWriter, r *http.Request) {
 		repo = query.FleetRepo
 	}
 	body, err := UsagesJSON(query.Usages(h.Store, repo, h.refOr(r), q.Get("symbol")))
+	writeJSON(w, body, err)
+}
+
+// apiTopics returns the ROS communication graph (fleet-wide), or one topic's
+// producers and consumers when `topic` is set.
+func (h *WebHandler) apiTopics(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = query.FleetRepo
+	}
+	if topic := q.Get("topic"); topic != "" {
+		body, err := TopicsJSON(query.Topic(h.Store, repo, h.refOr(r), topic))
+		writeJSON(w, body, err)
+		return
+	}
+	body, err := TopicsJSON(query.CommGraph(h.Store, repo, h.refOr(r)))
 	writeJSON(w, body, err)
 }
 
