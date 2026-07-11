@@ -1,11 +1,16 @@
 # Reponite — Architecture Extension (Agent-Facing Reads)
 
-> **Implementation status (2026-07-06):** `reponite_brief` (§8C), `reponite_rootcause_trace` (§8A.4),
-> `reponite_ximpact` (§8B, now **module-path precise** — `external_refs` captured from per-language
-> import bindings + per-repo `module_path`, fused with the name-based fallback), the grep layer
-> (§10A) and the semantic rung (§10A.2, ADR-020) are **built and merged to `main`**; intent linkage
-> (§8A.6) ships as a git-blame provider. Deferred: a persistent cross-run `global.db` registry (the
-> `serve` MultiStore aggregates a multi-dir fleet today), per-caller signature-skew, and SCIP-grade
+> **Implementation status (2026-07-13):** `reponite_brief` (§8C), `reponite_rootcause_trace` (§8A.4),
+> `reponite_ximpact` (§8B, **module-path precise**), the grep layer (§10A) and the semantic rung
+> (§10A.2, ADR-020, now **IDF-ranked**) are built and merged. Added since: **fleet mount** (multi-repo
+> MCP MultiStore) with fleet-wide `search`/`grep`/`semsearch` + self-healing "did you mean" (§ agent
+> UX), **`reponite_repos`** (fleet orientation), **`reponite_blast_radius`** (pre-edit macro),
+> **`reponite_investigate`** (one cited dossier answering "how does X work?", §2), and
+> **`reponite_usages`** (call sites with lines, graph-verified). Intent linkage (§8A.6) ships as a
+> git-blame provider. Deferred: a persistent cross-run `global.db` registry (the `serve`/`mcp`
+> MultiStore aggregates a multi-dir fleet today), per-caller signature-skew, ROS protocol-aware
+> topic/action edges, a `verify_edit` shadow index, a neural embedder behind the `Embedder` seam,
+> and SCIP-grade
 > cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*
