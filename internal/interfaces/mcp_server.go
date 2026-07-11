@@ -111,6 +111,11 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("repo", mcp.Description("repo that defines the symbol (defaults to current)")),
 		mcp.WithString("ref", mcp.Description("default HEAD"))))
+	add(mcp.NewTool("reponite_topics",
+		mcp.WithDescription("ROS communication graph — the runtime edges the call graph CAN'T see. A publisher and a subscriber live in different processes and are joined only by a topic name at runtime, so no source call graph links them; this does, fleet-wide, by scanning roscpp/rospy/rclcpp/rclpy pub/sub/service/action idioms and pairing producers with consumers by name. With no `topic`: the whole comms map (connected edges first). With `topic`: who publishes and who subscribes to that one name. Use to answer \"who reacts when I publish X?\" or \"where does this subscriber's data come from?\". Name-string linkage is medium-confidence; namespace/launch remapping is not resolved (stated in the result)."),
+		mcp.WithString("topic", mcp.Description("focus on one topic/service/action name (default: whole comms graph)")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("ref", mcp.Description("default HEAD"))))
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("List indexed refs for the repo."),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))

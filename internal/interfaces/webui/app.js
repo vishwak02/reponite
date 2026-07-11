@@ -54,7 +54,7 @@ function go(view,params){const qs=new URLSearchParams(params||{}).toString();
 function setParam(k,v){const {view,params}=parseHash();if(v)params[k]=v;else delete params[k];
   history.replaceState(null,"",location.pathname+"#/"+view+"?"+new URLSearchParams(params));}
 
-const VIEWS={overview:renderOverview,explore:renderExplore,diff:renderDiff,impact:renderImpact};
+const VIEWS={overview:renderOverview,explore:renderExplore,diff:renderDiff,impact:renderImpact,topics:renderTopics};
 function route(){const {view,params}=parseHash();const v=VIEWS[view]?view:"overview";
   $$(".view").forEach(el=>el.classList.toggle("on",el.id===v));
   $$("nav.rail a").forEach(a=>a.classList.toggle("on",a.dataset.view===v));
@@ -188,6 +188,41 @@ const callerRow=x=>`<div class="row"><span class="grow">${esc(x.repo)} <span cla
   (x.module?`<span class="pill mono">${esc(x.module)}</span>`:"")+
   `<span class="pill ${x.resolution_method==="import-resolved"?"precise":""}">${esc(x.resolution_method)}</span><span class="pill conf">${x.confidence}</span></div>`;
 
+/* ---------- topics (ROS comms graph) ---------- */
+function renderTopics(params){
+  const t=$("#tq");
+  if(params.topic!==undefined&&params.topic!==t.value)t.value=params.topic;
+  t.oninput=()=>{clearTimeout(_t);_t=setTimeout(()=>{setParam("topic",t.value.trim());doTopics();},220);};
+  doTopics();
+}
+async function doTopics(){
+  const topic=$("#tq").value.trim(),d=$("#topics-detail");
+  d.innerHTML=`<p class="muted"><span class="spinner"></span> scanning fleet…</p>`;
+  try{const r=await api("topics",topic?{topic,repo:S.repo}:{repo:S.repo});
+    const g=r.groups||[];
+    let h=`<div class="detail-h"><h2>${topic?esc(topic):"Communication graph"}</h2>`+
+      `<span class="pill">${g.length} ${g.length===1?"group":"groups"}</span>`+
+      (r.endpoints?`<span class="pill">${r.endpoints} endpoints</span>`:"")+
+      (r.unresolved?`<span class="pill">${r.unresolved} dynamic</span>`:"")+`</div>`;
+    if(!g.length){h+=emptyRow(r.note||"no endpoints found");}
+    else h+=g.map(topicGroup).join("");
+    if(g.length&&r.note)h+=`<p class="muted" style="font-size:11.5px;margin-top:16px">${esc(r.note)}</p>`;
+    d.innerHTML=h;
+  }catch(e){d.innerHTML=emptyRow("error");toast(e.message);}
+}
+function topicGroup(g){
+  const conn=g.connected?`<span class="tag compatible">connected</span>`:`<span class="tag shape_changed">one-sided</span>`;
+  const side=(eps,label)=>`<div class="grouplabel" style="margin-top:10px">${label} <span class="ln"></span><span class="pill">${(eps||[]).length}</span></div>`+
+    ((eps||[]).length?eps.map(endpointRow).join(""):emptyRow("none"));
+  return `<div class="card" style="margin-bottom:14px">
+    <div class="card-head"><h3>${esc(g.name)}</h3><span class="badge">${esc(g.family)}</span>${conn}<span class="pill conf">conf ${g.confidence}</span></div>
+    ${side(g.producers,g.family==="topic"?"publishers":g.family==="action"?"action servers":"service servers")}
+    ${side(g.consumers,g.family==="topic"?"subscribers":g.family==="action"?"action clients":"service clients")}
+  </div>`;
+}
+const endpointRow=e=>`<div class="row"><span class="grow">${esc(e.repo?e.repo+" · ":"")}${esc(e.path)}<span class="muted">:${e.line}</span>${e.in?` → ${esc(e.in)}`:""}</span>`+
+  (e.msg_type?`<span class="pill mono">${esc(e.msg_type)}</span>`:"")+`<span class="pill">${esc(e.role)}</span></div>`;
+
 /* ---------- shared bits ---------- */
 function emptyState(title,hint){return `<div class="empty">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16" stroke-linecap="round"/></svg>
@@ -197,6 +232,6 @@ const skeleton=n=>Array.from({length:n},()=>'<div class="skeleton"></div>').join
 
 /* keyboard: "/" focuses the active view's search */
 addEventListener("keydown",e=>{if(e.key==="/"&&!/input|select|textarea/i.test(e.target.tagName)){
-  const {view}=parseHash();const t=view==="impact"?$("#xq"):view==="explore"?$("#q"):null;if(t){e.preventDefault();t.focus();}}});
+  const {view}=parseHash();const t=view==="impact"?$("#xq"):view==="explore"?$("#q"):view==="topics"?$("#tq"):null;if(t){e.preventDefault();t.focus();}}});
 
 boot();

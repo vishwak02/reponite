@@ -5,11 +5,13 @@
 > (§10A.2, ADR-020, now **IDF-ranked**) are built and merged. Added since: **fleet mount** (multi-repo
 > MCP MultiStore) with fleet-wide `search`/`grep`/`semsearch` + self-healing "did you mean" (§ agent
 > UX), **`reponite_repos`** (fleet orientation), **`reponite_blast_radius`** (pre-edit macro),
-> **`reponite_investigate`** (one cited dossier answering "how does X work?", §2), and
-> **`reponite_usages`** (call sites with lines, graph-verified). Intent linkage (§8A.6) ships as a
+> **`reponite_investigate`** (one cited dossier answering "how does X work?", §2),
+> **`reponite_usages`** (call sites with lines, graph-verified), and **`reponite_topics`** (§8D —
+> ROS protocol-aware topic/action edges: publishers ↔ subscribers linked by name across the fleet,
+> the runtime graph the call graph can't see). Intent linkage (§8A.6) ships as a
 > git-blame provider. Deferred: a persistent cross-run `global.db` registry (the `serve`/`mcp`
-> MultiStore aggregates a multi-dir fleet today), per-caller signature-skew, ROS protocol-aware
-> topic/action edges, a `verify_edit` shadow index, a neural embedder behind the `Embedder` seam,
+> MultiStore aggregates a multi-dir fleet today), per-caller signature-skew,
+> a `verify_edit` shadow index, a neural embedder behind the `Embedder` seam,
 > and SCIP-grade
 > cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
@@ -97,6 +99,25 @@ Both halves shipped. **Capture:** a caller file's import bindings (`imports.go`,
 
 ### 8C.4 Cost
 Pure assembly over existing primitives (a few point queries + one bounded reverse-edge scan + one compat lookup) plus `is_test` filtering. No new indexing beyond `is_test`. Target P50 < 60ms, single repo.
+
+---
+
+## §8D — ROS Communication Graph (`reponite_topics`) — the robotics-fleet flagship
+
+### 8D.1 The question
+"Who reacts when I publish to `/cmd_vel`?" / "Where does this subscriber's data come from?" In a ROS system the answer is **not in anyone's call graph.** A publisher and a subscriber run in different processes and are joined only by a *topic name string* that the middleware resolves at runtime — so there is no source-level edge between them to resolve (contrast §8B, which links by import binding). This is the single most-asked cross-node question in a robotics monorepo/fleet, and it is exactly the edge §6's call graph structurally cannot contain.
+
+### 8D.2 The computable definition
+An **endpoint** is a call to a client-library comms primitive bound to a name literal: `advertise`/`create_publisher`/`rospy.Publisher` (publisher), `subscribe`/`create_subscription`/`rospy.Subscriber` (subscriber), the `advertiseService`/`create_service`/`serviceClient`/`create_client`/`ServiceProxy` family (services), and `rclcpp_action`/`ActionServer`/`ActionClient` (actions). Across every idiom the bound name is the **first quoted string** in the call — because the message *type* is either a C++ template (`<T>`, unquoted) or a Python positional identifier (unquoted), never the first literal. Two endpoints **link** when they share a name (within a family: topic / service / action) and sit on opposite sides (producer ↔ consumer). Names are normalized by stripping a single leading `/` so an absolute `/scan` links a relative `scan`.
+
+### 8D.3 Output
+`reponite_topics(topic?, repo?, ref?)` — no `topic`: the whole comms map, connected edges first; with `topic`: that one name's producers and consumers. Each endpoint carries `repo`, `path`, `line`, `role`, the normalized `name` + `raw` (as-written), the C++ template `msg_type` when captured, and the enclosing symbol `in` (a hop back into the call graph). Each group carries a `connected` flag and a `confidence`.
+
+### 8D.4 Confidence & honest limits (stated in the result)
+Name-string linkage is **medium confidence (0.75)**, bumped to 0.9 only when a producer and consumer share a captured message type, and 0.6 for a one-sided (dangling) endpoint. Namespace/launch-file **remapping is not resolved**, dynamic (non-literal) topic names are counted as `unresolved` rather than guessed, and this is *source-idiom* inference, not DDS/rosmaster wire truth — a name match is a strong hint, never asserted as a proven connection. Consistent with "never lie."
+
+### 8D.5 Cost
+Pure query-time text scan over the file content the Store already holds (§10A's raw blobs) — **zero new indexing**, like `grep`/`usages`. Idioms are gated by file language (C++ idioms only in C/C++ files, Python only in `.py`) so a JavaScript observer's `.subscribe(...)` never masquerades as a ROS edge. Fleet-wide by default via the `serve`/`mcp` MultiStore.
 
 ---
 

@@ -93,6 +93,11 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
 	case "reponite_usages":
 		return UsagesJSON(query.Usages(t.Store, discoverRepo, ref, args["symbol"]))
+	case "reponite_topics":
+		if topic := args["topic"]; topic != "" {
+			return TopicsJSON(query.Topic(t.Store, discoverRepo, ref, topic))
+		}
+		return TopicsJSON(query.CommGraph(t.Store, discoverRepo, ref))
 	case "reponite_blast_radius":
 		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
 			return notFound("symbol", args["symbol"])

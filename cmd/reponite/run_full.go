@@ -39,6 +39,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdBlastRadius(args)
 	case "usages":
 		cmdUsages(args)
+	case "topics":
+		cmdTopics(args)
 	case "repos":
 		cmdRepos(args)
 	case "semsearch":
@@ -330,6 +332,20 @@ func cmdUsages(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.UsagesJSON(query.Usages(st, query.FleetRepo, "HEAD", pos[0])))
+}
+
+// cmdTopics renders the ROS communication graph fleet-wide (pub/sub/service/
+// action edges linked by name). With a name argument it focuses on that one
+// topic/service/action: who produces it and who consumes it.
+func cmdTopics(args []string) {
+	pos := parseCmd("topics", "topics [name]", args, nil)
+	st := openStore(".")
+	defer st.Close()
+	if len(pos) >= 1 {
+		printJSON(interfaces.TopicsJSON(query.Topic(st, query.FleetRepo, "HEAD", pos[0])))
+		return
+	}
+	printJSON(interfaces.TopicsJSON(query.CommGraph(st, query.FleetRepo, "HEAD")))
 }
 
 // cmdRepos lists every indexed repo with its module + per-ref stats.

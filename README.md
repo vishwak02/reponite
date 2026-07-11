@@ -108,11 +108,12 @@ reponite ximpact getUserV2
 - 🧭 **Investigate** — ask "how does X work?" in plain language, get one cited dossier of the relevant symbols fleet-wide (replaces the search→brief→context loop)
 - 🎯 **Usages** — every call site of a symbol with its exact line + enclosing function, cross-checked against the call graph (`confirmed` vs lexical)
 - 💥 **Blast radius** — before an edit, the in-repo + fleet callers, covering tests, and cross-ref contract state in one call
+- 🤖 **ROS topic graph** — the runtime edges no call graph contains: pairs publishers with subscribers (and service/action clients with servers) by name across the fleet, so you can answer "who reacts when I publish `/cmd_vel`?" — roscpp · rospy · rclcpp · rclpy
 - 🚀 **Fleet-aware** — mount many repos at once; `search`/`grep`/`semsearch` default fleet-wide, and misses return "did you mean …?" instead of empty
 - 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (IDF-ranked, no model needed) → compat
 - 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break (per-language "exported" rule), drops straight into a PR workflow
 - 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, and **ROS** interface files (`.msg`/`.srv`/`.action`)
-- 📡 **Four surfaces** — CLI · MCP server (15 tools) · web dashboard · VS Code extension
+- 📡 **Four surfaces** — CLI · MCP server (16 tools) · web dashboard · VS Code extension
 
 ---
 
@@ -150,14 +151,14 @@ reponite diff v0.1.0 HEAD --changed-only --package internal/query
 
 ## AI agents (MCP)
 
-Reponite exposes **11 MCP tools** so an agent can answer code questions without reading source files.
+Reponite exposes **16 MCP tools** so an agent can read, understand, and safely change code — including ROS runtime wiring — without opening source files.
 
 ```sh
 reponite setup .   # register as MCP server (Claude, Cursor, Windsurf, ...)
 reponite mcp .     # what the agent runs — auto-indexes HEAD on first mount
 ```
 
-**Tools:** `investigate` · `search` · `semsearch` · `grep` · `usages` · `context` · `brief` · `compat` · `diff` · `rootcause` · `rootcause_trace` · `ximpact` · `blast_radius` · `repos` · `refs`
+**Tools:** `investigate` · `search` · `semsearch` · `grep` · `usages` · `topics` · `context` · `brief` · `compat` · `diff` · `rootcause` · `rootcause_trace` · `ximpact` · `blast_radius` · `repos` · `refs`
 
 Every response is **token-budgeted** and carries a `_meta` envelope with confidence, freshness, and provenance — the agent always knows how much to trust it.
 
