@@ -99,6 +99,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	case "reponite_semsearch":
 		limit, _ := strconv.Atoi(args["limit"])
 		return SemanticJSON(query.SemanticSearch(t.Store, discoverRepo, ref, args["query"], limit, nil))
+	case "reponite_investigate":
+		budget, _ := strconv.Atoi(args["budget"])
+		return InvestigateJSON(query.Investigate(t.Store, discoverRepo, ref, args["question"], budget))
 	case "reponite_refs":
 		return RefsJSON(repo, t.Store.Refs(repo))
 	default:

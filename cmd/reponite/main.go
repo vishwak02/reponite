@@ -33,7 +33,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "repos", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "repos", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
@@ -82,6 +82,7 @@ index-backed (build with `+"`make cli`"+`):
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
   semsearch <query> [ref] [--limit N]   semantic search ("where is the thing that does X")
+  investigate <question...> [--budget N] [--json]   one cited dossier answering "how does X work?" (fleet-wide)
   context <symbol> [ref]  direct callers/callees, each edge with resolution_method + confidence
   rootcause <symbol> <from> <to>   drill a behavior change down to its mutation sites
   rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace

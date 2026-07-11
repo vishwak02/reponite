@@ -469,6 +469,42 @@ func SemanticJSON(hits []query.SemanticHit) (string, error) {
 	return marshal(out)
 }
 
+type investigateFindingDTO struct {
+	Repo    string   `json:"repo"`
+	Path    string   `json:"path"`
+	Symbol  string   `json:"symbol"`
+	Line    int      `json:"line"`
+	Score   float64  `json:"score"`
+	Preview string   `json:"preview,omitempty"`
+	Uses    []string `json:"uses,omitempty"`
+	UsedBy  []string `json:"used_by,omitempty"`
+}
+
+type investigateDTO struct {
+	Question string                  `json:"question"`
+	Dossier  string                  `json:"dossier"`
+	Findings []investigateFindingDTO `json:"findings"`
+	Omitted  int                     `json:"omitted"`
+	Meta     metaDTO                 `json:"_meta"`
+}
+
+// InvestigateJSON renders the investigate dossier: a dense markdown synthesis
+// (the primary agent-facing field) plus the structured findings behind it.
+func InvestigateJSON(r query.InvestigateResult) (string, error) {
+	dto := investigateDTO{
+		Question: r.Question, Dossier: r.Dossier, Omitted: r.Omitted,
+		Findings: make([]investigateFindingDTO, 0, len(r.Findings)),
+		Meta:     metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, f := range r.Findings {
+		dto.Findings = append(dto.Findings, investigateFindingDTO{
+			Repo: f.Repo, Path: f.Path, Symbol: f.Symbol, Line: f.Line, Score: f.Score,
+			Preview: f.Preview, Uses: f.Callees, UsedBy: f.Callers,
+		})
+	}
+	return marshal(dto)
+}
+
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {

@@ -51,6 +51,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/rootcause", h.apiRootcause)
 	mux.HandleFunc("/api/ximpact", h.apiXImpact)
 	mux.HandleFunc("/api/blast_radius", h.apiBlastRadius)
+	mux.HandleFunc("/api/investigate", h.apiInvestigate)
 	return mux
 }
 
@@ -132,6 +133,18 @@ func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := SearchJSON(hits)
+	writeJSON(w, body, err)
+}
+
+// apiInvestigate answers a natural-language question with a cited dossier.
+func (h *WebHandler) apiInvestigate(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = query.FleetRepo
+	}
+	budget, _ := strconv.Atoi(q.Get("budget"))
+	body, err := InvestigateJSON(query.Investigate(h.Store, repo, h.refOr(r), q.Get("q"), budget))
 	writeJSON(w, body, err)
 }
 

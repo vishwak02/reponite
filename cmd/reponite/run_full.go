@@ -41,6 +41,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdRepos(args)
 	case "semsearch":
 		cmdSemSearch(args)
+	case "investigate":
+		cmdInvestigate(args)
 	case "brief":
 		cmdBrief(args)
 	case "context":
@@ -278,6 +280,30 @@ func cmdXImpact(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.XImpactJSON(query.XImpact(st, pos[0], ref)))
+}
+
+// cmdInvestigate answers a natural-language question with one cited dossier of
+// the most relevant symbols across the fleet. Prints the markdown dossier
+// (--json for the structured form).
+func cmdInvestigate(args []string) {
+	var budget int
+	var asJSON bool
+	pos := parseCmd("investigate", "investigate <question...> [--budget N] [--json]", args, func(fs *flag.FlagSet) {
+		fs.IntVar(&budget, "budget", 0, "token budget (default ~4000)")
+		fs.BoolVar(&asJSON, "json", false, "emit structured JSON instead of the markdown dossier")
+	})
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite investigate <question...> [--budget N] [--json]"))
+	}
+	question := strings.Join(pos, " ")
+	st := openStore(".")
+	defer st.Close()
+	res := query.Investigate(st, query.FleetRepo, "HEAD", question, budget)
+	if asJSON {
+		printJSON(interfaces.InvestigateJSON(res))
+		return
+	}
+	fmt.Println(res.Dossier)
 }
 
 // cmdBlastRadius fuses in-repo callers, fleet callers, covering tests, and

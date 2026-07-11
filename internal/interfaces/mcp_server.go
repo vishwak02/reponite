@@ -95,6 +95,12 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithDescription("Cross-repo impact: who across every indexed repo calls this (external) symbol — the question before changing an exported API. Source-call-graph, name-based (RPC invisible)."),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("restrict each repo to this ref (default: all indexed refs)"))))
+	add(mcp.NewTool("reponite_investigate",
+		mcp.WithDescription("Ask a natural-language question about the code (\"how does X work?\", \"where is the picking workflow?\") and get ONE dense, cited dossier: the most relevant symbols across the whole fleet, each with a body preview and its callers/callees, budget-filled. Start here to understand a feature — it replaces the semsearch→brief→context loop."),
+		mcp.WithString("question", mcp.Required(), mcp.Description("what you want to understand, in plain language")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("budget", mcp.Description("token budget for the dossier (default ~4000)"))))
 	add(mcp.NewTool("reponite_blast_radius",
 		mcp.WithDescription("Pre-edit macro: everything that could break if you change this symbol, in one call — in-repo callers, cross-repo (fleet) callers, covering tests, and whether the API contract already moved across refs. Call this BEFORE editing a load-bearing symbol."),
 		mcp.WithString("symbol", mcp.Required()),
