@@ -33,7 +33,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "repos", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "repos", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
@@ -78,6 +78,7 @@ index-backed (build with `+"`make cli`"+`):
   ci-check --base <ref> --head <ref>   exit non-zero on any exported API break (PR gate)
   ximpact <symbol> [--ref R]   who across every indexed repo calls this external symbol
   blast-radius <symbol> [ref]  pre-edit dossier: in-repo + fleet callers, covering tests, cross-ref contract
+  usages <symbol>      every call site fleet-wide (line + enclosing fn + call-graph confirmation)
   repos                fleet overview: every indexed repo with its module + per-ref stats
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search

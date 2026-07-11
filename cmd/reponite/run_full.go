@@ -37,6 +37,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdXImpact(args)
 	case "blast-radius":
 		cmdBlastRadius(args)
+	case "usages":
+		cmdUsages(args)
 	case "repos":
 		cmdRepos(args)
 	case "semsearch":
@@ -316,6 +318,18 @@ func cmdBlastRadius(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(st, repoName("."), arg(pos, 1, "HEAD"), pos[0])))
+}
+
+// cmdUsages lists every call site of a symbol (fleet-wide), each with its line
+// and whether it's a confirmed call-graph caller.
+func cmdUsages(args []string) {
+	pos := parseCmd("usages", "usages <symbol>", args, nil)
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite usages <symbol>"))
+	}
+	st := openStore(".")
+	defer st.Close()
+	printJSON(interfaces.UsagesJSON(query.Usages(st, query.FleetRepo, "HEAD", pos[0])))
 }
 
 // cmdRepos lists every indexed repo with its module + per-ref stats.

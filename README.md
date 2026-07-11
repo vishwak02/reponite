@@ -104,11 +104,15 @@ reponite ximpact getUserV2
 - 🔍 **Compatibility Oracle** — `absent` / `shape_changed` / `behavior_changed` / `compatible` across every indexed ref and repo, with honest confidence scores
 - 🧬 **Root-cause drill-down** — walks a behavior change to its exact mutation site; can be seeded directly from a pasted stack trace
 - 📦 **Editing brief** — one token-budgeted bundle (body + callees + callers + tests + compat snapshot) replacing 5–6 file reads for an agent
-- 🌐 **Cross-repo impact** — who across the fleet calls a symbol, and whether their expected contract still matches
-- 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (no model needed) → compat
-- 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break, drops straight into a PR workflow
+- 🌐 **Cross-repo impact** — who across the fleet calls a symbol, and whether their expected contract still matches (module-path precise)
+- 🧭 **Investigate** — ask "how does X work?" in plain language, get one cited dossier of the relevant symbols fleet-wide (replaces the search→brief→context loop)
+- 🎯 **Usages** — every call site of a symbol with its exact line + enclosing function, cross-checked against the call graph (`confirmed` vs lexical)
+- 💥 **Blast radius** — before an edit, the in-repo + fleet callers, covering tests, and cross-ref contract state in one call
+- 🚀 **Fleet-aware** — mount many repos at once; `search`/`grep`/`semsearch` default fleet-wide, and misses return "did you mean …?" instead of empty
+- 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (IDF-ranked, no model needed) → compat
+- 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break (per-language "exported" rule), drops straight into a PR workflow
 - 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, and **ROS** interface files (`.msg`/`.srv`/`.action`)
-- 📡 **Four surfaces** — CLI · MCP server (11 tools) · web dashboard · VS Code extension
+- 📡 **Four surfaces** — CLI · MCP server (15 tools) · web dashboard · VS Code extension
 
 ---
 
@@ -153,7 +157,7 @@ reponite setup .   # register as MCP server (Claude, Cursor, Windsurf, ...)
 reponite mcp .     # what the agent runs — auto-indexes HEAD on first mount
 ```
 
-**Tools:** `search` · `grep` · `compat` · `context` · `diff` · `rootcause` · `rootcause_trace` · `brief` · `ximpact` · `semsearch` · `refs`
+**Tools:** `investigate` · `search` · `semsearch` · `grep` · `usages` · `context` · `brief` · `compat` · `diff` · `rootcause` · `rootcause_trace` · `ximpact` · `blast_radius` · `repos` · `refs`
 
 Every response is **token-budgeted** and carries a `_meta` envelope with confidence, freshness, and provenance — the agent always knows how much to trust it.
 
