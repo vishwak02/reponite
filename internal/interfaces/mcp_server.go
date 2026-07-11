@@ -101,6 +101,11 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
 		mcp.WithString("budget", mcp.Description("token budget for the dossier (default ~4000)"))))
+	add(mcp.NewTool("reponite_usages",
+		mcp.WithDescription("Every call site of a symbol across the fleet — the exact calling line, its file:line, and the enclosing function — with `confirmed` when that function is a resolved caller in the call graph (vs a lexical match in a comment/string or a dynamic call). Use before changing a signature to see how it's actually called."),
+		mcp.WithString("symbol", mcp.Required()),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("ref", mcp.Description("default HEAD"))))
 	add(mcp.NewTool("reponite_blast_radius",
 		mcp.WithDescription("Pre-edit macro: everything that could break if you change this symbol, in one call — in-repo callers, cross-repo (fleet) callers, covering tests, and whether the API contract already moved across refs. Call this BEFORE editing a load-bearing symbol."),
 		mcp.WithString("symbol", mcp.Required()),

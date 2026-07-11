@@ -505,6 +505,37 @@ func InvestigateJSON(r query.InvestigateResult) (string, error) {
 	return marshal(dto)
 }
 
+type usageDTO struct {
+	Repo      string `json:"repo,omitempty"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Text      string `json:"text"`
+	In        string `json:"in,omitempty"`
+	Confirmed bool   `json:"confirmed"`
+}
+
+type usagesDTO struct {
+	Symbol string     `json:"symbol"`
+	Total  int        `json:"total"`
+	Usages []usageDTO `json:"usages"`
+	Note   string     `json:"note,omitempty"`
+	Meta   metaDTO    `json:"_meta"`
+}
+
+// UsagesJSON renders the call sites of a symbol (each with its calling line,
+// enclosing function, and call-graph confirmation).
+func UsagesJSON(r query.UsagesResult) (string, error) {
+	dto := usagesDTO{
+		Symbol: r.Symbol, Total: r.Total, Note: r.Note,
+		Usages: make([]usageDTO, 0, len(r.Usages)),
+		Meta:   metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, u := range r.Usages {
+		dto.Usages = append(dto.Usages, usageDTO{Repo: u.Repo, Path: u.Path, Line: u.Line, Text: u.Text, In: u.In, Confirmed: u.Confirmed})
+	}
+	return marshal(dto)
+}
+
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {

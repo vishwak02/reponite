@@ -52,6 +52,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/ximpact", h.apiXImpact)
 	mux.HandleFunc("/api/blast_radius", h.apiBlastRadius)
 	mux.HandleFunc("/api/investigate", h.apiInvestigate)
+	mux.HandleFunc("/api/usages", h.apiUsages)
 	return mux
 }
 
@@ -133,6 +134,17 @@ func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := SearchJSON(hits)
+	writeJSON(w, body, err)
+}
+
+// apiUsages returns every call site of a symbol, call-graph-confirmed.
+func (h *WebHandler) apiUsages(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = query.FleetRepo
+	}
+	body, err := UsagesJSON(query.Usages(h.Store, repo, h.refOr(r), q.Get("symbol")))
 	writeJSON(w, body, err)
 }
 

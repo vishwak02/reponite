@@ -91,6 +91,8 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return BriefJSON(query.Brief(t.Store, repo, ref, args["symbol"], budget, t.Intent))
 	case "reponite_ximpact":
 		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
+	case "reponite_usages":
+		return UsagesJSON(query.Usages(t.Store, discoverRepo, ref, args["symbol"]))
 	case "reponite_blast_radius":
 		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
 			return notFound("symbol", args["symbol"])
