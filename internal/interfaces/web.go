@@ -32,6 +32,9 @@ type WebHandler struct {
 	Repo       string
 	Intent     query.IntentProvider
 	RepoStores map[string]query.Store
+	// ParseSymbols parses proposed file content for /api/verify_edit (injected by
+	// the tree-sitter serve command; nil otherwise).
+	ParseSymbols func(path, content string) []query.EditedSymbol
 }
 
 // Routes returns the handler's mux (dashboard at /, JSON under /api/*).
@@ -54,6 +57,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/investigate", h.apiInvestigate)
 	mux.HandleFunc("/api/usages", h.apiUsages)
 	mux.HandleFunc("/api/topics", h.apiTopics)
+	mux.HandleFunc("/api/verify_edit", h.apiVerifyEdit)
 	return mux
 }
 
@@ -135,6 +139,29 @@ func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := SearchJSON(hits)
+	writeJSON(w, body, err)
+}
+
+// apiVerifyEdit reports what breaks if the posted content replaces path.
+func (h *WebHandler) apiVerifyEdit(w http.ResponseWriter, r *http.Request) {
+	if h.ParseSymbols == nil {
+		http.Error(w, "verify_edit needs the tree-sitter build", http.StatusNotImplemented)
+		return
+	}
+	q := r.URL.Query()
+	repo, ref := h.repoOr(r), h.refOr(r)
+	path := q.Get("path")
+	newContent := r.FormValue("content") // body param (POST) or query
+	var oldContent string
+	for _, f := range h.Store.Files(repo, ref) {
+		if f.Path == path {
+			oldContent = f.Content
+			break
+		}
+	}
+	old := h.ParseSymbols(path, oldContent)
+	nw := h.ParseSymbols(path, newContent)
+	body, err := VerifyEditJSON(query.VerifyEdit(h.Store, repo, ref, path, old, nw))
 	writeJSON(w, body, err)
 }
 

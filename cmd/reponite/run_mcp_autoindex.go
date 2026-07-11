@@ -16,6 +16,14 @@ import (
 // reponite_brief (real under the treesitter tag; see the stub for other builds).
 func newIntentProvider(dir string) query.IntentProvider { return processing.NewGitIntent(dir) }
 
+// newSymbolParser lets the MCP server parse proposed file content for
+// reponite_verify_edit (real under the treesitter tag; nil in the stub).
+func newSymbolParser() func(path, content string) []query.EditedSymbol {
+	return func(path, content string) []query.EditedSymbol {
+		return processing.ParseEditedSymbols(path, content, version.NormVer)
+	}
+}
+
 // autoIndexOnMount keeps a mounted MCP server's index current. With no index yet
 // it indexes HEAD synchronously, so the first tool calls aren't silently empty.
 // If an index already exists (e.g. from a prior session) it refreshes HEAD in

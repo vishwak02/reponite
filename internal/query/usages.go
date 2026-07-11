@@ -70,9 +70,13 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 		res.Note = "usage search failed: " + err.Error()
 		return res
 	}
+	// A line that DECLARES the target (keyword-based langs), so its own definition
+	// isn't reported as a usage of itself. Requires the name right after the
+	// keyword (+ optional Go receiver), so a one-line `func f(){ x.name() }`
+	// counts as a call, not a definition.
+	defRe := regexp.MustCompile(`\b(func|def|fn|function)\b\s+(\([^)]*\)\s*)?` + regexp.QuoteMeta(base) + `\s*[(<]`)
 	for _, m := range g.Matches {
-		// Skip the definition line itself (e.g. `func name(` / `def name(`).
-		if isDefinitionLine(m.Text, base) {
+		if defRe.MatchString(m.Text) {
 			continue
 		}
 		u := Usage{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: strings.TrimSpace(m.Text), In: m.Symbol}
@@ -103,16 +107,4 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 	res.Total = len(res.Usages)
 	res.Note = "call sites by name; `confirmed` = the enclosing function is a resolved caller in the call graph (unconfirmed = comment/string/other-scope or a dynamic call the static graph can't see)"
 	return res
-}
-
-// isDefinitionLine reports whether a matched line is the target's own
-// declaration (so the def isn't reported as a usage of itself).
-func isDefinitionLine(line, name string) bool {
-	t := strings.TrimSpace(line)
-	for _, kw := range []string{"func ", "def ", "function "} {
-		if strings.HasPrefix(t, kw) && strings.Contains(t, name) {
-			return true
-		}
-	}
-	return false
 }

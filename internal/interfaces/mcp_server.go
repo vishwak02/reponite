@@ -101,6 +101,12 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
 		mcp.WithString("budget", mcp.Description("token budget for the dossier (default ~4000)"))))
+	add(mcp.NewTool("reponite_verify_edit",
+		mcp.WithDescription("Pre-commit safety check: pass a file path + your PROPOSED new content, and get back what breaks BEFORE saving/compiling — every symbol whose signature you changed or removed, with the exact call sites (fleet-wide) that rely on it. `safe:true` means no confirmed caller breaks. Call this after editing a shared symbol."),
+		mcp.WithString("path", mcp.Required(), mcp.Description("repo-relative path of the file you're editing")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("the full proposed new content of that file")),
+		mcp.WithString("repo", mcp.Description("repo that owns the file (defaults to current)")),
+		mcp.WithString("ref", mcp.Description("baseline ref (default HEAD)"))))
 	add(mcp.NewTool("reponite_usages",
 		mcp.WithDescription("Every call site of a symbol across the fleet — the exact calling line, its file:line, and the enclosing function — with `confirmed` when that function is a resolved caller in the call graph (vs a lexical match in a comment/string or a dynamic call). Use before changing a signature to see how it's actually called."),
 		mcp.WithString("symbol", mcp.Required()),

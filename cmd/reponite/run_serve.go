@@ -11,6 +11,7 @@ import (
 	"github.com/vishwak02/reponite/internal/processing"
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
+	"github.com/vishwak02/reponite/internal/version"
 )
 
 // serveCommand starts the read-only web dashboard + JSON API. With one dir it
@@ -43,7 +44,12 @@ func serveCommand(args []string) {
 	if len(stores) > 1 {
 		store = storage.NewMultiStore(stores...)
 	}
-	h := &interfaces.WebHandler{Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0]), RepoStores: repoStores}
+	h := &interfaces.WebHandler{
+		Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0]), RepoStores: repoStores,
+		ParseSymbols: func(path, content string) []query.EditedSymbol {
+			return processing.ParseEditedSymbols(path, content, version.NormVer)
+		},
+	}
 	fmt.Printf("reponite serve: http://%s  (repos %v)\n", addr, repos)
 	if err := http.ListenAndServe(addr, h.Routes()); err != nil {
 		fail(err)

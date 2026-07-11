@@ -18,6 +18,10 @@ type ToolServer struct {
 	Store  query.Store
 	Repo   string
 	Intent query.IntentProvider
+	// ParseSymbols parses a file's content into its symbols for reponite_verify_edit.
+	// Injected by the tree-sitter build (nil otherwise, so verify_edit reports it's
+	// unavailable rather than failing) — keeps this dispatch layer pure (ADR-018).
+	ParseSymbols func(path, content string) []query.EditedSymbol
 }
 
 // Call dispatches a tool by name; args are string-valued (as MCP delivers them).
@@ -98,6 +102,21 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 			return TopicsJSON(query.Topic(t.Store, discoverRepo, ref, topic))
 		}
 		return TopicsJSON(query.CommGraph(t.Store, discoverRepo, ref))
+	case "reponite_verify_edit":
+		if t.ParseSymbols == nil {
+			return "", fmt.Errorf("verify_edit needs the tree-sitter build (make cli)")
+		}
+		path := args["path"]
+		var oldContent string
+		for _, f := range t.Store.Files(repo, ref) {
+			if f.Path == path {
+				oldContent = f.Content
+				break
+			}
+		}
+		old := t.ParseSymbols(path, oldContent)
+		nw := t.ParseSymbols(path, args["content"])
+		return VerifyEditJSON(query.VerifyEdit(t.Store, repo, ref, path, old, nw))
 	case "reponite_blast_radius":
 		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
 			return notFound("symbol", args["symbol"])

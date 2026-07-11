@@ -41,6 +41,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdUsages(args)
 	case "topics":
 		cmdTopics(args)
+	case "verify-edit":
+		cmdVerifyEdit(args)
 	case "repos":
 		cmdRepos(args)
 	case "semsearch":
@@ -320,6 +322,34 @@ func cmdBlastRadius(args []string) {
 	st := openStore(".")
 	defer st.Close()
 	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(st, repoName("."), arg(pos, 1, "HEAD"), pos[0])))
+}
+
+// cmdVerifyEdit compares the (edited) working-tree file at path against its
+// indexed version and reports what breaks — the pre-commit safety check. The
+// path must be repo-relative (as indexed).
+func cmdVerifyEdit(args []string) {
+	pos := parseCmd("verify-edit", "verify-edit <path>", args, nil)
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite verify-edit <path>   (path relative to the repo, as indexed)"))
+	}
+	path := pos[0]
+	newContent, err := os.ReadFile(path)
+	if err != nil {
+		fail(err)
+	}
+	st := openStore(".")
+	defer st.Close()
+	repo := repoName(".")
+	var oldContent string
+	for _, f := range st.Files(repo, "HEAD") {
+		if f.Path == path {
+			oldContent = f.Content
+			break
+		}
+	}
+	old := processing.ParseEditedSymbols(path, oldContent, version.NormVer)
+	nw := processing.ParseEditedSymbols(path, string(newContent), version.NormVer)
+	printJSON(interfaces.VerifyEditJSON(query.VerifyEdit(st, repo, "HEAD", path, old, nw)))
 }
 
 // cmdUsages lists every call site of a symbol (fleet-wide), each with its line

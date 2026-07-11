@@ -6,12 +6,13 @@
 > MCP MultiStore) with fleet-wide `search`/`grep`/`semsearch` + self-healing "did you mean" (§ agent
 > UX), **`reponite_repos`** (fleet orientation), **`reponite_blast_radius`** (pre-edit macro),
 > **`reponite_investigate`** (one cited dossier answering "how does X work?", §2),
-> **`reponite_usages`** (call sites with lines, graph-verified), and **`reponite_topics`** (§8D —
-> ROS protocol-aware topic/action edges: publishers ↔ subscribers linked by name across the fleet,
-> the runtime graph the call graph can't see). Intent linkage (§8A.6) ships as a
-> git-blame provider. Deferred: a persistent cross-run `global.db` registry (the `serve`/`mcp`
-> MultiStore aggregates a multi-dir fleet today), per-caller signature-skew,
-> a `verify_edit` shadow index, a neural embedder behind the `Embedder` seam,
+> **`reponite_usages`** (call sites with lines, graph-verified), **`reponite_verify_edit`** (§3
+> read/write loop — what breaks if you save a proposed edit, before compiling), and
+> **`reponite_topics`** (§8D — ROS protocol-aware topic/action edges: publishers ↔ subscribers
+> linked by name across the fleet, the runtime graph the call graph can't see). Intent linkage
+> (§8A.6) ships as a git-blame provider. Deferred: a persistent cross-run `global.db` registry (the
+> `serve`/`mcp` MultiStore aggregates a multi-dir fleet today), per-caller signature-skew,
+> a neural embedder behind the `Embedder` seam,
 > and SCIP-grade
 > cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
