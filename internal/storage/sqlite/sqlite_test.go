@@ -123,6 +123,28 @@ func TestSQLiteClearRef(t *testing.T) {
 	}
 }
 
+// DBStats exposes the physical index for the dashboard's database view: the
+// file path and per-table row counts.
+func TestSQLiteDBStats(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.Put("r", "HEAD", "r.A", rec("a", "s", "b", 1, "B"))
+	st.Put("r", "HEAD", "r.B", rec("b", "s", "b", 1))
+	path, tables := st.DBStats()
+	if path != ":memory:" {
+		t.Fatalf("DBStats path = %q, want :memory:", path)
+	}
+	if tables["ref_history"] != 2 {
+		t.Fatalf("ref_history rows = %d, want 2 (%v)", tables["ref_history"], tables)
+	}
+	if _, ok := tables["external_refs"]; !ok {
+		t.Fatal("DBStats must report every index table, including external_refs")
+	}
+}
+
 // External refs + module_path survive a store round-trip and drive the
 // module-resolved half of ximpact (§8B). ClearRef drops a ref's external refs.
 func TestSQLiteExternalRefsAndModulePath(t *testing.T) {

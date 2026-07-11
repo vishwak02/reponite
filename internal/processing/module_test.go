@@ -34,6 +34,16 @@ func TestDetectModulePath(t *testing.T) {
 			want:  "com.acme:billing",
 		},
 		{
+			name:  "Cargo.toml package name",
+			files: map[string][]byte{"Cargo.toml": []byte("[package]\nname = \"acme-rs\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n")},
+			want:  "acme-rs",
+		},
+		{
+			name:  "catkin/ROS package.xml name",
+			files: map[string][]byte{"package.xml": []byte("<?xml version=\"1.0\"?>\n<package format=\"2\">\n  <name>rr_pa_amr_bringup</name>\n  <version>0.1.0</version>\n</package>\n")},
+			want:  "rr_pa_amr_bringup",
+		},
+		{
 			name:  "none",
 			files: map[string][]byte{"README.md": []byte("hi")},
 			want:  "",

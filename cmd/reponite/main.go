@@ -33,11 +33,11 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "rootcause", "rootcause-trace", "ci-check", "ximpact", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "repos", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
-		notImplemented(os.Args[1])
+		planned(os.Args[1])
 	default:
 		fmt.Fprintf(os.Stderr, "reponite: unknown command %q\n\n", os.Args[1])
 		usage()
@@ -45,9 +45,19 @@ func main() {
 	}
 }
 
+// notImplemented is for a command that IS built but needs the adapter build tags
+// (the default, dependency-free binary stubs the index-backed commands).
 func notImplemented(cmd string) {
 	fmt.Fprintf(os.Stderr, "reponite %s: requires the index backend — build with the sqlite/treesitter/mcp tags (`make cli`).\n", cmd)
 	fmt.Fprintln(os.Stderr, "Try `reponite demo` for an in-memory end-to-end run. See PROGRESS.md.")
+	os.Exit(3)
+}
+
+// planned is for a command that is on the roadmap but not implemented in any
+// build yet — distinct from notImplemented, so `make cli` is not a false remedy.
+func planned(cmd string) {
+	fmt.Fprintf(os.Stderr, "reponite %s: not implemented yet (planned command). This is not a build-tag gap — the command has no implementation in any build.\n", cmd)
+	fmt.Fprintln(os.Stderr, "Run `reponite help` to see what's available today. Track the roadmap in docs/BUILD_PLAN.md.")
 	os.Exit(3)
 }
 
@@ -61,15 +71,18 @@ available in any build:
   demo                 in-memory end-to-end run (compat / rootcause / grep as JSON)
 
 index-backed (build with `+"`make cli`"+`):
-  index <dir> [ref]    index a repo's Go files at a ref (working tree)
+  index <dir> [ref]    index a repo's source files at a ref (working tree)
   index --git <rev> [dir]   index a git revision's tree (tag/branch/SHA/HEAD~3) with its real commit
   compat <symbol> [ref]   compatibility verdicts across the repo's other refs
   diff <from> <to> [--changed-only] [--package P] [--confidence-min F]   symbol delta between two refs
   ci-check --base <ref> --head <ref>   exit non-zero on any exported API break (PR gate)
   ximpact <symbol> [--ref R]   who across every indexed repo calls this external symbol
+  blast-radius <symbol> [ref]  pre-edit dossier: in-repo + fleet callers, covering tests, cross-ref contract
+  repos                fleet overview: every indexed repo with its module + per-ref stats
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
   semsearch <query> [ref] [--limit N]   semantic search ("where is the thing that does X")
+  investigate <question...> [--budget N] [--json]   one cited dossier answering "how does X work?" (fleet-wide)
   context <symbol> [ref]  direct callers/callees, each edge with resolution_method + confidence
   rootcause <symbol> <from> <to>   drill a behavior change down to its mutation sites
   rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace

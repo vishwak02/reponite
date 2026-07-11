@@ -5,6 +5,8 @@ package interfaces
 
 import (
 	"encoding/json"
+	"sort"
+	"strconv"
 
 	"github.com/vishwak02/reponite/internal/query"
 )
@@ -116,6 +118,7 @@ func RootCauseJSON(r query.RootCauseResult) (string, error) {
 }
 
 type matchDTO struct {
+	Repo   string `json:"repo,omitempty"`
 	Path   string `json:"path"`
 	Line   int    `json:"line"`
 	Text   string `json:"text"`
@@ -134,7 +137,7 @@ type grepDTO struct {
 func GrepJSON(r query.GrepResult) (string, error) {
 	dto := grepDTO{Total: r.Total, Truncated: r.Truncated, Scanned: r.Scanned, Note: r.Note}
 	for _, m := range r.Matches {
-		dto.Matches = append(dto.Matches, matchDTO{Path: m.Path, Line: m.Line, Text: m.Text, Symbol: m.Symbol})
+		dto.Matches = append(dto.Matches, matchDTO{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: m.Text, Symbol: m.Symbol})
 	}
 	return marshal(dto)
 }
@@ -304,7 +307,58 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 	return marshal(dto)
 }
 
+type blastCompatDTO struct {
+	Ref        string  `json:"ref"`
+	Verdict    string  `json:"verdict"`
+	Confidence float64 `json:"confidence"`
+}
+
+type blastDTO struct {
+	Symbol          string             `json:"symbol"`
+	Repo            string             `json:"repo"`
+	Summary         string             `json:"summary"`
+	Modules         []string           `json:"modules,omitempty"`
+	ContractChanged bool               `json:"contract_changed"`
+	Definitions     []ximpactDefDTO    `json:"definitions,omitempty"`
+	InRepoCallers   []string           `json:"in_repo_callers"`
+	FleetCallers    []ximpactCallerDTO `json:"fleet_callers"`
+	CoveringTests   []string           `json:"covering_tests"`
+	Compat          []blastCompatDTO   `json:"compat_across_refs,omitempty"`
+	Note            string             `json:"note,omitempty"`
+	Meta            metaDTO            `json:"_meta"`
+}
+
+// BlastRadiusJSON renders the pre-edit impact dossier (§2): everything that
+// could break if the symbol changes, in one payload.
+func BlastRadiusJSON(r query.BlastRadiusResult) (string, error) {
+	dto := blastDTO{
+		Symbol: r.Symbol, Repo: r.Repo, Summary: r.Summary, Modules: r.Modules,
+		ContractChanged: r.ContractChanged, Note: r.Note,
+		InRepoCallers: nonNil(r.InRepoCallers), CoveringTests: nonNil(r.CoveringTests),
+		FleetCallers: make([]ximpactCallerDTO, 0, len(r.FleetCallers)),
+		Meta:         metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, c := range r.FleetCallers {
+		dto.FleetCallers = append(dto.FleetCallers, ximpactCallerDTO{Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Module: c.Module, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
+	}
+	for _, d := range r.Definitions {
+		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash})
+	}
+	for _, v := range r.Compat {
+		dto.Compat = append(dto.Compat, blastCompatDTO{Ref: v.Ref, Verdict: string(v.Verdict), Confidence: v.Confidence})
+	}
+	return marshal(dto)
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
 type semanticHitDTO struct {
+	Repo   string  `json:"repo,omitempty"`
 	Path   string  `json:"path"`
 	Symbol string  `json:"symbol"`
 	Line   int     `json:"line"`
@@ -319,25 +373,149 @@ func ReposJSON(repos []string) (string, error) {
 	return marshal(map[string][]string{"repos": repos})
 }
 
+type suggestionDTO struct {
+	Repo string `json:"repo,omitempty"`
+	Name string `json:"name"`
+}
+
+// SuggestJSON renders a self-healing "not found" envelope: instead of an empty
+// result, the tool tells the agent the query missed and offers the nearest
+// indexed names (fleet-wide), each with its repo — so it can retry precisely
+// (§ agent-optimized UX). kind labels what was being looked up ("symbol"/"search").
+func SuggestJSON(kind, query string, suggestions []query.SearchHit) (string, error) {
+	sug := make([]suggestionDTO, 0, len(suggestions))
+	for _, s := range suggestions {
+		sug = append(sug, suggestionDTO{Repo: s.Repo, Name: s.Name})
+	}
+	msg := "no " + kind + " matched " + strconv.Quote(query)
+	if len(sug) > 0 {
+		msg += " — did you mean one of these?"
+	} else {
+		msg += " and nothing similar is indexed"
+	}
+	return marshal(map[string]interface{}{
+		"found":        false,
+		"query":        query,
+		"message":      msg,
+		"did_you_mean": sug,
+	})
+}
+
+type dbTableDTO struct {
+	Name string `json:"name"`
+	Rows int64  `json:"rows"`
+}
+
+type refStatDTO struct {
+	Ref     string `json:"ref"`
+	Commit  string `json:"commit,omitempty"`
+	Symbols int    `json:"symbols"`
+	Edges   int    `json:"edges"`
+	Files   int    `json:"files"`
+}
+
+type repoOverviewDTO struct {
+	Repo   string       `json:"repo"`
+	Module string       `json:"module,omitempty"`
+	DBPath string       `json:"db_path,omitempty"`
+	Tables []dbTableDTO `json:"tables,omitempty"`
+	Refs   []refStatDTO `json:"refs"`
+}
+
+// OverviewJSON renders the index summary for every repo (the dashboard's
+// Overview/database view): per-ref logical stats from query.Overview, enriched
+// with each repo's physical database path + per-table row counts via dbFor
+// (nil-safe — the in-memory store has no file, so those fields are omitted).
+func OverviewJSON(ovs []query.RepoOverview, dbFor func(repo string) (string, map[string]int64)) (string, error) {
+	repos := make([]repoOverviewDTO, 0, len(ovs))
+	for _, ov := range ovs {
+		dto := repoOverviewDTO{Repo: ov.Repo, Module: ov.Module, Refs: make([]refStatDTO, 0, len(ov.Refs))}
+		for _, rs := range ov.Refs {
+			dto.Refs = append(dto.Refs, refStatDTO{Ref: rs.Ref, Commit: rs.Commit, Symbols: rs.Symbols, Edges: rs.Edges, Files: rs.Files})
+		}
+		if dbFor != nil {
+			if path, tables := dbFor(ov.Repo); path != "" || len(tables) > 0 {
+				dto.DBPath = path
+				dto.Tables = sortedTables(tables)
+			}
+		}
+		repos = append(repos, dto)
+	}
+	return marshal(map[string][]repoOverviewDTO{"repos": repos})
+}
+
+// sortedTables renders table row-counts largest-first (the natural reading order
+// for the magnitude bars in the DB view).
+func sortedTables(counts map[string]int64) []dbTableDTO {
+	out := make([]dbTableDTO, 0, len(counts))
+	for name, rows := range counts {
+		out = append(out, dbTableDTO{Name: name, Rows: rows})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rows != out[j].Rows {
+			return out[i].Rows > out[j].Rows
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 // SemanticJSON renders semantic-search hits (ext §10A.2, the semantic rung).
 func SemanticJSON(hits []query.SemanticHit) (string, error) {
 	out := make([]semanticHitDTO, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, semanticHitDTO{Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
+		out = append(out, semanticHitDTO{Repo: h.Repo, Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
 	}
 	return marshal(out)
+}
+
+type investigateFindingDTO struct {
+	Repo    string   `json:"repo"`
+	Path    string   `json:"path"`
+	Symbol  string   `json:"symbol"`
+	Line    int      `json:"line"`
+	Score   float64  `json:"score"`
+	Preview string   `json:"preview,omitempty"`
+	Uses    []string `json:"uses,omitempty"`
+	UsedBy  []string `json:"used_by,omitempty"`
+}
+
+type investigateDTO struct {
+	Question string                  `json:"question"`
+	Dossier  string                  `json:"dossier"`
+	Findings []investigateFindingDTO `json:"findings"`
+	Omitted  int                     `json:"omitted"`
+	Meta     metaDTO                 `json:"_meta"`
+}
+
+// InvestigateJSON renders the investigate dossier: a dense markdown synthesis
+// (the primary agent-facing field) plus the structured findings behind it.
+func InvestigateJSON(r query.InvestigateResult) (string, error) {
+	dto := investigateDTO{
+		Question: r.Question, Dossier: r.Dossier, Omitted: r.Omitted,
+		Findings: make([]investigateFindingDTO, 0, len(r.Findings)),
+		Meta:     metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, f := range r.Findings {
+		dto.Findings = append(dto.Findings, investigateFindingDTO{
+			Repo: f.Repo, Path: f.Path, Symbol: f.Symbol, Line: f.Line, Score: f.Score,
+			Preview: f.Preview, Uses: f.Callees, UsedBy: f.Callers,
+		})
+	}
+	return marshal(dto)
 }
 
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {
+		Repo   string `json:"repo,omitempty"`
 		Name   string `json:"name"`
 		Ref    string `json:"ref"`
 		IsTest bool   `json:"is_test"`
 	}
 	out := make([]hitDTO, 0, len(hits))
 	for _, h := range hits {
-		out = append(out, hitDTO{Name: h.Name, Ref: h.Ref, IsTest: h.IsTest})
+		out = append(out, hitDTO{Repo: h.Repo, Name: h.Name, Ref: h.Ref, IsTest: h.IsTest})
 	}
 	return marshal(out)
 }

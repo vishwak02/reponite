@@ -14,7 +14,7 @@ clean:
 	rm -rf bin
 
 # Tree-sitter grammars (all subpackages of one module) shared by cli/treesitter/e2e:
-GRAMMARS = github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java
+GRAMMARS = github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java github.com/smacker/go-tree-sitter/c github.com/smacker/go-tree-sitter/cpp github.com/smacker/go-tree-sitter/rust
 
 # Version stamped into the binary (git tag/commit; falls back to the source default):
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)

@@ -78,6 +78,10 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 					nested = nameOf(child, r)
 				}
 				walk(child, nested)
+			case containsStr(r.ScopeDecl, t):
+				// A scope block (e.g. Rust `impl T`) qualifies its nested methods by
+				// its own name, but is not itself a symbol.
+				walk(child, nameOf(child, r))
 			default:
 				walk(child, enclosing)
 			}
@@ -154,19 +158,22 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 	}}
 }
 
-// calleesWithRules returns deduped callee names invoked in a body (name-based).
+// calleesWithRules returns deduped callee names invoked in a body (name-based),
+// derived from the same (qualifier, name) extraction qualifiedCallsWithRules uses
+// so the callee is the invoked member — not the receiver. This matters for
+// languages where the method name is the LAST identifier of the callee
+// expression rather than the first child: Java's flat method_invocation
+// (Bar.x() -> x) and C++/C member calls (obj.method()/ptr->m() -> method), whose
+// method name lives in a field_identifier (see CallNameTypes).
 func calleesWithRules(body content.AST, r LangRules) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, call := range descendantsAny(body, r.CallTypes) {
-		kids := call.Children()
-		if len(kids) == 0 {
+	for _, qc := range qualifiedCallsWithRules(body, r) {
+		if qc.Name == "" || seen[qc.Name] {
 			continue
 		}
-		if name := trailingIdent(kids[0], r.NameTypes); name != "" && !r.Builtins[name] && !seen[name] {
-			seen[name] = true
-			out = append(out, name)
-		}
+		seen[qc.Name] = true
+		out = append(out, qc.Name)
 	}
 	return out
 }
@@ -199,18 +206,30 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 	return out
 }
 
-// calleeIdents returns the name-type identifier leaves of a call's callee
+// calleeIdents returns the callee-name identifier leaves of a call's callee
 // expression, in source order, stopping at the argument list (so argument
 // identifiers and nested calls — handled by their own iteration — are excluded).
+// Uses CallNameTypes when set (e.g. C/C++ include field_identifier so a member
+// method resolves to its own name), else NameTypes.
 func calleeIdents(call content.AST, r LangRules) []string {
+	types := callNameTypes(r)
 	var ids []string
 	for _, c := range call.Children() {
 		if isArgNode(c.Type()) {
 			break
 		}
-		ids = append(ids, identLeaves(c, r.NameTypes)...)
+		ids = append(ids, identLeaves(c, types)...)
 	}
 	return ids
+}
+
+// callNameTypes is the node-type set for callee/member names: CallNameTypes if
+// the language sets it, else NameTypes.
+func callNameTypes(r LangRules) []string {
+	if len(r.CallNameTypes) > 0 {
+		return r.CallNameTypes
+	}
+	return r.NameTypes
 }
 
 // isArgNode reports whether a node type is a call's argument list. tree-sitter
@@ -252,7 +271,43 @@ func firstDescAny(n content.AST, types []string) content.AST {
 	return nil
 }
 
-func nameOf(n content.AST, r LangRules) string { return nameOfNode(n, r.NameTypes, r.NameByDesc) }
+func nameOf(n content.AST, r LangRules) string {
+	// A callable whose name is nested in a declarator (C/C++): the name is the
+	// last NameTypes leaf inside the declarator, excluding the parameter list —
+	// so a return type is skipped and a qualified name reduces to its last segment.
+	if len(r.DeclNameIn) > 0 {
+		if d := firstChildAny(n, r.DeclNameIn); d != nil {
+			if name := declaratorName(d, r); name != "" {
+				return name
+			}
+		}
+	}
+	return nameOfNode(n, r.NameTypes, r.NameByDesc)
+}
+
+// declaratorName returns the last NameTypes leaf inside a declarator, skipping
+// any parameter list (whose identifiers are parameter names, not the callable's).
+func declaratorName(d content.AST, r LangRules) string {
+	var ids []string
+	var walk func(content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			if strings.Contains(c.Type(), "parameter") {
+				continue // parameter_list / parameters: names within are params
+			}
+			if containsStr(r.NameTypes, c.Type()) {
+				ids = append(ids, c.Text())
+				continue
+			}
+			walk(c)
+		}
+	}
+	walk(d)
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[len(ids)-1]
+}
 
 func nameOfNode(n content.AST, types []string, byDesc bool) string {
 	var node content.AST
@@ -280,14 +335,6 @@ func descendantsAny(n content.AST, types []string) []content.AST {
 	}
 	walk(n)
 	return out
-}
-
-func trailingIdent(n content.AST, nameTypes []string) string {
-	ids := identLeaves(n, nameTypes)
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[len(ids)-1]
 }
 
 func identLeaves(n content.AST, nameTypes []string) []string {

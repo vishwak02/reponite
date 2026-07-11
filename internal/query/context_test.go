@@ -39,6 +39,24 @@ func TestContextExcludesTestCallers(t *testing.T) {
 	}
 }
 
+// An ambiguous bare symbol (several package-qualified ids share the base name)
+// must be surfaced in _meta.warnings, not silently resolved to one (invariant:
+// never lie; consistent with compat/rootcause).
+func TestContextWarnsOnAmbiguity(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "storage.Mem.Put", storage.SymbolRecord{})
+	m.Put("r", "HEAD", "storage/sqlite.Store.Put", storage.SymbolRecord{})
+	c := query.Context(m, "r", "HEAD", "Put", false)
+	if len(c.Meta.Warnings) == 0 {
+		t.Fatal("ambiguous \"Put\" must produce a warning")
+	}
+	// A uniquely-named symbol produces no ambiguity warning.
+	m.Put("r", "HEAD", "storage.Unique", storage.SymbolRecord{})
+	if w := query.Context(m, "r", "HEAD", "Unique", false).Meta.Warnings; len(w) != 0 {
+		t.Fatalf("unambiguous symbol must not warn: %v", w)
+	}
+}
+
 // Callee edges carry resolution provenance, not just names (invariant 5).
 func TestContextCalleeEdgesProvenance(t *testing.T) {
 	m := storage.NewMem()

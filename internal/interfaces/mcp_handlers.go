@@ -26,48 +26,84 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	if ref == "" {
 		ref = "HEAD"
 	}
+	repo := args["repo"]
+	if repo == "" {
+		repo = t.Repo
+	}
+	// Discovery tools ("where does X live?") default to fleet-wide when the agent
+	// doesn't name a repo — it usually doesn't know yet (§ boundary-less search).
+	// An explicit repo still scopes them.
+	discoverRepo := repo
+	if args["repo"] == "" {
+		discoverRepo = query.FleetRepo
+	}
 	includeTests := args["tests"] == "true"
+	// notFound returns a self-healing "did you mean" envelope (fleet-wide
+	// suggestions) instead of an empty result, so the agent can retry precisely.
+	notFound := func(kind, q string) (string, error) {
+		return SuggestJSON(kind, q, query.Suggest(t.Store, query.FleetRepo, ref, q, 6))
+	}
 	switch tool {
+	case "reponite_repos":
+		return OverviewJSON(query.Overview(t.Store), nil)
 	case "reponite_search":
-		return SearchJSON(query.SearchName(t.Store, t.Repo, ref, args["query"], includeTests))
+		hits := query.SearchName(t.Store, discoverRepo, ref, args["query"], includeTests)
+		if len(hits) == 0 {
+			return notFound("symbol", args["query"])
+		}
+		return SearchJSON(hits)
 	case "reponite_grep":
-		res, err := query.GrepRepo(t.Store, t.Repo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] != "false"})
+		res, err := query.GrepRepo(t.Store, discoverRepo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] != "false"})
 		if err != nil {
 			return "", err
 		}
 		return GrepJSON(res)
 	case "reponite_compat":
 		var targets []query.RepoRef
-		for _, r := range t.Store.Refs(t.Repo) {
+		for _, r := range t.Store.Refs(repo) {
 			if r != ref {
-				targets = append(targets, query.RepoRef{Repo: t.Repo, Ref: r})
+				targets = append(targets, query.RepoRef{Repo: repo, Ref: r})
 			}
 		}
-		rep, err := query.CompatSymbol(t.Store, query.RepoRef{Repo: t.Repo, Ref: ref}, args["symbol"], targets)
+		rep, err := query.CompatSymbol(t.Store, query.RepoRef{Repo: repo, Ref: ref}, args["symbol"], targets)
 		if err != nil {
 			return "", err
 		}
 		return CompatJSON(rep)
 	case "reponite_context":
-		return ContextJSON(query.Context(t.Store, t.Repo, ref, args["symbol"], includeTests))
+		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
+			return notFound("symbol", args["symbol"])
+		}
+		return ContextJSON(query.Context(t.Store, repo, ref, args["symbol"], includeTests))
 	case "reponite_diff":
 		min, _ := strconv.ParseFloat(args["confidence_min"], 64)
 		opt := query.DiffOptions{ChangedOnly: args["changed_only"] == "true", Package: args["package"], MinConfidence: min}
-		return DiffJSON(query.DiffRefsBy(t.Store, t.Repo, args["from"], args["to"], opt))
+		return DiffJSON(query.DiffRefsBy(t.Store, repo, args["from"], args["to"], opt))
 	case "reponite_rootcause":
-		return RootCauseJSON(query.RootCauseBy(t.Store, t.Repo, args["symbol"], args["from"], args["to"]))
+		return RootCauseJSON(query.RootCauseBy(t.Store, repo, args["symbol"], args["from"], args["to"]))
 	case "reponite_rootcause_trace":
-		return RootCauseTraceJSON(query.RootCauseTrace(t.Store, t.Repo, args["from"], args["to"], args["stacktrace"]))
+		return RootCauseTraceJSON(query.RootCauseTrace(t.Store, repo, args["from"], args["to"], args["stacktrace"]))
 	case "reponite_brief":
+		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
+			return notFound("symbol", args["symbol"])
+		}
 		budget, _ := strconv.Atoi(args["budget"])
-		return BriefJSON(query.Brief(t.Store, t.Repo, ref, args["symbol"], budget, t.Intent))
+		return BriefJSON(query.Brief(t.Store, repo, ref, args["symbol"], budget, t.Intent))
 	case "reponite_ximpact":
 		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
+	case "reponite_blast_radius":
+		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
+			return notFound("symbol", args["symbol"])
+		}
+		return BlastRadiusJSON(query.BlastRadius(t.Store, repo, ref, args["symbol"]))
 	case "reponite_semsearch":
 		limit, _ := strconv.Atoi(args["limit"])
-		return SemanticJSON(query.SemanticSearch(t.Store, t.Repo, ref, args["query"], limit, nil))
+		return SemanticJSON(query.SemanticSearch(t.Store, discoverRepo, ref, args["query"], limit, nil))
+	case "reponite_investigate":
+		budget, _ := strconv.Atoi(args["budget"])
+		return InvestigateJSON(query.Investigate(t.Store, discoverRepo, ref, args["question"], budget))
 	case "reponite_refs":
-		return RefsJSON(t.Repo, t.Store.Refs(t.Repo))
+		return RefsJSON(repo, t.Store.Refs(repo))
 	default:
 		return "", fmt.Errorf("unknown tool %q", tool)
 	}

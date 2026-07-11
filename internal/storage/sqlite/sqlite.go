@@ -24,7 +24,10 @@ import (
 var _ query.Store = (*Store)(nil)
 
 // Store is a SQLite-backed query.Store.
-type Store struct{ db *sql.DB }
+type Store struct {
+	db   *sql.DB
+	path string // on-disk path (":memory:" for tests), for the dashboard DB view
+}
 
 const schema = `
 PRAGMA journal_mode = WAL;
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS ref_history (
   present INTEGER NOT NULL DEFAULT 1,
   symbol_hash TEXT, signature_hash TEXT, behavior_hash TEXT, behavior_conf REAL,
   direct_conf REAL NOT NULL DEFAULT 1,
+  lang TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, ref, name)
 );
 CREATE INDEX IF NOT EXISTS idx_hist_symbol ON ref_history(repo, name);
@@ -97,12 +101,27 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	s := &Store{db: db}
+	s := &Store{db: db, path: path}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return s, nil
+}
+
+// DBStats reports the index database's file path and per-table row counts, for
+// the dashboard's index/database view — making the stored model tangible. The
+// counts are the physical persistence behind the logical query.Overview.
+func (s *Store) DBStats() (string, map[string]int64) {
+	tables := []string{"refs", "ref_history", "callees", "external_refs", "repo_modules", "file_blobs", "ref_files", "file_symbols", "manifest_blobs"}
+	counts := make(map[string]int64, len(tables))
+	for _, t := range tables {
+		var n int64
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + t).Scan(&n); err == nil {
+			counts[t] = n
+		}
+	}
+	return s.path, counts
 }
 
 // migrate applies additive schema changes introduced after the initial schema,
@@ -112,6 +131,7 @@ func (s *Store) migrate() error {
 	for _, stmt := range []string{
 		`ALTER TABLE callees ADD COLUMN resolution_method TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ref_history ADD COLUMN direct_conf REAL NOT NULL DEFAULT 1`,
+		`ALTER TABLE ref_history ADD COLUMN lang TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
@@ -173,12 +193,12 @@ func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf)
-		 VALUES(?,?,?,1,?,?,?,?,?)
+		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf, lang)
+		 VALUES(?,?,?,1,?,?,?,?,?,?)
 		 ON CONFLICT(repo, ref, name) DO UPDATE SET
 		   present=1, symbol_hash=excluded.symbol_hash, signature_hash=excluded.signature_hash,
-		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf`,
-		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf); err != nil {
+		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf, lang=excluded.lang`,
+		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf, rec.Lang); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -333,16 +353,17 @@ func (s *Store) Refs(repo string) []string {
 
 func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 	var present int
-	var sig, beh sql.NullString
+	var sig, beh, lang sql.NullString
 	var conf, dconf sql.NullFloat64
 	err := s.db.QueryRow(
-		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf FROM ref_history WHERE repo=? AND ref=? AND name=?`,
-		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf)
+		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang FROM ref_history WHERE repo=? AND ref=? AND name=?`,
+		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf, &lang)
 	if err != nil {
 		return query.SymbolRef{Present: false}, false
 	}
 	return query.SymbolRef{
 		Present:       present == 1,
+		Lang:          lang.String,
 		SignatureHash: content.Hash(sig.String),
 		BehaviorHash:  content.Hash(beh.String),
 		BehaviorConf:  conf.Float64,
@@ -353,7 +374,7 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	out := map[string]query.SymbolRef{}
 	rows, err := s.db.Query(
-		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf FROM ref_history WHERE repo=? AND ref=?`,
+		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang FROM ref_history WHERE repo=? AND ref=?`,
 		repo, ref)
 	if err != nil {
 		return out
@@ -362,16 +383,16 @@ func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	for rows.Next() {
 		var name string
 		var present int
-		var sig, beh sql.NullString
+		var sig, beh, lang sql.NullString
 		var conf, dconf sql.NullFloat64
-		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf) != nil {
+		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf, &lang) != nil {
 			continue
 		}
 		if present != 1 {
 			continue
 		}
 		out[name] = query.SymbolRef{
-			Present: true, SignatureHash: content.Hash(sig.String),
+			Present: true, Lang: lang.String, SignatureHash: content.Hash(sig.String),
 			BehaviorHash: content.Hash(beh.String), BehaviorConf: conf.Float64, DirectConf: dconf.Float64,
 		}
 	}

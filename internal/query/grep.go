@@ -60,8 +60,10 @@ type GrepOptions struct {
 	Limit int  // max matches returned (<=0 uses the default)
 }
 
-// Match is one hit, annotated with its enclosing symbol.
+// Match is one hit, annotated with its enclosing symbol. Repo is set on
+// fleet-wide greps (repo="*") so a hit stays attributable to its source repo.
 type Match struct {
+	Repo   string
 	Path   string
 	Line   int
 	Text   string

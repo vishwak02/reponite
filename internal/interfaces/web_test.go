@@ -44,6 +44,13 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(get("/"), "<title>reponite") {
 		t.Fatal("dashboard HTML not served at /")
 	}
+	// The embedded CSS/JS assets are served (proves //go:embed wired correctly).
+	if !strings.Contains(get("/style.css"), "--accent") {
+		t.Fatal("/style.css not served from embedded asset")
+	}
+	if !strings.Contains(get("/app.js"), "async function brief") {
+		t.Fatal("/app.js not served from embedded asset")
+	}
 	if !strings.Contains(get("/api/refs"), "HEAD") {
 		t.Fatal("/api/refs missing HEAD")
 	}
@@ -53,6 +60,11 @@ func TestWebHandler(t *testing.T) {
 	brief := get("/api/brief?symbol=Charge&ref=HEAD")
 	if !strings.Contains(brief, "billing.Charge") || !strings.Contains(brief, "func Charge()") {
 		t.Fatalf("/api/brief incomplete: %s", brief)
+	}
+	// Overview: per-repo/ref index stats (the Overview/database view's data).
+	ov := get("/api/overview")
+	if !strings.Contains(ov, "billing") || !strings.Contains(ov, "symbols") {
+		t.Fatalf("/api/overview incomplete: %s", ov)
 	}
 }
 

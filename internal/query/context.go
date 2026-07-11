@@ -4,7 +4,11 @@
 // in-sandbox (ADR-018).
 package query
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // CalleeEdge is one outgoing CALLS edge with its resolution provenance, so an
 // agent sees not just what a symbol calls but how confidently each edge is known
@@ -30,8 +34,14 @@ type ContextResult struct {
 // production navigation isn't cluttered with test functions.
 func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult {
 	sym := symbol
+	var warns []string
 	if names := ResolveSymbol(s, repo, ref, symbol); len(names) > 0 {
 		sym = names[0] // resolve bare -> package-qualified id
+		if len(names) > 1 {
+			// Surface ambiguity rather than silently analyzing one of several
+			// same-named symbols (consistent with compat/rootcause; invariant: never lie).
+			warns = append(warns, fmt.Sprintf("ambiguous %q; using %s (also: %s)", symbol, sym, strings.Join(names[1:], ", ")))
+		}
 	}
 	snap := s.Snapshot(repo, ref)
 	// Non-nil empty slices so absent neighbors marshal as [] not null (consistent
@@ -60,5 +70,5 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	sort.Strings(callers)
 	sort.Strings(callees)
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
-	return ContextResult{Symbol: sym, Ref: ref, Callers: callers, Callees: callees, CalleeEdges: edges, Meta: Meta{Repo: repo, Ref: ref}}
+	return ContextResult{Symbol: sym, Ref: ref, Callers: callers, Callees: callees, CalleeEdges: edges, Meta: Meta{Repo: repo, Ref: ref, Warnings: warns}}
 }
