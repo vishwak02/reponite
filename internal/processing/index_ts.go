@@ -103,6 +103,28 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 	return nil
 }
 
+// ParseEditedSymbols parses proposed file content and returns its symbols as
+// query.EditedSymbol (name + receiver + body-independent signature hash), for
+// reponite_verify_edit's diff against the indexed version. Repo is left empty so
+// an old-vs-new parse of the same file yields comparable signature hashes.
+// Returns nil for an unsupported/unparseable extension.
+func ParseEditedSymbols(path, src string, normVer int) []query.EditedSymbol {
+	rules, ok := RulesForExt(filepath.Ext(path))
+	if !ok {
+		return nil
+	}
+	root, _, err := parseFileRules([]byte(src), filepath.Ext(path), rules)
+	if err != nil || root == nil {
+		return nil
+	}
+	var out []query.EditedSymbol
+	for _, s := range Extract(root, rules, normVer) {
+		id := content.SymbolIdentity{Lang: rules.Name, Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
+		out = append(out, query.EditedSymbol{Name: s.Name, Recv: s.Recv, SignatureHash: content.SignatureHash(normVer, id)})
+	}
+	return out
+}
+
 // parseFileRules parses source with the grammar for ext, returning the
 // content.AST (for Extract) and the symbol line spans (for grep fusion).
 func parseFileRules(src []byte, ext string, r LangRules) (content.AST, []query.SymbolSpan, error) {

@@ -14,6 +14,10 @@ import (
 // omits the intent section rather than failing.
 func newIntentProvider(dir string) query.IntentProvider { return nil }
 
+// newSymbolParser is nil without the tree-sitter indexer; verify_edit then
+// reports it needs the full build rather than failing.
+func newSymbolParser() func(path, content string) []query.EditedSymbol { return nil }
+
 // autoIndexOnMount is a no-op in MCP builds without the tree-sitter indexer
 // (`-tags "sqlite mcp"`); it warns so an empty index isn't mistaken for a broken
 // server. Build with `make cli` (adds -tags treesitter) for index/refresh on mount.

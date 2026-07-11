@@ -6,10 +6,10 @@
 > MCP MultiStore) with fleet-wide `search`/`grep`/`semsearch` + self-healing "did you mean" (§ agent
 > UX), **`reponite_repos`** (fleet orientation), **`reponite_blast_radius`** (pre-edit macro),
 > **`reponite_investigate`** (one cited dossier answering "how does X work?", §2), and
-> **`reponite_usages`** (call sites with lines, graph-verified). Intent linkage (§8A.6) ships as a
+> **`reponite_usages`** (call sites with lines, graph-verified), and **`reponite_verify_edit`** (§3 read/write loop — what breaks if you save a proposed edit, before compiling). Intent linkage (§8A.6) ships as a
 > git-blame provider. Deferred: a persistent cross-run `global.db` registry (the `serve`/`mcp`
 > MultiStore aggregates a multi-dir fleet today), per-caller signature-skew, ROS protocol-aware
-> topic/action edges, a `verify_edit` shadow index, a neural embedder behind the `Embedder` seam,
+> topic/action edges, a neural embedder behind the `Embedder` seam,
 > and SCIP-grade
 > cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 

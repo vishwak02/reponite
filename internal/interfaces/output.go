@@ -536,6 +536,41 @@ func UsagesJSON(r query.UsagesResult) (string, error) {
 	return marshal(dto)
 }
 
+type editImpactDTO struct {
+	Symbol string     `json:"symbol"`
+	Kind   string     `json:"kind"`
+	Breaks []usageDTO `json:"breaks"`
+}
+
+type verifyDTO struct {
+	Path    string          `json:"path"`
+	Safe    bool            `json:"safe"`
+	Added   []string        `json:"added,omitempty"`
+	Removed []string        `json:"removed,omitempty"`
+	Changed []string        `json:"changed,omitempty"`
+	Impacts []editImpactDTO `json:"impacts"`
+	Note    string          `json:"note,omitempty"`
+	Meta    metaDTO         `json:"_meta"`
+}
+
+// VerifyEditJSON renders the pre-commit safety report for a proposed edit: what
+// changed and, for each breaking change, the confirmed call sites that break.
+func VerifyEditJSON(r query.VerifyResult) (string, error) {
+	dto := verifyDTO{
+		Path: r.Path, Safe: r.Safe, Added: r.Added, Removed: r.Removed, Changed: r.Changed, Note: r.Note,
+		Impacts: make([]editImpactDTO, 0, len(r.Impacts)),
+		Meta:    metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+	}
+	for _, im := range r.Impacts {
+		e := editImpactDTO{Symbol: im.Symbol, Kind: string(im.Kind), Breaks: make([]usageDTO, 0, len(im.Breaks))}
+		for _, u := range im.Breaks {
+			e.Breaks = append(e.Breaks, usageDTO{Repo: u.Repo, Path: u.Path, Line: u.Line, Text: u.Text, In: u.In, Confirmed: u.Confirmed})
+		}
+		dto.Impacts = append(dto.Impacts, e)
+	}
+	return marshal(dto)
+}
+
 // SearchJSON renders structural name-search hits.
 func SearchJSON(hits []query.SearchHit) (string, error) {
 	type hitDTO struct {
