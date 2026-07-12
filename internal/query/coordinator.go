@@ -164,9 +164,22 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 		}
 		return res, nil
 	}
+	// Fleet paging: the merged window is [Offset, Offset+Limit) over the
+	// GLOBAL (repo, path, line) order. Each repo is asked for its first
+	// Offset+Limit matches (offset 0) — a superset of what the global window
+	// can draw from that repo — then the window is applied to the merge.
+	if opt.Offset < 0 {
+		opt.Offset = 0
+	}
+	sub := opt
+	sub.Offset = 0
+	limit := effectiveLimit(opt.Limit)
+	if limit >= 0 {
+		sub.Limit = opt.Offset + limit
+	}
 	var out GrepResult
 	for _, rp := range repos {
-		res, err := BuildTrigramIndex(s.Files(rp, ref)).Grep(pattern, opt)
+		res, err := BuildTrigramIndex(s.Files(rp, ref)).Grep(pattern, sub)
 		if err != nil {
 			return GrepResult{}, err
 		}
@@ -176,7 +189,9 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 		out.Matches = append(out.Matches, res.Matches...)
 		out.Total += res.Total
 		out.Scanned += res.Scanned
-		out.Truncated = out.Truncated || res.Truncated
+		if res.Note != "" && out.Note == "" {
+			out.Note = res.Note
+		}
 	}
 	sort.Slice(out.Matches, func(i, j int) bool {
 		a, b := out.Matches[i], out.Matches[j]
@@ -188,6 +203,17 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 		}
 		return a.Line < b.Line
 	})
+	start := opt.Offset
+	if start > len(out.Matches) {
+		start = len(out.Matches)
+	}
+	end := len(out.Matches)
+	if limit >= 0 && start+limit < end {
+		end = start + limit
+	}
+	out.Matches = out.Matches[start:end]
+	out.Offset = opt.Offset
+	out.Truncated = opt.Offset+len(out.Matches) < out.Total
 	out.Note = strings.TrimSpace(out.Note + " (fleet-wide)")
 	return out, nil
 }

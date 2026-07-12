@@ -64,8 +64,11 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 
 	// Lexical call sites: the name used as a call — `name(` allowing whitespace.
 	// Reuse GrepRepo (trigram-backed, enclosing-symbol fusion) via a regex.
+	// Limit -1 = every call site: usages is the ground-truth list its consumers
+	// (verify_edit, blast_radius) reason over — a silent 50-cap would hide
+	// breaking call sites.
 	pat := `\b` + regexp.QuoteMeta(base) + `\s*\(`
-	g, err := GrepRepo(s, repo, ref, pat, GrepOptions{Fixed: false})
+	g, err := GrepRepo(s, repo, ref, pat, GrepOptions{Fixed: false, Limit: -1})
 	if err != nil {
 		res.Note = "usage search failed: " + err.Error()
 		return res

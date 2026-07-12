@@ -141,6 +141,7 @@ Three rungs. Pick the cheapest one that answers your question:
 # Exact / regex — result fused with its enclosing symbol
 reponite grep validateCard
 reponite grep "TODO|FIXME"      # real regex (alternation stays trigram-prefiltered); --fixed for literal
+reponite grep "TODO|FIXME" --offset 50   # page a big result (--limit N / -1 = all); `total` is always ground truth
 
 # Semantic — no model, no network
 reponite semsearch "where we charge a card"

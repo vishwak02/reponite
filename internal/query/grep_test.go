@@ -2,6 +2,7 @@ package query
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -188,6 +189,59 @@ func TestGrepLimitTruncation(t *testing.T) {
 	r, _ := ix.Grep("x", GrepOptions{Fixed: true, Limit: 2})
 	if r.Total != 3 || len(r.Matches) != 2 || !r.Truncated {
 		t.Fatalf("want total 3, returned 2, truncated; got %+v", r)
+	}
+}
+
+// Paging (P0-2): offset windows walk the full match set; truncated means
+// "matches remain AFTER this window"; total is window-independent.
+func TestGrepOffsetPaging(t *testing.T) {
+	files := []File{{Path: "x.txt", Content: "x1\nx2\nx3\nx4\nx5\n"}}
+	ix := BuildTrigramIndex(files)
+	var walked []string
+	for _, page := range []struct {
+		offset, wantN int
+		wantTrunc     bool
+	}{{0, 2, true}, {2, 2, true}, {4, 1, false}} {
+		r, err := ix.Grep("x", GrepOptions{Fixed: true, Limit: 2, Offset: page.offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Total != 5 || len(r.Matches) != page.wantN || r.Truncated != page.wantTrunc || r.Offset != page.offset {
+			t.Fatalf("offset %d: want n=%d trunc=%v total=5, got %+v", page.offset, page.wantN, page.wantTrunc, r)
+		}
+		for _, m := range r.Matches {
+			walked = append(walked, m.Text)
+		}
+	}
+	if len(walked) != 5 || walked[0] != "x1" || walked[4] != "x5" {
+		t.Fatalf("paging must walk every match exactly once, in order: %v", walked)
+	}
+}
+
+func TestGrepUnlimited(t *testing.T) {
+	var content strings.Builder
+	for i := 0; i < 60; i++ {
+		content.WriteString("match me\n") // > defaultGrepLimit lines
+	}
+	ix := BuildTrigramIndex([]File{{Path: "big.txt", Content: content.String()}})
+	r, _ := ix.Grep("match", GrepOptions{Fixed: true, Limit: -1})
+	if r.Total != 60 || len(r.Matches) != 60 || r.Truncated {
+		t.Fatalf("limit -1 must return everything untruncated: total=%d returned=%d trunc=%v", r.Total, len(r.Matches), r.Truncated)
+	}
+}
+
+// Match order must be (path, line) regardless of the order files entered the
+// index — otherwise an offset window shifts between calls.
+func TestGrepDeterministicOrderForPaging(t *testing.T) {
+	files := []File{
+		{Path: "zzz.txt", Content: "needle\n"},
+		{Path: "aaa.txt", Content: "needle\n"},
+		{Path: "mmm.txt", Content: "needle\n"},
+	}
+	ix := BuildTrigramIndex(files)
+	r, _ := ix.Grep("needle", GrepOptions{Fixed: true})
+	if len(r.Matches) != 3 || r.Matches[0].Path != "aaa.txt" || r.Matches[1].Path != "mmm.txt" || r.Matches[2].Path != "zzz.txt" {
+		t.Fatalf("matches must be path-sorted for stable paging: %+v", r.Matches)
 	}
 }
 
