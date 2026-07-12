@@ -140,6 +140,7 @@ Three rungs. Pick the cheapest one that answers your question:
 ```sh
 # Exact / regex — result fused with its enclosing symbol
 reponite grep validateCard
+reponite grep "TODO|FIXME"      # real regex (alternation stays trigram-prefiltered); --fixed for literal
 
 # Semantic — no model, no network
 reponite semsearch "where we charge a card"

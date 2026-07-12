@@ -34,6 +34,19 @@ func TestToolServerCall(t *testing.T) {
 		t.Fatalf("grep: %s", out)
 	}
 
+	// The pattern is a regex by DEFAULT (P0 fix): an alternation matches the
+	// union of its branches instead of being searched as one literal string
+	// (which silently returned zero).
+	out, _ = ts.Call("reponite_grep", map[string]string{"pattern": "validateCard|noSuchName"})
+	if !strings.Contains(out, `"total": 1`) {
+		t.Fatalf("grep alternation must match its branches by default: %s", out)
+	}
+	// fixed=true still opts into literal semantics.
+	out, _ = ts.Call("reponite_grep", map[string]string{"pattern": "validateCard|noSuchName", "fixed": "true"})
+	if !strings.Contains(out, `"total": 0`) {
+		t.Fatalf("grep fixed=true must treat the pattern literally: %s", out)
+	}
+
 	out, _ = ts.Call("reponite_refs", nil)
 	if !strings.Contains(out, `"HEAD"`) || !strings.Contains(out, `"prod"`) {
 		t.Fatalf("refs: %s", out)

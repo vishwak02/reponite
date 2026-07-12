@@ -185,13 +185,16 @@ func cmdDiff(args []string) {
 }
 
 func cmdGrep(args []string) {
-	pos := parseCmd("grep", "grep <pattern> [ref]", args, nil)
+	var fixed bool
+	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&fixed, "fixed", false, "treat the pattern as a literal string, not a regex")
+	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite grep <pattern> [ref]"))
+		fail(fmt.Errorf("usage: reponite grep <pattern> [ref] [--fixed]"))
 	}
 	st := openStore(".")
 	defer st.Close()
-	res, err := query.GrepRepo(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: true})
+	res, err := query.GrepRepo(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed})
 	if err != nil {
 		fail(err)
 	}

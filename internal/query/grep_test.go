@@ -1,6 +1,9 @@
 package query
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 func sampleFiles() []File {
 	return []File{
@@ -51,7 +54,7 @@ func TestGrepLiteralRegexUsesPrefilter(t *testing.T) {
 	}
 }
 
-func TestGrepRegexNoAtomFullScan(t *testing.T) {
+func TestGrepRegexWithAtomsUsesPrefilter(t *testing.T) {
 	ix := BuildTrigramIndex(sampleFiles())
 	r, err := ix.Grep("valid.*Card", GrepOptions{})
 	if err != nil {
@@ -60,8 +63,114 @@ func TestGrepRegexNoAtomFullScan(t *testing.T) {
 	if len(r.Matches) != 1 || r.Matches[0].Symbol != "Charge" {
 		t.Fatalf("regex should match validateCard line: %+v", r.Matches)
 	}
+	if r.Note != "" {
+		t.Fatalf("regex with literal atoms (valid, Card) should prefilter, not full-scan: %q", r.Note)
+	}
+	if r.Scanned != 1 {
+		t.Fatalf("prefilter should narrow to the one file containing both atoms, scanned %d", r.Scanned)
+	}
+}
+
+func TestGrepRegexNoAtomFullScan(t *testing.T) {
+	ix := BuildTrigramIndex(sampleFiles())
+	r, err := ix.Grep("v.l.d", GrepOptions{}) // every literal < 3 bytes: unfilterable
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Matches) != 1 || r.Matches[0].Symbol != "Charge" {
+		t.Fatalf("regex should match validateCard line: %+v", r.Matches)
+	}
 	if r.Note == "" {
 		t.Fatal("no-atom regex must be labeled as a full scan")
+	}
+}
+
+// alternationFiles is a corpus where TODO and FIXME never co-occur in one file,
+// so a trigram intersection across the raw alternation string selects nothing.
+func alternationFiles() []File {
+	return []File{
+		{Path: "a.go", Content: "// TODO: refactor\nfunc a() {}\n"},
+		{Path: "b.go", Content: "// FIXME: broken\nfunc b() {}\n"},
+		{Path: "c.go", Content: "// TODO: one\n// FIXME: two\nfunc c() {}\n"},
+		{Path: "d.go", Content: "func d() {} // clean\n"},
+	}
+}
+
+// The correctness law P0-1 enforces: matches(a|b) == matches(a) ∪ matches(b).
+func TestGrepAlternationEqualsUnion(t *testing.T) {
+	ix := BuildTrigramIndex(alternationFiles())
+	key := func(m Match) string { return m.Path + ":" + strconv.Itoa(m.Line) }
+	union := map[string]bool{}
+	for _, p := range []string{"TODO", "FIXME"} {
+		r, err := ix.Grep(p, GrepOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range r.Matches {
+			union[key(m)] = true
+		}
+	}
+	r, err := ix.Grep("TODO|FIXME", GrepOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Total != len(union) || len(r.Matches) != len(union) {
+		t.Fatalf("alternation must equal union of branches: want %d matches, got total=%d returned=%d (%+v)",
+			len(union), r.Total, len(r.Matches), r.Matches)
+	}
+	for _, m := range r.Matches {
+		if !union[key(m)] {
+			t.Fatalf("alternation returned a match not in the union: %+v", m)
+		}
+	}
+	if r.Note != "" {
+		t.Fatalf("both branches have trigrams; expected prefilter, got note %q", r.Note)
+	}
+	if r.Scanned != 3 {
+		t.Fatalf("prefilter should OR branch candidates (a,b,c), scanned %d", r.Scanned)
+	}
+}
+
+func TestGrepAlternationUnfilterableBranchFullScans(t *testing.T) {
+	files := append(alternationFiles(), File{Path: "e.go", Content: "xy\n"})
+	ix := BuildTrigramIndex(files)
+	r, err := ix.Grep("TODO|xy", GrepOptions{}) // "xy" too short for a trigram
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Note == "" {
+		t.Fatal("a branch with no usable trigram must fall back to a labeled full scan")
+	}
+	want := 3 // TODO in a.go + c.go, xy in e.go
+	if r.Total != want {
+		t.Fatalf("full-scan fallback must still find every branch match: want %d, got %d (%+v)", want, r.Total, r.Matches)
+	}
+}
+
+func TestGrepCaseInsensitiveRegexFullScans(t *testing.T) {
+	ix := BuildTrigramIndex(alternationFiles())
+	r, err := ix.Grep("(?i)todo", GrepOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Total != 2 { // TODO in a.go + c.go
+		t.Fatalf("case-folded literal can't trigram-prefilter but must still match: got %d (%+v)", r.Total, r.Matches)
+	}
+	if r.Note == "" {
+		t.Fatal("case-insensitive scan must be labeled as a full scan")
+	}
+}
+
+func TestGrepNestedAlternationPrefilter(t *testing.T) {
+	ix := BuildTrigramIndex(alternationFiles())
+	// Concat of a required literal and a group alternation: candidates =
+	// files(TODO|FIXME-comment marker) ∩ (files(refactor) ∪ files(broken)).
+	r, err := ix.Grep(`// (TODO: refactor|FIXME: broken)`, GrepOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Total != 2 || r.Note != "" {
+		t.Fatalf("nested alternation should prefilter and match a.go+b.go: %+v", r)
 	}
 }
 

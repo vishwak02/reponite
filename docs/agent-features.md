@@ -269,9 +269,17 @@ A trigram index over *unique* file content (content-addressed → indexed once n
 matter how many refs contain the file) produces candidate files for any query
 with literal atoms; the engine intersects candidates with the requested ref's
 manifest file set, then verifies with Go `regexp` over the raw blobs, extracting
-matching lines + line numbers. Substring/literal queries use trigrams directly;
-regex with no literal atoms (e.g. `.*`) can't prefilter → a bounded, streamed
-scan, labeled as such. Path/glob filters use the per-ref `file_paths`;
+matching lines + line numbers. Substring/literal queries use trigrams directly.
+A regex prefilters through its **required literals** (via `regexp/syntax`), in
+AND-of-ORs form: a concatenation intersects its parts' candidate sets, an
+**alternation ORs its branches'** — so `TODO|FIXME` scans the union of files
+containing either branch, never the (empty) trigram intersection of the raw
+pattern string. Candidate selection only ever over-approximates: a regex must
+never return fewer matches than ground truth. A regex with no usable literal
+atom in some branch (e.g. `.*`, `(?i)…`, a <3-byte branch) can't prefilter → a
+bounded full scan, labeled as such. The pattern is a regex by default on every
+surface (CLI/MCP); `--fixed` / `fixed=true` opts into literal matching.
+Path/glob filters use the per-ref `file_paths`;
 structured filters (`lang`, `is_test`, `exported`, `kind`) narrow before scan.
 
 ### 10A.4 Graph fusion (the part plain grep can't do)
