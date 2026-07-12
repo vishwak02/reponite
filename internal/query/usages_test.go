@@ -49,6 +49,22 @@ func TestUsages(t *testing.T) {
 	}
 }
 
+// Usages is the ground-truth call-site list for verify_edit/blast_radius, so it
+// must NOT inherit grep's default 50-match window (P0-2 regression).
+func TestUsagesNotCappedByGrepDefault(t *testing.T) {
+	m := storage.NewMem()
+	var b strings.Builder
+	b.WriteString("package p\n")
+	for i := 0; i < 60; i++ {
+		b.WriteString("\thotpath(x)\n") // 60 call sites > grep's default 50
+	}
+	m.PutFile("r", "HEAD", query.File{Path: "p/many.go", Content: b.String()})
+	res := query.Usages(m, "r", "HEAD", "hotpath")
+	if res.Total != 60 || len(res.Usages) != 60 {
+		t.Fatalf("usages must list every call site (60), got total=%d returned=%d", res.Total, len(res.Usages))
+	}
+}
+
 // A lexical hit outside any known caller comes back unconfirmed, not dropped.
 func TestUsagesUnconfirmedLexical(t *testing.T) {
 	m := storage.NewMem()

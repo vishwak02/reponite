@@ -58,6 +58,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/usages", h.apiUsages)
 	mux.HandleFunc("/api/topics", h.apiTopics)
 	mux.HandleFunc("/api/verify_edit", h.apiVerifyEdit)
+	mux.HandleFunc("/api/grep", h.apiGrep)
 	return mux
 }
 
@@ -162,6 +163,26 @@ func (h *WebHandler) apiVerifyEdit(w http.ResponseWriter, r *http.Request) {
 	old := h.ParseSymbols(path, oldContent)
 	nw := h.ParseSymbols(path, newContent)
 	body, err := VerifyEditJSON(query.VerifyEdit(h.Store, repo, ref, path, old, nw))
+	writeJSON(w, body, err)
+}
+
+// apiGrep runs a lexical/regex search (?pattern=&fixed=&limit=&offset=),
+// fleet-wide unless ?repo= scopes it — same paging semantics as CLI/MCP.
+func (h *WebHandler) apiGrep(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = query.FleetRepo
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	res, err := query.GrepRepo(h.Store, repo, h.refOr(r), q.Get("pattern"),
+		query.GrepOptions{Fixed: q.Get("fixed") == "true", Limit: limit, Offset: offset})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	body, err := GrepJSON(res)
 	writeJSON(w, body, err)
 }
 

@@ -60,7 +60,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		// Regex by default (§14A): fixed=true opts into literal. The old
 		// literal-by-default silently returned zero for `a|b` — the trigrams of
 		// the raw alternation string exist in no file (P0 under-match bug).
-		res, err := query.GrepRepo(t.Store, discoverRepo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] == "true"})
+		limit, _ := strconv.Atoi(args["limit"])
+		offset, _ := strconv.Atoi(args["offset"])
+		res, err := query.GrepRepo(t.Store, discoverRepo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] == "true", Limit: limit, Offset: offset})
 		if err != nil {
 			return "", err
 		}

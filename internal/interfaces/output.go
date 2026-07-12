@@ -126,16 +126,20 @@ type matchDTO struct {
 }
 
 type grepDTO struct {
-	Matches   []matchDTO `json:"matches"`
-	Total     int        `json:"total"`
-	Truncated bool       `json:"truncated"`
-	Scanned   int        `json:"scanned"`
-	Note      string     `json:"note,omitempty"`
+	Matches []matchDTO `json:"matches"`
+	// total counts every matching line (ground truth); matches is the
+	// [offset, offset+limit) window of them; truncated means more matches
+	// exist past this window; scanned counts candidate FILES examined.
+	Total     int    `json:"total"`
+	Truncated bool   `json:"truncated"`
+	Offset    int    `json:"offset,omitempty"`
+	Scanned   int    `json:"scanned"`
+	Note      string `json:"note,omitempty"`
 }
 
 // GrepJSON renders a lexical search result (ext §10A).
 func GrepJSON(r query.GrepResult) (string, error) {
-	dto := grepDTO{Total: r.Total, Truncated: r.Truncated, Scanned: r.Scanned, Note: r.Note}
+	dto := grepDTO{Total: r.Total, Truncated: r.Truncated, Offset: r.Offset, Scanned: r.Scanned, Note: r.Note}
 	for _, m := range r.Matches {
 		dto.Matches = append(dto.Matches, matchDTO{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: m.Text, Symbol: m.Symbol})
 	}
