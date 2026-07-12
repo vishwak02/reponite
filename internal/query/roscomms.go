@@ -42,9 +42,16 @@ type CommEndpoint struct {
 	Role    string // RolePublisher, RoleSubscriber, ...
 	Name    string // topic/service/action name, normalized (leading "/" stripped)
 	Raw     string // the name exactly as written in source (e.g. "/cmd_vel")
-	MsgType string // message/service/action type, when captured (C++ template); "" otherwise
-	In      string // enclosing symbol (the node/callback), for a hop back into the call graph
-	Text    string // the source line, trimmed
+	MsgType string // message/service/action type, when captured; "" otherwise
+	// MsgTypeSource labels how MsgType was inferred — "template" (C++ <T>),
+	// "callback-param" (ROS1 roscpp subscribe() carries no template; the type
+	// is recovered from the callback's message parameter, e.g. const
+	// T::ConstPtr&), or "positional-arg" (rospy/rclpy pass the type class
+	// positionally). Best-effort inference, labeled so it is never mistaken
+	// for a declared type ("never lie").
+	MsgTypeSource string
+	In            string // enclosing symbol (the node/callback), for a hop back into the call graph
+	Text          string // the source line, trimmed
 }
 
 // CommGroup is every endpoint bound to one name within a family (topic / service
@@ -111,7 +118,64 @@ var commIdioms = []commIdiom{
 var (
 	firstQuotedRe = regexp.MustCompile(`["']([^"']+)["']`)
 	cppTemplateRe = regexp.MustCompile(`^\s*<([^>]+)>`)
+
+	// cppCallbackRefRe finds the callback bound in a roscpp subscribe(...) call:
+	// the first &-qualified name after the topic literal (&Class::cb, this /
+	// boost::bind(&Class::cb, ...) / &freeFn).
+	cppCallbackRefRe = regexp.MustCompile(`&\s*([\w:]+)`)
+	// cppCallbackDefRe matches a void/bool callable definition or declaration
+	// with its parameter list ([^)]* spans newlines, so multi-line signatures
+	// match). Group 1 = bare name, group 2 = parameters.
+	cppCallbackDefRe = regexp.MustCompile(`\b(?:void|bool)\s+(?:[\w~]+\s*::\s*)*(\w+)\s*\(([^)]*)\)`)
+	// The message-parameter shapes roscpp callbacks take, most specific first.
+	cppMsgParamRes = []*regexp.Regexp{
+		regexp.MustCompile(`([\w:]+)\s*::\s*ConstPtr`),                       // const T::ConstPtr&
+		regexp.MustCompile(`boost::shared_ptr<\s*(?:const\s+)?([\w:]+?)(?:\s+const)?\s*>`), // const boost::shared_ptr<T const>&
+		regexp.MustCompile(`MessageEvent<\s*([\w:]+?)(?:\s+const)?\s*>`),     // const ros::MessageEvent<T const>&
+		regexp.MustCompile(`([\w:]+)ConstPtr\b`),                             // typedef'd TConstPtr
+		regexp.MustCompile(`const\s+([\w:]+(?:::[\w:]+)+)\s*&`),              // const pkg::T& (needs a ::)
+	}
+
+	// Python positional message-type capture: the identifier immediately before
+	// the topic literal (rclpy: create_subscription(T, "topic", …)) or the first
+	// identifier argument after it (rospy: Subscriber("topic", T, cb)).
+	pyTypeBeforeRe = regexp.MustCompile(`([A-Za-z_][\w.]*)\s*,\s*$`)
+	pyTypeAfterRe  = regexp.MustCompile(`^\s*,\s*([A-Za-z_][\w.]*)\s*[,)]`)
 )
+
+// cppCallbackTypes maps every void/bool callable in a C++ file to the message
+// type of its message-shaped parameter, if it has one. This is the ROS1 gap:
+// roscpp's subscribe() usually carries NO template — the middleware infers the
+// type from the callback — so the source's only record of the subscribed type
+// is the callback's signature.
+func cppCallbackTypes(content string) map[string]string {
+	var out map[string]string
+	for _, m := range cppCallbackDefRe.FindAllStringSubmatch(content, -1) {
+		name, params := m[1], m[2]
+		if out[name] != "" {
+			continue // first definition wins (overloads: best-effort)
+		}
+		for _, re := range cppMsgParamRes {
+			if pm := re.FindStringSubmatch(params); pm != nil {
+				if out == nil {
+					out = map[string]string{}
+				}
+				out[name] = strings.TrimSpace(pm[1])
+				break
+			}
+		}
+	}
+	return out
+}
+
+// lastSegment reduces a qualified callback reference (Lidar::scanCB) to its
+// bare name.
+func lastSegment(s string) string {
+	if i := strings.LastIndex(s, "::"); i >= 0 {
+		return s[i+2:]
+	}
+	return s
+}
 
 // commLang classifies a path as a ROS client-library language, or "" if neither.
 func commLang(path string) string {
@@ -132,6 +196,7 @@ func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoi
 	if lang == "" {
 		return nil, 0
 	}
+	var callbackTypes map[string]string // lazily built: only when a C++ endpoint needs it
 	for i, line := range strings.Split(content, "\n") {
 		code := stripComment(line, lang)
 		for _, id := range commIdioms {
@@ -148,21 +213,49 @@ func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoi
 			}
 			rest := code[loc[1]:]
 			// C++ message type from the template immediately after the method.
-			msgType := ""
+			msgType, msgSource := "", ""
 			if lang == "cpp" {
 				if m := cppTemplateRe.FindStringSubmatch(rest); m != nil {
-					msgType = strings.TrimSpace(m[1])
+					msgType, msgSource = strings.TrimSpace(m[1]), "template"
 				}
 			}
-			q := firstQuotedRe.FindStringSubmatch(rest)
-			if q == nil {
+			qloc := firstQuotedRe.FindStringSubmatchIndex(rest)
+			if qloc == nil {
 				unresolved++ // e.g. advertise<T>(topic_var, 10) — can't resolve the name
 				break        // one idiom per line
 			}
-			raw := q[1]
+			raw := rest[qloc[2]:qloc[3]]
+			after := rest[qloc[1]:]
+			if msgType == "" {
+				switch lang {
+				case "cpp":
+					// ROS1 roscpp subscribe() carries no template — the type is
+					// inferred by the middleware from the callback. Recover it from
+					// the callback's message parameter in this file (best-effort,
+					// labeled; a cross-file callback stays "", never guessed).
+					if role == RoleSubscriber {
+						if cb := cppCallbackRefRe.FindStringSubmatch(after); cb != nil {
+							if callbackTypes == nil {
+								callbackTypes = cppCallbackTypes(content)
+							}
+							if t := callbackTypes[lastSegment(cb[1])]; t != "" {
+								msgType, msgSource = t, "callback-param"
+							}
+						}
+					}
+				case "py":
+					// rospy/rclpy pass the type class positionally: right before the
+					// topic literal (rclpy) or right after it (rospy).
+					if m := pyTypeBeforeRe.FindStringSubmatch(rest[:qloc[0]]); m != nil {
+						msgType, msgSource = m[1], "positional-arg"
+					} else if m := pyTypeAfterRe.FindStringSubmatch(after); m != nil {
+						msgType, msgSource = m[1], "positional-arg"
+					}
+				}
+			}
 			eps = append(eps, CommEndpoint{
 				Repo: repo, Path: path, Line: i + 1, Role: role,
-				Name: normalizeTopic(raw), Raw: raw, MsgType: msgType,
+				Name: normalizeTopic(raw), Raw: raw, MsgType: msgType, MsgTypeSource: msgSource,
 				In: enclosing(spans, i+1), Text: strings.TrimSpace(line),
 			})
 			break // first matching idiom wins for this line
@@ -250,7 +343,7 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 		res.Groups = append(res.Groups, *g)
 	}
 	sortGroups(res.Groups)
-	res.Note = "ROS communication graph: producers and consumers linked by name string (medium confidence). Namespace/launch-file remapping is NOT resolved, and RPC/DDS wire topology is inferred from source idioms only — a name match is a strong hint, not a proven runtime connection."
+	res.Note = "ROS communication graph: producers and consumers linked by name string (medium confidence). Namespace/launch-file remapping is NOT resolved, and RPC/DDS wire topology is inferred from source idioms only — a name match is a strong hint, not a proven runtime connection. msg_type is best-effort source inference, labeled by msg_type_source: template (C++ <T>), callback-param (ROS1 subscribe() infers the type from the callback; recovered from its message parameter in the same file), positional-arg (rospy/rclpy type class)."
 	return res
 }
 
@@ -340,13 +433,18 @@ func linkConfidence(g CommGroup) float64 {
 	return 0.75
 }
 
-// sameType compares two C++ message type strings by their trailing segment, so
-// `std_msgs::msg::String` and `std_msgs::String` (ROS1 vs ROS2 spelling) match.
+// sameType compares two message type strings by their trailing segment, so
+// `std_msgs::msg::String`, `std_msgs::String` (ROS1 vs ROS2 C++ spelling), and
+// Python's `std_msgs.msg.String` / bare `String` all match — cross-language
+// producer↔consumer type confirmation.
 func sameType(a, b string) bool {
 	seg := func(s string) string {
 		s = strings.TrimSpace(s)
 		if i := strings.LastIndex(s, "::"); i >= 0 {
-			return s[i+2:]
+			s = s[i+2:]
+		}
+		if i := strings.LastIndex(s, "."); i >= 0 {
+			s = s[i+1:]
 		}
 		return s
 	}

@@ -548,8 +548,11 @@ type commEndpointDTO struct {
 	Name    string `json:"name"`
 	Raw     string `json:"raw,omitempty"`
 	MsgType string `json:"msg_type,omitempty"`
-	In      string `json:"in,omitempty"`
-	Text    string `json:"text,omitempty"`
+	// How msg_type was inferred: template | callback-param | positional-arg
+	// (best-effort source inference, labeled — see the result note).
+	MsgTypeSource string `json:"msg_type_source,omitempty"`
+	In            string `json:"in,omitempty"`
+	Text          string `json:"text,omitempty"`
 }
 
 type commGroupDTO struct {
@@ -574,7 +577,7 @@ func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
 	for _, e := range eps {
 		out = append(out, commEndpointDTO{
 			Repo: e.Repo, Path: e.Path, Line: e.Line, Role: e.Role,
-			Name: e.Name, Raw: e.Raw, MsgType: e.MsgType, In: e.In, Text: e.Text,
+			Name: e.Name, Raw: e.Raw, MsgType: e.MsgType, MsgTypeSource: e.MsgTypeSource, In: e.In, Text: e.Text,
 		})
 	}
 	return out
