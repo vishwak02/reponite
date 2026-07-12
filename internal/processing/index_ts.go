@@ -142,7 +142,10 @@ func parseFileRules(src []byte, ext string, r LangRules) (content.AST, []query.S
 // spansFor returns 1-based line ranges for each declaration, mirroring Extract:
 // functions/methods produce a span; a type/class produces a span and is
 // descended into so its nested methods also get spans (grep fusion picks the
-// innermost enclosing span, so a nested method wins over its class).
+// innermost enclosing span, so a nested method wins over its class). Mirrors
+// Extract's honesty rules: an anonymous callable produces NO span (a ""-named
+// inner span would occlude the real enclosing symbol) and a bare type
+// reference (`struct Foo x;`) is not a declaration.
 func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 	var spans []query.SymbolSpan
 	var walk func(n *sitter.Node)
@@ -155,14 +158,18 @@ func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 			t := ch.Type()
 			switch {
 			case containsStr(r.FuncDecl, t), containsStr(r.MethodDecl, t):
-				spans = append(spans, query.SymbolSpan{Name: nameOf(w, r), StartLine: start, EndLine: end})
+				if name := nameOf(w, r); name != "" {
+					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})
+				}
+			case containsStr(r.TypeDecl, t) && isTypeReference(w, r):
+				walk(ch) // a use, not a definition — no span
 			case containsStr(r.TypeDecl, t):
 				if len(r.TypeSpec) > 0 {
 					for _, spec := range descendantsAny(w, r.TypeSpec) {
 						spans = append(spans, query.SymbolSpan{Name: nameOfNode(spec, r.NameTypes, false), StartLine: start, EndLine: end})
 					}
-				} else {
-					spans = append(spans, query.SymbolSpan{Name: nameOf(w, r), StartLine: start, EndLine: end})
+				} else if name := nameOf(w, r); name != "" {
+					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})
 				}
 				walk(ch) // descend for nested methods (class/type bodies)
 			default:

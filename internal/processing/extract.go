@@ -66,9 +66,13 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 			}
 			switch {
 			case containsStr(r.FuncDecl, t):
-				out = append(out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing))
+				appendNamed(&out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing))
 			case containsStr(r.MethodDecl, t):
-				out = append(out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing))
+				appendNamed(&out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing))
+			case containsStr(r.TypeDecl, t) && isTypeReference(child, r):
+				// A bare type reference (`struct Foo x;`, forward declaration) —
+				// not a definition; emit nothing, keep walking.
+				walk(child, enclosing)
 			case containsStr(r.TypeDecl, t):
 				out = append(out, typeSymbols(child, r, normVer, joinDoc(doc))...)
 				// Descend for nested methods, qualified by this type's name. Go-style
@@ -97,6 +101,15 @@ func joinDoc(doc [][]byte) []byte {
 		return nil
 	}
 	return bytes.Join(doc, []byte("\n"))
+}
+
+// appendNamed keeps a callable only when name resolution produced a real name.
+// An anonymous callable is unaddressable; storing it under an invented or empty
+// id would corrupt the graph (never lie — see nameOf).
+func appendNamed(out *[]Symbol, s Symbol) {
+	if s.Name != "" {
+		*out = append(*out, s)
+	}
 }
 
 func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte, enclosing string) Symbol {
@@ -152,8 +165,15 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 		}
 		return out
 	}
+	name := nameOf(decl, r)
+	if name == "" {
+		// e.g. the anonymous struct inside `typedef struct { ... } Alias;` — the
+		// enclosing type_definition carries the name; an unnamed symbol would
+		// be unaddressable (see appendNamed).
+		return nil
+	}
 	return []Symbol{{
-		Name: nameOf(decl, r), Kind: "type",
+		Name: name, Kind: "type",
 		Signature: string(content.Canon(withoutChildTypes(decl, r.BodyTypes), normVer)), Doc: doc,
 	}}
 }
@@ -273,40 +293,57 @@ func firstDescAny(n content.AST, types []string) content.AST {
 
 func nameOf(n content.AST, r LangRules) string {
 	// A callable whose name is nested in a declarator (C/C++): the name is the
-	// last NameTypes leaf inside the declarator, excluding the parameter list —
-	// so a return type is skipped and a qualified name reduces to its last segment.
+	// last DeclNameTypes leaf inside the declarator BEFORE its parameter list —
+	// so a return type is skipped and a qualified name reduces to its last
+	// segment. The declarator is authoritative: when it yields no name, the
+	// callable is anonymous — never invent one from a parameter type or body
+	// identifier (that misattributed C++ endpoints to names like NodeHandle).
 	if len(r.DeclNameIn) > 0 {
 		if d := firstChildAny(n, r.DeclNameIn); d != nil {
-			if name := declaratorName(d, r); name != "" {
-				return name
-			}
+			return declaratorName(d, r)
 		}
 	}
 	return nameOfNode(n, r.NameTypes, r.NameByDesc)
 }
 
-// declaratorName returns the last NameTypes leaf inside a declarator, skipping
-// any parameter list (whose identifiers are parameter names, not the callable's).
+// declaratorName returns the last DeclNameTypes (default NameTypes) leaf inside
+// a declarator that appears BEFORE the parameter list. The declared name always
+// precedes the parameters in C/C++ declarators, so stopping there keeps
+// parameter names, member-initializer identifiers, and trailing-return types
+// (`auto f() -> Widget`) from being mistaken for the name.
 func declaratorName(d content.AST, r LangRules) string {
-	var ids []string
-	var walk func(content.AST)
-	walk = func(n content.AST) {
+	types := r.DeclNameTypes
+	if len(types) == 0 {
+		types = r.NameTypes
+	}
+	name := ""
+	var walk func(content.AST) bool // true once the parameter list is reached
+	walk = func(n content.AST) bool {
 		for _, c := range n.Children() {
 			if strings.Contains(c.Type(), "parameter") {
-				continue // parameter_list / parameters: names within are params
+				return true
 			}
-			if containsStr(r.NameTypes, c.Type()) {
-				ids = append(ids, c.Text())
+			if containsStr(types, c.Type()) {
+				name = c.Text()
 				continue
 			}
-			walk(c)
+			if walk(c) {
+				return true
+			}
 		}
+		return false
 	}
 	walk(d)
-	if len(ids) == 0 {
-		return ""
-	}
-	return ids[len(ids)-1]
+	return name
+}
+
+// isTypeReference reports whether a TypeDecl-typed node is only a type
+// REFERENCE (C/C++ `struct Foo x;`, a forward declaration, an elaborated type
+// in a signature) rather than a definition: the node's type requires a body
+// (TypeDeclNeedsBody) and none is present. References must not become symbols
+// or enclosing-symbol spans.
+func isTypeReference(n content.AST, r LangRules) bool {
+	return containsStr(r.TypeDeclNeedsBody, n.Type()) && firstChildAny(n, r.TypeDeclBody) == nil
 }
 
 func nameOfNode(n content.AST, types []string, byDesc bool) string {
