@@ -83,6 +83,7 @@ make cli   # → bin/reponite
 # 1. Index your repo
 reponite index .                      # indexes HEAD
 reponite index . v2.3.0              # index a tag, branch, or commit
+reponite index . --exclude "external/**"   # skip a vendored tree (see "Ignoring vendored code")
 
 # 2. Check if a symbol is still compatible across refs
 reponite compat Charge
@@ -115,6 +116,18 @@ reponite ximpact getUserV2
 - 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break (per-language "exported" rule), drops straight into a PR workflow
 - 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, and **ROS** interface files (`.msg`/`.srv`/`.action`)
 - 📡 **Four surfaces** — CLI · MCP server (17 tools) · web dashboard · VS Code extension
+
+---
+
+## Ignoring vendored code
+
+Vendored trees drown search/grep/investigate in third-party noise, so exclusion happens **at index time** and every surface benefits. Three layers, all gitignore syntax:
+
+1. **Defaults (always on):** `vendor/`, `third_party/`, `node_modules/`, `.git/`, `testdata/` — plus every dot-directory.
+2. **`.reponiteignore`** at the repo root — e.g. a robotics monorepo bundling upstream ROS: `external/`
+3. **`--exclude GLOB`** on `reponite index` (repeatable / comma-separable).
+
+Supported syntax: `#` comments, `!` negation (last match wins; an excluded *directory* can't be re-included from below, as in git), trailing `/` for directory-only, leading `/` anchors to the repo root, `*` `?` `[...]` within a segment, `**` across segments. `index --git <rev>` reads `.reponiteignore` from the indexed tree itself, so historical refs are filtered by their own rules.
 
 ---
 

@@ -20,8 +20,15 @@ import (
 // IndexDir indexes every supported source file under dir as one repo ref. Each
 // file is dispatched by extension to its LangRules (lang.go); unknown extensions
 // are skipped. Go edges are refined by the type checker; other languages use
-// name-based resolution.
+// name-based resolution. Vendored trees are excluded via the default ignore
+// set + the repo's .reponiteignore (see IndexDirWith for --exclude globs).
 func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
+	return IndexDirWith(w, repo, ref, dir, normVer, IndexOptions{})
+}
+
+// IndexDirWith is IndexDir with caller-supplied filters (CLI --exclude).
+func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOptions) error {
+	ig := loadIgnore(dir, opt.Excludes)
 	var files []ParsedFile
 	hasGo := false
 	manifests := map[string][]byte{} // module-manifest files (go.mod, package.json, ...) by rel path
@@ -29,17 +36,23 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 		if walkErr != nil {
 			return walkErr
 		}
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			rel = path
+		}
 		if info.IsDir() {
 			if path != dir {
-				if b := info.Name(); strings.HasPrefix(b, ".") || b == "vendor" || b == "node_modules" {
+				// Dot-dirs (.git, .reponite, …) are always skipped; the ignore
+				// set adds vendor/third_party/node_modules/… + .reponiteignore
+				// + --exclude.
+				if strings.HasPrefix(info.Name(), ".") || ig.Excluded(rel, true) {
 					return filepath.SkipDir
 				}
 			}
 			return nil
 		}
-		rel, relErr := filepath.Rel(dir, path)
-		if relErr != nil {
-			rel = path
+		if ig.Excluded(rel, false) {
+			return nil
 		}
 		// Module manifests carry the repo's identity, not symbols; collect for
 		// module_path detection (§8B.2). They are never source, so return after.
@@ -101,6 +114,16 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 		return w.SetModulePath(repo, mod)
 	}
 	return nil
+}
+
+// loadIgnore builds the index-time exclusion set: defaults + the repo's
+// .reponiteignore (root-level, gitignore syntax; absent is fine) + --exclude.
+func loadIgnore(dir string, excludes []string) *Ignore {
+	content := ""
+	if b, err := os.ReadFile(filepath.Join(dir, ".reponiteignore")); err == nil {
+		content = string(b)
+	}
+	return NewIgnore(content, excludes)
 }
 
 // ParseEditedSymbols parses proposed file content and returns its symbols as

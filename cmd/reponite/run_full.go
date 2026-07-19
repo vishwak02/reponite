@@ -97,10 +97,26 @@ func arg(pos []string, i int, def string) string {
 	return def
 }
 
+// excludeFlags collects repeatable --exclude values, each optionally
+// comma-separated (gitignore-syntax patterns).
+type excludeFlags []string
+
+func (e *excludeFlags) String() string { return strings.Join(*e, ",") }
+func (e *excludeFlags) Set(v string) error {
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			*e = append(*e, p)
+		}
+	}
+	return nil
+}
+
 func cmdIndex(args []string) {
 	var gitRev string
-	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>]", args, func(fs *flag.FlagSet) {
+	var excludes excludeFlags
+	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>] [--exclude GLOB]...", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&gitRev, "git", "", "index a git revision's tree (tag/branch/SHA/HEAD~3) instead of the working tree")
+		fs.Var(&excludes, "exclude", "exclude paths matching this gitignore-syntax pattern (repeatable, comma-separable); adds to the defaults (vendor/, third_party/, node_modules/, .git/, testdata/) and .reponiteignore")
 	})
 	dir := arg(pos, 0, ".")
 	ref := arg(pos, 1, "HEAD")
@@ -111,8 +127,9 @@ func cmdIndex(args []string) {
 	st := openStore(dir)
 	defer st.Close()
 
+	opt := processing.IndexOptions{Excludes: excludes}
 	if gitRev != "" {
-		commit, err := processing.IndexGitRef(st, repo, ref, dir, gitRev, version.NormVer)
+		commit, err := processing.IndexGitRefWith(st, repo, ref, dir, gitRev, version.NormVer, opt)
 		if err != nil {
 			fail(err)
 		}
@@ -122,7 +139,7 @@ func cmdIndex(args []string) {
 		fmt.Printf("indexed %s@%s (git %s @ %s)%s — refs now: %v\n", repo, ref, gitRev, shortHash(commit), moduleNote(st, repo), st.Refs(repo))
 		return
 	}
-	if err := processing.IndexDir(st, repo, ref, dir, version.NormVer); err != nil {
+	if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
 		fail(err)
 	}
 	fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))

@@ -22,6 +22,11 @@ import (
 // the object store rather than the working tree. It returns the resolved commit
 // hash so the caller can record it.
 func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string, error) {
+	return IndexGitRefWith(w, repo, ref, repoDir, rev, normVer, IndexOptions{})
+}
+
+// IndexGitRefWith is IndexGitRef with caller-supplied filters (CLI --exclude).
+func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt IndexOptions) (string, error) {
 	r, err := git.PlainOpen(repoDir)
 	if err != nil {
 		return "", fmt.Errorf("open git repo %s: %w", repoDir, err)
@@ -39,11 +44,21 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 		return "", err
 	}
 
+	// The exclusion set reads .reponiteignore from the TREE being indexed (not
+	// the working tree), so a historical ref is filtered by its own rules.
+	ignoreContent := ""
+	if f, ferr := tree.File(".reponiteignore"); ferr == nil {
+		if s, cerr := f.Contents(); cerr == nil {
+			ignoreContent = s
+		}
+	}
+	ig := NewIgnore(ignoreContent, opt.Excludes)
+
 	var files []ParsedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
-		if skipPath(f.Name) {
-			return nil
+		if ig.Excluded(f.Name, false) || strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.") {
+			return nil // ignore set + dot-dirs/dot-files, mirroring IndexDir
 		}
 		if IsManifestFile(f.Name) {
 			if src, err := f.Contents(); err == nil {
@@ -96,12 +111,3 @@ func IndexGitRef(w Indexer, repo, ref, repoDir, rev string, normVer int) (string
 	return h.String(), nil
 }
 
-// skipPath drops vendored/generated trees that shouldn't count as repo symbols.
-func skipPath(path string) bool {
-	for _, seg := range strings.Split(path, "/") {
-		if seg == "vendor" || seg == "node_modules" || seg == "testdata" {
-			return true
-		}
-	}
-	return false
-}
