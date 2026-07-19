@@ -47,6 +47,14 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M8 8a5.5 5.5 0 000 8M16 8a5.5 5.5 0 010 8M5 5a10 10 0 000 14M19 5a10 10 0 010 14" stroke-linecap="round"/></svg>
       <span>Topics</span>
     </a>
+    <a data-view="usages" href="#/usages">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13" stroke-linecap="round"/><circle cx="19" cy="12" r="2"/></svg>
+      <span>Usages</span>
+    </a>
+    <a data-view="verify" href="#/verify">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6l7-3z" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>Verify</span>
+    </a>
     <div class="navhint">Views are deep-linkable — copy the URL to share. Press <kbd>/</kbd> to search.</div>
   </nav>
 
@@ -101,6 +109,34 @@
           <p class="muted" style="font-size:12.5px;padding:0 2px">The runtime edges no call graph contains: ROS publishers ↔ subscribers (and service/action clients ↔ servers) linked by name across the fleet. Name-string linkage is medium-confidence; remapping isn't resolved.</p>
         </div>
         <div class="detail" id="topics-detail"></div>
+      </div>
+    </div>
+
+    <div id="usages" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13" stroke-linecap="round"/><circle cx="19" cy="12" r="2"/></svg>
+            <input id="uq" placeholder="Symbol name…" autocomplete="off">
+          </div>
+          <p class="muted" style="font-size:12.5px;padding:0 2px">Every call site of a symbol across the fleet — the exact calling line and its enclosing function. <b>confirmed</b> = that function is a resolved caller in the call graph; unconfirmed = a lexical match (comment/string) or a dynamic call the static graph can't see.</p>
+        </div>
+        <div class="detail" id="usages-detail"></div>
+      </div>
+    </div>
+
+    <div id="verify" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6l7-3z" stroke-linejoin="round"/></svg>
+            <input id="vpath" placeholder="Repo-relative file path (as indexed)…" autocomplete="off">
+          </div>
+          <textarea id="vcontent" class="codearea" placeholder="Paste the FULL proposed new content of that file…" spellcheck="false"></textarea>
+          <button class="btn" id="vrun">Check what breaks</button>
+          <p class="muted" style="font-size:12.5px;padding:8px 2px 0">The pre-commit safety net: what breaks if this content replaces the file — every signature change/removal with the exact call sites (fleet-wide) that rely on it, before saving or compiling.</p>
+        </div>
+        <div class="detail" id="verify-detail"></div>
       </div>
     </div>
   </main>

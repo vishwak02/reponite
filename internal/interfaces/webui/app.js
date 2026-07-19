@@ -54,7 +54,7 @@ function go(view,params){const qs=new URLSearchParams(params||{}).toString();
 function setParam(k,v){const {view,params}=parseHash();if(v)params[k]=v;else delete params[k];
   history.replaceState(null,"",location.pathname+"#/"+view+"?"+new URLSearchParams(params));}
 
-const VIEWS={overview:renderOverview,explore:renderExplore,diff:renderDiff,impact:renderImpact,topics:renderTopics};
+const VIEWS={overview:renderOverview,explore:renderExplore,diff:renderDiff,impact:renderImpact,topics:renderTopics,usages:renderUsages,verify:renderVerify};
 function route(){const {view,params}=parseHash();const v=VIEWS[view]?view:"overview";
   $$(".view").forEach(el=>el.classList.toggle("on",el.id===v));
   $$("nav.rail a").forEach(a=>a.classList.toggle("on",a.dataset.view===v));
@@ -223,6 +223,63 @@ function topicGroup(g){
 const endpointRow=e=>`<div class="row"><span class="grow">${esc(e.repo?e.repo+" · ":"")}${esc(e.path)}<span class="muted">:${e.line}</span>${e.in?` → ${esc(e.in)}`:""}</span>`+
   (e.msg_type?`<span class="pill mono">${esc(e.msg_type)}</span>`:"")+`<span class="pill">${esc(e.role)}</span></div>`;
 
+/* ---------- usages (call sites, graph-verified) ---------- */
+function renderUsages(params){
+  const u=$("#uq");
+  if(params.symbol!==undefined&&params.symbol!==u.value)u.value=params.symbol;
+  u.oninput=()=>{clearTimeout(_t);_t=setTimeout(()=>{setParam("symbol",u.value.trim());doUsages();},220);};
+  if(!u.value)$("#usages-detail").innerHTML=emptyState("Enter a symbol","Every call site across the fleet, with its exact line and enclosing function — confirmed against the call graph.");
+  else doUsages();
+}
+async function doUsages(){
+  const s=$("#uq").value.trim(),d=$("#usages-detail");
+  if(!s){d.innerHTML=emptyState("Enter a symbol","");return;}
+  d.innerHTML=`<p class="muted"><span class="spinner"></span> scanning fleet…</p>`;
+  try{const r=await api("usages",{symbol:s,ref:S.ref});
+    const us=r.usages||[],conf=us.filter(x=>x.confirmed),lex=us.filter(x=>!x.confirmed);
+    let h=`<div class="detail-h"><h2>${esc(r.symbol||s)}</h2><span class="pill">${r.total||0} call sites</span></div>`;
+    if(!us.length)h+=emptyRow("no call sites found");
+    if(conf.length)h+=`<div class="grouplabel">confirmed · in the call graph <span class="ln"></span><span class="pill">${conf.length}</span></div>`+conf.map(usageRow).join("");
+    if(lex.length)h+=`<div class="grouplabel">lexical · comment/string or dynamic <span class="ln"></span><span class="pill">${lex.length}</span></div>`+lex.map(usageRow).join("");
+    if(r.note)h+=`<p class="muted" style="font-size:11.5px;margin-top:16px">${esc(r.note)}</p>`;
+    d.innerHTML=h;
+  }catch(e){d.innerHTML=emptyRow("error");toast(e.message);}
+}
+const usageRow=x=>`<div class="row"><span class="grow"><span class="mono">${esc(x.repo?x.repo+" · ":"")}${esc(x.path)}<span class="muted">:${x.line}</span></span>${x.in?` → ${esc(x.in)}`:""}<div class="muted mono" style="font-size:11px;overflow:hidden;text-overflow:ellipsis">${esc(x.text)}</div></span>`+
+  `<span class="pill ${x.confirmed?"precise":""}">${x.confirmed?"confirmed":"lexical"}</span></div>`;
+
+/* ---------- verify (pre-commit safety net) ---------- */
+function renderVerify(params){
+  const p=$("#vpath");
+  if(params.path!==undefined&&params.path!==p.value)p.value=params.path;
+  p.onchange=()=>setParam("path",p.value.trim());
+  $("#vrun").onclick=doVerify;
+  if(!$("#verify-detail").dataset.ran)$("#verify-detail").innerHTML=emptyState("Paste a proposed edit","Give the file's repo-relative path and its full proposed content, then check what breaks — before saving or compiling.");
+}
+async function doVerify(){
+  const path=$("#vpath").value.trim(),content=$("#vcontent").value,d=$("#verify-detail");
+  if(!path){toast("Enter the repo-relative file path");return;}
+  d.dataset.ran="1";
+  d.innerHTML=`<p class="muted"><span class="spinner"></span> diffing signatures against the index…</p>`;
+  try{
+    const res=await fetch("/api/verify_edit?"+new URLSearchParams({path,repo:S.repo,ref:S.ref}),
+      {method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({content})});
+    if(!res.ok)throw new Error("verify_edit: "+res.status+" "+(await res.text()).trim());
+    const r=await res.json();
+    let h=`<div class="detail-h"><h2>${esc(r.path)}</h2>${r.safe?'<span class="tag compatible">safe</span>':'<span class="tag shape_changed">breaks callers</span>'}</div>`;
+    const chip=(names,tag,label)=>names&&names.length?`<div class="grouplabel">${label} <span class="ln"></span><span class="pill">${names.length}</span></div>`+
+      names.map(n=>`<div class="row"><span class="tag ${tag}">${tag==="added"?"added":tag}</span><span class="grow">${esc(n)}</span></div>`).join(""):"";
+    h+=chip(r.added,"added","new symbols")+chip(r.changed,"shape_changed","signature changed")+chip(r.removed,"removed","removed");
+    for(const im of r.impacts||[]){
+      h+=`<div class="card" style="margin-top:14px"><div class="card-head"><h3>${esc(im.symbol)}</h3><span class="tag ${im.kind==="removed"?"removed":"shape_changed"}">${esc(im.kind)}</span><span class="pill">${(im.breaks||[]).length} breaking call sites</span></div>`+
+        (im.breaks||[]).map(usageRow).join("")+`</div>`;
+    }
+    if(!(r.impacts||[]).length&&r.safe)h+=emptyRow("no confirmed caller breaks");
+    if(r.note)h+=`<p class="muted" style="font-size:11.5px;margin-top:16px">${esc(r.note)}</p>`;
+    d.innerHTML=h;
+  }catch(e){d.innerHTML=emptyRow("error");toast(e.message);}
+}
+
 /* ---------- shared bits ---------- */
 function emptyState(title,hint){return `<div class="empty">
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16" stroke-linecap="round"/></svg>
@@ -232,6 +289,6 @@ const skeleton=n=>Array.from({length:n},()=>'<div class="skeleton"></div>').join
 
 /* keyboard: "/" focuses the active view's search */
 addEventListener("keydown",e=>{if(e.key==="/"&&!/input|select|textarea/i.test(e.target.tagName)){
-  const {view}=parseHash();const t=view==="impact"?$("#xq"):view==="explore"?$("#q"):view==="topics"?$("#tq"):null;if(t){e.preventDefault();t.focus();}}});
+  const {view}=parseHash();const t=view==="impact"?$("#xq"):view==="explore"?$("#q"):view==="topics"?$("#tq"):view==="usages"?$("#uq"):view==="verify"?$("#vpath"):null;if(t){e.preventDefault();t.focus();}}});
 
 boot();
