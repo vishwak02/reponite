@@ -41,6 +41,112 @@ int freeFn() { return 1; }
 		wantType(t, syms, "Widget")
 	})
 
+	// P0 regression: in-class C++ method definitions name via field_identifier.
+	// Before DeclNameTypes, name resolution fell back to the FIRST identifier
+	// anywhere in the definition — a parameter type (in=NodeHandle) or the first
+	// body identifier (in=enable_controller_subscriber_) — misattributing every
+	// grep/usages/topics hit inside such a method.
+	t.Run("cpp in-class definitions", func(t *testing.T) {
+		src := `#include <ros/ros.h>
+class Lidar {
+public:
+  Lidar(ros::NodeHandle& nh) : nh_(nh) {}
+  ~Lidar() { shutdown(); }
+  bool init(ros::NodeHandle& nh)
+  {
+    scan_pub_ = nh.advertise<sensor_msgs::LaserScan>("scan", 10);
+    return true;
+  }
+  bool start()
+  {
+    started_flag_ = true;
+    return started_flag_;
+  }
+  bool operator==(const Lidar& other) const { return id_ == other.id_; }
+  auto getHandle() -> ros::NodeHandle { return nh_; }
+private:
+  ros::NodeHandle nh_;
+  ros::Publisher scan_pub_;
+  bool started_flag_;
+  int id_;
+};
+`
+		syms := extractSrc(t, ".cpp", src)
+		wantFn(t, syms, "init")     // NOT "NodeHandle" (the parameter's type)
+		wantFn(t, syms, "start")    // NOT "started_flag_" (the first body identifier)
+		wantFn(t, syms, "Lidar")    // constructor, NOT an initializer identifier
+		wantFn(t, syms, "~Lidar")   // destructor names via destructor_name
+		wantFn(t, syms, "operator==") // operator overloads via operator_name
+		wantFn(t, syms, "getHandle")  // NOT "NodeHandle" (the trailing return type)
+		for _, bad := range []string{"NodeHandle", "started_flag_", "scan_pub_"} {
+			if s := find(syms, bad); s != nil && s.Kind != "type" {
+				t.Errorf("callable wrongly named %q (kind %s) — invented from a param/body identifier", bad, s.Kind)
+			}
+		}
+	})
+
+	// Bare type references and forward declarations are not definitions: they
+	// must produce neither symbols nor enclosing-symbol spans.
+	t.Run("cpp type references", func(t *testing.T) {
+		src := `class Forward;
+struct Real { int a; };
+struct Real instance;
+void user(struct Real r) {}
+`
+		syms := extractSrc(t, ".cpp", src)
+		wantType(t, syms, "Real")
+		wantFn(t, syms, "user")
+		count := 0
+		for _, s := range syms {
+			if s.Name == "Real" && s.Kind == "type" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("type Real must be extracted exactly once (definition), got %d (references leaked)", count)
+		}
+		if s := find(syms, "Forward"); s != nil {
+			t.Errorf("forward declaration must not become a symbol: %+v", *s)
+		}
+	})
+
+	// The span layer must mirror the same rules — this is what grep/usages/
+	// topics attribute an endpoint's enclosing symbol (`in`) from.
+	t.Run("cpp spans attribute to the method", func(t *testing.T) {
+		src := `class BumpBlink {
+public:
+  bool init()
+  {
+    enable_sub_ = nh_.subscribe("enable", 10, &BumpBlink::enableCB, this);
+    blink_publisher_ = nh_.advertise<kobuki_msgs::Led>("commands/led1", 10);
+    return true;
+  }
+private:
+  ros::Subscriber enable_sub_;
+  ros::Publisher blink_publisher_;
+};
+`
+		rules, _ := RulesForExt(".cpp")
+		_, spans, err := parseFileRules([]byte(src), ".cpp", rules)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const advertiseLine = 6
+		inner := ""
+		innerSize := 1 << 30
+		for _, sp := range spans {
+			if sp.Name == "enable_sub_" || sp.Name == "NodeHandle" {
+				t.Errorf("spurious span named %q — spans must not be named after member/param identifiers", sp.Name)
+			}
+			if advertiseLine >= sp.StartLine && advertiseLine <= sp.EndLine && sp.EndLine-sp.StartLine < innerSize {
+				inner, innerSize = sp.Name, sp.EndLine-sp.StartLine
+			}
+		}
+		if inner != "init" {
+			t.Errorf("the advertise line must attribute to its method: got %q, want init (spans: %+v)", inner, spans)
+		}
+	})
+
 	t.Run("rust", func(t *testing.T) {
 		src := `pub struct User { pub id: u32 }
 pub trait Greet { fn hello(&self); }

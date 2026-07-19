@@ -24,10 +24,22 @@ type LangRules struct {
 	// declarations would mis-resolve), so the callee must look it up separately.
 	SortChild  []string // node types whose children are order-independent (import lists)
 	NameByDesc bool     // find the name via first matching descendant (e.g. C/C++ type names)
-	DeclNameIn []string // if set, a callable's name is the last NameTypes leaf inside this child
-	// node (the declarator), excluding the parameter list — resolves C/C++ names
+	DeclNameIn []string // if set, a callable's name is the last DeclNameTypes leaf inside this
+	// child node (the declarator) BEFORE its parameter list — resolves C/C++ names
 	// nested in a function_declarator and C++ qualified names (ns::T::m -> m).
-	ScopeDecl []string // node types that scope nested methods by their own name without
+	// When the declarator yields no name the callable is anonymous — the name is
+	// NEVER invented from a parameter/body identifier (that misattributed C++
+	// endpoints to parameter types like NodeHandle).
+	DeclNameTypes []string // node types holding the declared name inside DeclNameIn; empty =>
+	// NameTypes. C++ in-class method definitions name via field_identifier (and
+	// destructors/operators via destructor_name/operator_name), which NameTypes
+	// deliberately excludes (see CallNameTypes note).
+	TypeDeclNeedsBody []string // TypeDecl node types that are only DEFINITIONS when a
+	// TypeDeclBody child is present. C/C++ struct/class/union/enum specifiers appear
+	// equally as bare type REFERENCES (`struct Foo x;`, forward declarations), which
+	// must not become symbols or enclosing-symbol spans.
+	TypeDeclBody []string // the body node types that mark such a definition
+	ScopeDecl    []string // node types that scope nested methods by their own name without
 	// emitting a symbol themselves (e.g. a Rust `impl T { ... }` block qualifies its fns by T).
 	Builtins map[string]bool
 }
@@ -138,15 +150,17 @@ var cBuiltins = map[string]bool{
 // `struct Point make()` is named "make", not "Point".
 var CRules = LangRules{
 	Name: "c", Exts: []string{".c", ".h"},
-	FuncDecl:      []string{"function_definition"},
-	TypeDecl:      []string{"struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
-	NameTypes:     []string{"identifier", "type_identifier"},
-	CallNameTypes: []string{"identifier", "field_identifier"}, // s->fn() function-pointer calls
-	BodyTypes:     []string{"compound_statement"},
-	CallTypes:     []string{"call_expression"},
-	NameByDesc:    true, // type names: descend (typedef alias is not a direct child)
-	DeclNameIn:    []string{"function_declarator"},
-	Builtins:      cBuiltins,
+	FuncDecl:          []string{"function_definition"},
+	TypeDecl:          []string{"struct_specifier", "union_specifier", "enum_specifier", "type_definition"},
+	NameTypes:         []string{"identifier", "type_identifier"},
+	CallNameTypes:     []string{"identifier", "field_identifier"}, // s->fn() function-pointer calls
+	BodyTypes:         []string{"compound_statement"},
+	CallTypes:         []string{"call_expression"},
+	NameByDesc:        true, // type names: descend (typedef alias is not a direct child)
+	DeclNameIn:        []string{"function_declarator"},
+	TypeDeclNeedsBody: []string{"struct_specifier", "union_specifier", "enum_specifier"},
+	TypeDeclBody:      []string{"field_declaration_list", "enumerator_list"},
+	Builtins:          cBuiltins,
 }
 
 // CppRules extends C with classes and namespaced/qualified definitions. The same
@@ -163,7 +177,14 @@ var CppRules = LangRules{
 	CallTypes:     []string{"call_expression"},
 	NameByDesc:    true,
 	DeclNameIn:    []string{"function_declarator"},
-	Builtins:      cBuiltins,
+	// In-class method definitions name via field_identifier; destructors and
+	// operator overloads via their dedicated nodes. Without these the name fell
+	// back to the first identifier ANYWHERE in the definition — a parameter
+	// type (in=NodeHandle) or the first body identifier (P0 misattribution).
+	DeclNameTypes:     []string{"identifier", "type_identifier", "field_identifier", "destructor_name", "operator_name"},
+	TypeDeclNeedsBody: []string{"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"},
+	TypeDeclBody:      []string{"field_declaration_list", "enumerator_list"},
+	Builtins:          cBuiltins,
 }
 
 // RustRules extracts functions, structs/enums/unions/traits/type-aliases, and

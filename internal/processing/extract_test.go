@@ -122,6 +122,78 @@ func TestExtractDocResetsOnNonComment(t *testing.T) {
 	}
 }
 
+// P0 regression (pure mirror of the real-grammar test): an in-class C++ method
+// definition names via field_identifier inside its declarator; when the
+// declarator yields no name the callable is anonymous — a name is NEVER
+// invented from a parameter type or body identifier.
+func TestDeclaratorNameStopsAtParameters(t *testing.T) {
+	names := func(syms []Symbol) []string {
+		var out []string
+		for _, s := range syms {
+			out = append(out, s.Kind+":"+s.Name)
+		}
+		return out
+	}
+	method := func(nameNode *fakeNode) *fakeNode {
+		return comp("function_definition",
+			leaf("primitive_type", "bool"),
+			comp("function_declarator",
+				nameNode,
+				comp("parameter_list", tok("("),
+					comp("parameter_declaration",
+						comp("qualified_identifier", leaf("namespace_identifier", "ros"), leaf("type_identifier", "NodeHandle")),
+						leaf("identifier", "nh")),
+					tok(")"))),
+			comp("compound_statement", tok("{"),
+				comp("assignment_expression", leaf("identifier", "scan_pub_"), call("advertise")),
+				tok("}")))
+	}
+	root := comp("translation_unit",
+		comp("class_specifier", tok("class"), leaf("type_identifier", "Lidar"),
+			comp("field_declaration_list", method(leaf("field_identifier", "init")))))
+	syms := Extract(root, CppRules, 1)
+	init := find(syms, "init")
+	if init == nil {
+		t.Fatalf("in-class method must be named by its field_identifier; got %v", names(syms))
+	}
+	if init.Recv != "Lidar" {
+		t.Errorf("in-class method must qualify by its class, got recv %q", init.Recv)
+	}
+	if s := find(syms, "NodeHandle"); s != nil {
+		t.Errorf("a parameter TYPE must never become a symbol name: %+v", *s)
+	}
+	if s := find(syms, "scan_pub_"); s != nil {
+		t.Errorf("a body identifier must never become a symbol name: %+v", *s)
+	}
+
+	// Declarator present but nameless -> anonymous -> no symbol (never invented).
+	root = comp("translation_unit",
+		comp("class_specifier", tok("class"), leaf("type_identifier", "Lidar"),
+			comp("field_declaration_list", method(tok("(")))))
+	for _, s := range Extract(root, CppRules, 1) {
+		if s.Kind != "type" {
+			t.Errorf("anonymous callable must be dropped, got %+v", s)
+		}
+	}
+}
+
+// A bare type reference (`struct Foo x;`, a forward declaration) is not a
+// definition: no symbol.
+func TestTypeReferenceNotExtracted(t *testing.T) {
+	root := comp("translation_unit",
+		comp("declaration", comp("struct_specifier", tok("struct"), leaf("type_identifier", "Foo")), leaf("identifier", "x")),
+		comp("struct_specifier", tok("struct"), leaf("type_identifier", "Bar"),
+			comp("field_declaration_list", tok("{"), tok("}"))),
+	)
+	syms := Extract(root, CppRules, 1)
+	if find(syms, "Foo") != nil {
+		t.Errorf("type reference must not be extracted: %+v", syms)
+	}
+	if bar := find(syms, "Bar"); bar == nil || bar.Kind != "type" {
+		t.Errorf("type definition must still be extracted: %+v", syms)
+	}
+}
+
 func TestExtractCalleesFiltersBuiltins(t *testing.T) {
 	body := comp("block",
 		comp("expression_statement", call("append")),
