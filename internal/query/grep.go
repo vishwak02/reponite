@@ -2,14 +2,19 @@
 // (architecture ext §10A). A trigram index over file content yields candidate
 // files for a literal query (a file must contain every trigram of the literal);
 // candidates are then verified exactly, and each hit is fused with its enclosing
-// symbol so a match is one hop from the graph. A regex with no literal atoms
-// falls back to a bounded full scan, labeled in the result. Pure and stdlib-only
-// (Go regexp), so it is unit-tested in-sandbox (ADR-018); the production adapter
-// persists the same trigram index in SQLite over content-addressed raw blobs.
+// symbol so a match is one hop from the graph. A regex prefilters through its
+// required literals (AND-of-ORs — an alternation ORs its branches' candidate
+// sets, never intersects across branches); a regex with no usable literal atoms
+// falls back to a full scan, labeled in the result. Candidate selection only
+// ever over-approximates: a search must never return fewer matches than ground
+// truth. Pure and stdlib-only (Go regexp + regexp/syntax), so it is unit-tested
+// in-sandbox (ADR-018); the production adapter persists the same trigram index
+// in SQLite over content-addressed raw blobs.
 package query
 
 import (
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strings"
 )
@@ -98,11 +103,15 @@ func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error
 
 	var candidates []int
 	note := ""
-	if literal && len(pattern) >= 3 {
+	switch {
+	case literal && len(pattern) >= 3:
 		candidates = ix.candidatesFor(pattern)
-	} else {
+	case literal:
 		candidates = ix.allFiles()
-		if !literal {
+	default:
+		var ok bool
+		if candidates, ok = ix.regexCandidates(pattern); !ok {
+			candidates = ix.allFiles()
 			note = "regex without literal atoms: full scan (no trigram prefilter)"
 		}
 	}
@@ -165,6 +174,134 @@ func (ix *TrigramIndex) candidatesFor(pattern string) []int {
 	}
 	sort.Ints(out)
 	return out
+}
+
+// regexCandidates prefilters candidate files for a regex pattern. It derives an
+// AND-of-ORs of literals every match must contain (requiredLiteralSets), then
+// evaluates it over the trigram index: union of per-literal candidates within a
+// set, intersection across sets. The result is always a SUPERSET of the files
+// containing a match — an alternation ORs its branches' candidates instead of
+// intersecting trigrams across branches (which selected nothing) — so the
+// verify pass never misses. ok=false means no usable literal constraint exists
+// (e.g. a branch with only short/case-folded literals): caller must full-scan.
+func (ix *TrigramIndex) regexCandidates(pattern string) (candidates []int, ok bool) {
+	re, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return nil, false // regexp.Compile accepted it; be safe and full-scan
+	}
+	var sets [][]string
+	for _, set := range requiredLiteralSets(re) {
+		if usableLiteralSet(set) {
+			sets = append(sets, set)
+		}
+	}
+	if len(sets) == 0 {
+		return nil, false
+	}
+	var result map[int]struct{}
+	for _, set := range sets {
+		union := map[int]struct{}{}
+		for _, lit := range set {
+			for _, fi := range ix.candidatesFor(lit) {
+				union[fi] = struct{}{}
+			}
+		}
+		if result == nil {
+			result = union
+			continue
+		}
+		for fi := range result {
+			if _, hit := union[fi]; !hit {
+				delete(result, fi)
+			}
+		}
+	}
+	out := make([]int, 0, len(result))
+	for fi := range result {
+		out = append(out, fi)
+	}
+	sort.Ints(out)
+	return out, true
+}
+
+// usableLiteralSet reports whether every alternative in the set can prefilter:
+// one literal too short for a trigram makes the whole OR-set select all files.
+func usableLiteralSet(set []string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	for _, lit := range set {
+		if len(lit) < 3 {
+			return false
+		}
+	}
+	return true
+}
+
+// requiredLiteralSets walks a parsed regex and returns literal requirements in
+// AND-of-ORs form: every string the regex matches must contain at least one
+// literal from EACH returned set. Conservative — a construct it can't reason
+// about contributes no requirement (never a wrong one), so candidate selection
+// can only over-approximate. nil means no requirement derivable.
+func requiredLiteralSets(re *syntax.Regexp) [][]string {
+	switch re.Op {
+	case syntax.OpLiteral:
+		if re.Flags&syntax.FoldCase != 0 {
+			return nil // case-insensitive: the byte-trigram index can't filter
+		}
+		return [][]string{{string(re.Rune)}}
+	case syntax.OpConcat:
+		var out [][]string
+		for _, sub := range re.Sub {
+			out = append(out, requiredLiteralSets(sub)...)
+		}
+		return out
+	case syntax.OpCapture:
+		return requiredLiteralSets(re.Sub[0])
+	case syntax.OpPlus:
+		return requiredLiteralSets(re.Sub[0]) // occurs at least once
+	case syntax.OpRepeat:
+		if re.Min >= 1 {
+			return requiredLiteralSets(re.Sub[0])
+		}
+		return nil
+	case syntax.OpAlternate:
+		// A match satisfies SOME branch, so the requirement is a single OR-set:
+		// one representative set per branch, unioned. Every branch must
+		// contribute a usable set, else the alternation constrains nothing.
+		var union []string
+		for _, sub := range re.Sub {
+			best := strongestSet(requiredLiteralSets(sub))
+			if best == nil {
+				return nil
+			}
+			union = append(union, best...)
+		}
+		return [][]string{union}
+	}
+	return nil
+}
+
+// strongestSet picks the branch requirement that filters hardest: among usable
+// sets, the one whose shortest literal is longest. nil when none is usable.
+func strongestSet(sets [][]string) []string {
+	var best []string
+	bestMin := 0
+	for _, set := range sets {
+		if !usableLiteralSet(set) {
+			continue
+		}
+		min := len(set[0])
+		for _, lit := range set[1:] {
+			if len(lit) < min {
+				min = len(lit)
+			}
+		}
+		if min > bestMin {
+			bestMin, best = min, set
+		}
+	}
+	return best
 }
 
 // enclosing returns the innermost symbol span containing line, or "".

@@ -57,7 +57,10 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		}
 		return SearchJSON(hits)
 	case "reponite_grep":
-		res, err := query.GrepRepo(t.Store, discoverRepo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] != "false"})
+		// Regex by default (§14A): fixed=true opts into literal. The old
+		// literal-by-default silently returned zero for `a|b` — the trigrams of
+		// the raw alternation string exist in no file (P0 under-match bug).
+		res, err := query.GrepRepo(t.Store, discoverRepo, ref, args["pattern"], query.GrepOptions{Fixed: args["fixed"] == "true"})
 		if err != nil {
 			return "", err
 		}
