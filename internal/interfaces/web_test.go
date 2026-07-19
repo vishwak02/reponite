@@ -66,6 +66,41 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(ov, "billing") || !strings.Contains(ov, "symbols") {
 		t.Fatalf("/api/overview incomplete: %s", ov)
 	}
+
+	// The dashboard ships the Usages and Verify views (P1: only Topics had one).
+	html := get("/")
+	for _, id := range []string{`id="usages"`, `id="verify"`, `id="uq"`, `id="vpath"`, `id="vcontent"`} {
+		if !strings.Contains(html, id) {
+			t.Fatalf("dashboard HTML missing %s", id)
+		}
+	}
+	js := get("/app.js")
+	for _, fn := range []string{"function renderUsages", "function renderVerify", "api/verify_edit"} {
+		if !strings.Contains(js, fn) {
+			t.Fatalf("/app.js missing %s", fn)
+		}
+	}
+
+	// /api/usages backs the Usages view: the call site with line + confirmation.
+	usages := get("/api/usages?symbol=Charge&ref=HEAD")
+	if !strings.Contains(usages, `"total"`) || !strings.Contains(usages, `"usages"`) {
+		t.Fatalf("/api/usages incomplete: %s", usages)
+	}
+
+	// The Verify view POSTs the proposed content as a form body (large files
+	// don't fit in a query string); FormValue must read it.
+	resp, err := http.Post(srv.URL+"/api/verify_edit?path=billing/charge.go&ref=HEAD",
+		"application/x-www-form-urlencoded",
+		strings.NewReader("content="+`package billing`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	// No ParseSymbols injected in the pure test -> 501, but the route must
+	// exist and answer (the treesitter build wires the parser).
+	if resp.StatusCode != http.StatusNotImplemented {
+		t.Fatalf("/api/verify_edit POST: want 501 without a parser, got %d", resp.StatusCode)
+	}
 }
 
 // A team server over a MultiStore lists every repo and routes the ?repo= param.

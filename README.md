@@ -187,6 +187,8 @@ reponite serve .            # single-repo view → http://127.0.0.1:8899
 reponite serve repo-a repo-b repo-c   # shared team/fleet view
 ```
 
+Views: **Overview** (index/database stats) · **Explore** (search → editing brief) · **Diff** · **Impact** (fleet callers) · **Topics** (ROS comms graph) · **Usages** (call sites, call-graph-confirmed) · **Verify** (paste a proposed edit, see what breaks before saving).
+
 ---
 
 ## How it works
