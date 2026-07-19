@@ -267,6 +267,8 @@ type ximpactCallerDTO struct {
 	Module           string  `json:"module,omitempty"`
 	ResolutionMethod string  `json:"resolution_method"`
 	Confidence       float64 `json:"confidence"`
+	// current | stale (still expects the old shape) | absent = unknown (§8B.3)
+	ExpectedSignature string `json:"expected_signature,omitempty"`
 }
 
 type ximpactDefDTO struct {
@@ -283,8 +285,11 @@ type ximpactDTO struct {
 	Callers         []ximpactCallerDTO `json:"callers"`
 	Definitions     []ximpactDefDTO    `json:"definitions,omitempty"`
 	ContractChanged bool               `json:"contract_changed"`
-	Note            string             `json:"note,omitempty"`
-	Meta            metaDTO            `json:"_meta"`
+	// Callers whose captured contract no longer matches the target's current
+	// signature — "N still expect the old shape" (unknown-skew callers not counted).
+	StaleCallers int     `json:"stale_callers,omitempty"`
+	Note         string  `json:"note,omitempty"`
+	Meta         metaDTO `json:"_meta"`
 }
 
 // XImpactJSON renders the cross-repo caller set fused with the target's contract
@@ -296,6 +301,7 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 		Modules:         r.Modules,
 		Callers:         make([]ximpactCallerDTO, 0, len(r.Callers)),
 		ContractChanged: r.ContractChanged,
+		StaleCallers:    r.StaleCallers,
 		Note:            r.Note,
 		Meta:            metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
 	}
@@ -303,6 +309,7 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 		dto.Callers = append(dto.Callers, ximpactCallerDTO{
 			Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Module: c.Module,
 			ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence,
+			ExpectedSignature: c.ExpectedSignature,
 		})
 	}
 	for _, d := range r.Definitions {

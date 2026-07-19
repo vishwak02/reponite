@@ -165,7 +165,7 @@ func TestSQLiteExternalRefsAndModulePath(t *testing.T) {
 	}
 
 	refs := []query.ExternalRef{
-		{From: "web.fetch", Module: "github.com/acme/api", Name: "getUser", ResolutionMethod: "import-resolved", Confidence: 0.75},
+		{From: "web.fetch", Module: "github.com/acme/api", Name: "getUser", ResolutionMethod: "import-resolved", Confidence: 0.75, TargetSignatureHash: "sigV1"},
 		{From: "web.fetch", Module: "github.com/acme/api", Name: "listUsers", ResolutionMethod: "import-resolved", Confidence: 0.75},
 	}
 	if err := st.PutExternalRefs("web", "HEAD", refs); err != nil {
@@ -174,6 +174,14 @@ func TestSQLiteExternalRefsAndModulePath(t *testing.T) {
 	hits := st.ExternalRefsTo("github.com/acme/api", "getUser")
 	if len(hits) != 1 || hits[0].Repo != "web" || hits[0].Caller != "web.fetch" || hits[0].Confidence != 0.75 {
 		t.Fatalf("ExternalRefsTo round-trip: %+v", hits)
+	}
+	// §8B.3 per-caller skew: the captured target contract round-trips; an
+	// uncaptured one stays "" (unknown), never invented.
+	if hits[0].TargetSignatureHash != "sigV1" {
+		t.Fatalf("target_signature_hash round-trip: %+v", hits[0])
+	}
+	if h := st.ExternalRefsTo("github.com/acme/api", "listUsers"); len(h) != 1 || h[0].TargetSignatureHash != "" {
+		t.Fatalf("uncaptured target signature must stay empty: %+v", h)
 	}
 	if len(st.ExternalRefsTo("github.com/acme/api", "listUsers")) != 1 {
 		t.Fatal("second external ref must round-trip independently")

@@ -175,7 +175,8 @@ async function doImpact(){
   d.innerHTML=`<p class="muted"><span class="spinner"></span> scanning fleet…</p>`;
   try{const r=await api("ximpact",{symbol:s});
     const c=r.callers||[],precise=c.filter(x=>x.resolution_method==="import-resolved"),name=c.filter(x=>x.resolution_method!=="import-resolved");
-    let h=`<div class="detail-h"><h2>${esc(s)}</h2>${r.contract_changed?'<span class="tag shape_changed">contract changed</span>':""}</div>`;
+    let h=`<div class="detail-h"><h2>${esc(s)}</h2>${r.contract_changed?'<span class="tag shape_changed">contract changed</span>':""}`+
+      (r.stale_callers?`<span class="tag removed">${r.stale_callers} expect the old shape</span>`:"")+`</div>`;
     if(r.modules&&r.modules.length)h+=`<div class="detail-path">module ${esc(r.modules.join(", "))}</div>`;
     if(!c.length)h+=emptyRow("no external callers found");
     if(precise.length)h+=`<div class="grouplabel">module-resolved · precise <span class="ln"></span></div>`+precise.map(callerRow).join("");
@@ -185,6 +186,7 @@ async function doImpact(){
   }catch(e){d.innerHTML=emptyRow("error");toast(e.message);}
 }
 const callerRow=x=>`<div class="row"><span class="grow">${esc(x.repo)} <span class="muted">@${esc(x.ref)}</span> → ${esc(x.caller)}</span>`+
+  (x.expected_signature==="stale"?'<span class="tag removed">old shape</span>':x.expected_signature==="current"?'<span class="tag compatible">current</span>':"")+
   (x.module?`<span class="pill mono">${esc(x.module)}</span>`:"")+
   `<span class="pill ${x.resolution_method==="import-resolved"?"precise":""}">${esc(x.resolution_method)}</span><span class="pill conf">${x.confidence}</span></div>`;
 
