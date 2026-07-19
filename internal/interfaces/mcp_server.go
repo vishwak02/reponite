@@ -43,11 +43,13 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("tests", mcp.Description(`"true" to include Test*/Benchmark*/Example*/Fuzz* symbols (default excluded)`))))
 	add(mcp.NewTool("reponite_grep",
-		mcp.WithDescription("Trigram-prefiltered regex/literal search (Go regexp syntax, alternation included); each hit fused with its enclosing symbol."),
+		mcp.WithDescription("Trigram-prefiltered regex/literal search (Go regexp syntax, alternation included); each hit fused with its enclosing symbol. Counts: `total` = every matching line (ground truth), `matches` = the [offset, offset+limit) window in stable (repo,path,line) order, `truncated` = more matches exist past this window (page with offset), `scanned` = candidate files examined."),
 		mcp.WithString("pattern", mcp.Required(), mcp.Description("regular expression (Go syntax); plain strings work as-is")),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
-		mcp.WithString("fixed", mcp.Description(`"true" to match the pattern as a literal string (default: regex)`))))
+		mcp.WithString("fixed", mcp.Description(`"true" to match the pattern as a literal string (default: regex)`)),
+		mcp.WithString("limit", mcp.Description("max matches returned (default 50, -1 = all)")),
+		mcp.WithString("offset", mcp.Description("matches to skip — page through a truncated result"))))
 	add(mcp.NewTool("reponite_compat",
 		mcp.WithDescription("Compatibility verdicts (absent/shape/behavior/compatible) for a symbol across the repo's other refs."),
 		mcp.WithString("symbol", mcp.Required()),

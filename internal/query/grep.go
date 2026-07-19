@@ -61,8 +61,9 @@ func trigrams(s string) map[string]struct{} {
 
 // GrepOptions controls a search.
 type GrepOptions struct {
-	Fixed bool // treat pattern as a literal string, not a regex
-	Limit int  // max matches returned (<=0 uses the default)
+	Fixed  bool // treat pattern as a literal string, not a regex
+	Limit  int  // max matches returned (0 = default, <0 = unlimited)
+	Offset int  // matches to skip before the returned window (paging)
 }
 
 // Match is one hit, annotated with its enclosing symbol. Repo is set on
@@ -75,22 +76,41 @@ type Match struct {
 	Symbol string
 }
 
-// GrepResult is the token-lean search result.
+// GrepResult is the token-lean search result. The counts mean:
+//   - Total: every matching LINE found (the ground truth count) — independent
+//     of the returned window.
+//   - Matches: the [Offset, Offset+Limit) window of those, in deterministic
+//     (repo, path, line) order, so limit/offset paging walks the full set.
+//   - Truncated: more matches exist AFTER this window (Offset+len(Matches) <
+//     Total) — page forward with a larger offset to get them.
+//   - Scanned: candidate FILES examined (post trigram prefilter), not lines
+//     and not the match count.
 type GrepResult struct {
 	Matches   []Match
 	Total     int
 	Truncated bool
+	Offset    int
 	Scanned   int
 	Note      string
 }
 
 const defaultGrepLimit = 50
 
+// effectiveLimit resolves a GrepOptions.Limit: 0 = default, <0 = unlimited.
+func effectiveLimit(limit int) int {
+	if limit == 0 {
+		return defaultGrepLimit
+	}
+	return limit
+}
+
 // Grep runs a literal or regex search, prefiltering by trigram where possible.
+// Matches are emitted in (path, line) order regardless of store file order, so
+// an Offset/Limit window is stable across calls (honest paging).
 func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error) {
-	limit := opt.Limit
-	if limit <= 0 {
-		limit = defaultGrepLimit
+	limit := effectiveLimit(opt.Limit)
+	if opt.Offset < 0 {
+		opt.Offset = 0
 	}
 	literal := opt.Fixed || regexp.QuoteMeta(pattern) == pattern
 	var re *regexp.Regexp
@@ -123,7 +143,11 @@ func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error
 		return re.MatchString(line)
 	}
 
-	res := GrepResult{Scanned: len(candidates), Note: note}
+	// Path-sorted candidates make match order deterministic regardless of the
+	// store's file order — without this, an offset window shifts between calls.
+	sort.Slice(candidates, func(i, j int) bool { return ix.files[candidates[i]].Path < ix.files[candidates[j]].Path })
+
+	res := GrepResult{Scanned: len(candidates), Offset: opt.Offset, Note: note}
 	for _, fi := range candidates {
 		f := ix.files[fi]
 		for ln, text := range strings.Split(f.Content, "\n") {
@@ -131,14 +155,14 @@ func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error
 				continue
 			}
 			res.Total++
-			if len(res.Matches) < limit {
+			if res.Total > opt.Offset && (limit < 0 || len(res.Matches) < limit) {
 				res.Matches = append(res.Matches, Match{
 					Path: f.Path, Line: ln + 1, Text: text, Symbol: enclosing(f.Symbols, ln+1),
 				})
 			}
 		}
 	}
-	res.Truncated = res.Total > len(res.Matches)
+	res.Truncated = opt.Offset+len(res.Matches) < res.Total
 	return res, nil
 }
 

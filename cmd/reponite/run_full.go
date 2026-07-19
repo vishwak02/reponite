@@ -186,15 +186,18 @@ func cmdDiff(args []string) {
 
 func cmdGrep(args []string) {
 	var fixed bool
-	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed]", args, func(fs *flag.FlagSet) {
+	var limit, offset int
+	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed] [--limit N] [--offset N]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&fixed, "fixed", false, "treat the pattern as a literal string, not a regex")
+		fs.IntVar(&limit, "limit", 0, "max matches returned (0 = default 50, -1 = all)")
+		fs.IntVar(&offset, "offset", 0, "matches to skip — page through a truncated result")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite grep <pattern> [ref] [--fixed]"))
+		fail(fmt.Errorf("usage: reponite grep <pattern> [ref] [--fixed] [--limit N] [--offset N]"))
 	}
 	st := openStore(".")
 	defer st.Close()
-	res, err := query.GrepRepo(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed})
+	res, err := query.GrepRepo(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed, Limit: limit, Offset: offset})
 	if err != nil {
 		fail(err)
 	}

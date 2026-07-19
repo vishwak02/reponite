@@ -292,7 +292,13 @@ off to `impact` / `brief` / `compat` on that symbol.
 ### 10A.5 Token-lean output & scope
 Matches are grouped by file/symbol, each with line number and the matching line
 (± configurable context), a total count, and truncation to a result/token budget
-with an omitted count — never a raw dump. Search one ref, several refs, or a repo
+with an omitted count — never a raw dump. Truncation is **pageable and honest**:
+`limit` (default 50, `-1` = all) and `offset` window the match list in a
+deterministic (repo, path, line) order, so `offset`-stepping walks the complete
+set. The counts mean: `total` = every matching line (ground truth, independent
+of the window); `matches` = the `[offset, offset+limit)` window; `truncated` =
+matches remain *after* this window (page forward to get them); `scanned` =
+candidate **files** examined after the trigram prefilter — not a match count. Search one ref, several refs, or a repo
 group; every response carries ref + freshness + confidence `_meta`. Because
 content is deduped, searching many refs doesn't multiply cost for shared files.
 Raw-source authorization (§15) governs results, so secrets in `.env`/config are
@@ -308,8 +314,9 @@ gated exactly like source.
   at index time, deduped by content.
 
 ### §14A — Lexical interface
-- CLI: `reponite grep <pattern> [--ref R] [--repos …] [--glob G] [--lang L] [-C n] [--fixed]`
-- MCP: `reponite_grep(pattern, ref?, repos?, glob?, lang?, is_test?, context?, fixed?, limit?, token_budget?)` → grouped matches + enclosing symbol + `_meta`
+- CLI: `reponite grep <pattern> [--ref R] [--repos …] [--glob G] [--lang L] [-C n] [--fixed] [--limit N] [--offset N]`
+- MCP: `reponite_grep(pattern, ref?, repos?, glob?, lang?, is_test?, context?, fixed?, limit?, offset?, token_budget?)` → grouped matches + enclosing symbol + `_meta`
+- Web: `/api/grep?pattern=&repo=&ref=&fixed=&limit=&offset=` (fleet-wide when no repo)
 
 ### §13A — Failure modes (lexical)
 | Situation | Behavior |
@@ -317,7 +324,7 @@ gated exactly like source.
 | Regex with no literal atoms | Bounded streamed scan; if truncated, `_meta` flags partial + total seen |
 | Invalid regex | Error with the compile message; no partial output |
 | Binary / oversized file | Skipped, counted in `_meta.skipped` |
-| Too many matches | Truncate to `token_budget`/`limit`; report total match count |
+| Too many matches | Truncate to `token_budget`/`limit`; report total match count; `offset` pages the remainder (stable order) |
 
 ### §18A — Performance (lexical)
 | Operation | Target |

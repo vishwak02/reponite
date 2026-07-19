@@ -132,6 +132,44 @@ func TestGrepRepo(t *testing.T) {
 	}
 }
 
+// Fleet-wide paging: the offset/limit window is over the GLOBAL
+// (repo, path, line) order, so pages walk every repo's matches exactly once.
+func TestGrepRepoFleetPaging(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("repo-a", "HEAD", query.File{Path: "a.txt", Content: "needle one\nneedle two\n"})
+	m.PutFile("repo-b", "HEAD", query.File{Path: "b.txt", Content: "needle three\n"})
+
+	all, err := query.GrepRepo(m, query.FleetRepo, "HEAD", "needle", query.GrepOptions{Fixed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Total != 3 || len(all.Matches) != 3 || all.Truncated {
+		t.Fatalf("fleet grep: want 3 untruncated, got %+v", all)
+	}
+
+	var walked []string
+	for off := 0; off < 3; off++ {
+		r, err := query.GrepRepo(m, query.FleetRepo, "HEAD", "needle", query.GrepOptions{Fixed: true, Limit: 1, Offset: off})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Total != 3 || len(r.Matches) != 1 {
+			t.Fatalf("fleet page offset=%d: %+v", off, r)
+		}
+		wantTrunc := off < 2
+		if r.Truncated != wantTrunc {
+			t.Fatalf("fleet page offset=%d truncated=%v, want %v", off, r.Truncated, wantTrunc)
+		}
+		walked = append(walked, r.Matches[0].Repo+"/"+r.Matches[0].Text)
+	}
+	want := []string{"repo-a/needle one", "repo-a/needle two", "repo-b/needle three"}
+	for i := range want {
+		if walked[i] != want[i] {
+			t.Fatalf("fleet paging order: got %v, want %v", walked, want)
+		}
+	}
+}
+
 func TestSearchName(t *testing.T) {
 	m := storage.NewMem()
 	m.Put("r", "HEAD", "GetUser", rc("a", "s", "b", 1))
