@@ -55,6 +55,84 @@ func TestCommGraphLinksPubSubAcrossRepos(t *testing.T) {
 	}
 }
 
+// P1: ROS1 roscpp subscribe() carries no template — the middleware infers the
+// message type from the callback — so the type must be recovered from the
+// callback's message parameter (best-effort, labeled msg_type_source:
+// callback-param). With the type recovered, the producer↔consumer type match
+// bumps the link confidence to 0.9.
+func TestSubscriberMsgTypeFromCallback(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("robot", "HEAD", query.File{
+		Path: "src/lidar.cpp",
+		Content: `void Lidar::init(ros::NodeHandle& nh) {
+  scan_pub_ = nh.advertise<sensor_msgs::LaserScan>("scan_out", 10);
+  scan_sub_ = nh.subscribe("scan_out", 10, &Lidar::scanCB, this);
+  raw_sub_ = nh.subscribe("raw", 5, &Lidar::rawCB, this);
+  dyn_sub_ = nh.subscribe("dyn", 1, functorObj);
+}
+void Lidar::scanCB(const sensor_msgs::LaserScan::ConstPtr& msg) {}
+void Lidar::rawCB(const boost::shared_ptr<std_msgs::UInt8 const>& msg) {}
+`,
+	})
+	res := query.CommGraph(m, "robot", "HEAD")
+	byName := map[string]query.CommGroup{}
+	for _, g := range res.Groups {
+		byName[g.Name] = g
+	}
+
+	scan := byName["scan_out"]
+	if len(scan.Consumers) != 1 {
+		t.Fatalf("scan_out should have 1 subscriber, got %+v", scan)
+	}
+	sub := scan.Consumers[0]
+	if sub.MsgType != "sensor_msgs::LaserScan" || sub.MsgTypeSource != "callback-param" {
+		t.Fatalf("subscriber type must come from the callback param, got %q (source %q)", sub.MsgType, sub.MsgTypeSource)
+	}
+	// Producer (template) and consumer (callback) types now match -> 0.9.
+	if scan.Confidence != 0.9 {
+		t.Fatalf("type-confirmed edge should be 0.9, got %v", scan.Confidence)
+	}
+
+	if raw := byName["raw"].Consumers; len(raw) != 1 || raw[0].MsgType != "std_msgs::UInt8" {
+		t.Fatalf("shared_ptr callback form should recover std_msgs::UInt8, got %+v", raw)
+	}
+	// A functor/lambda callback can't be resolved -> honest "" (never guessed).
+	if dyn := byName["dyn"].Consumers; len(dyn) != 1 || dyn[0].MsgType != "" {
+		t.Fatalf("unresolvable callback must leave msg_type empty, got %+v", dyn)
+	}
+}
+
+// rospy/rclpy pass the message type positionally (before or after the topic
+// literal); the captured type matches a C++ template type cross-language.
+func TestPythonPositionalMsgType(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("driver", "HEAD", query.File{
+		Path:    "src/lidar.cpp",
+		Content: "void init() {\n  pub_ = nh.advertise<sensor_msgs::LaserScan>(\"scan\", 10);\n}\n",
+	})
+	m.PutFile("planner", "HEAD", query.File{
+		Path: "nav.py",
+		Content: "rospy.Subscriber('scan', LaserScan, cb)\n" +
+			"pub = rospy.Publisher('path', nav_msgs.msg.Path, queue_size=1)\n",
+	})
+	res := query.CommGraph(m, query.FleetRepo, "HEAD")
+	for _, g := range res.Groups {
+		switch g.Name {
+		case "scan":
+			if len(g.Consumers) != 1 || g.Consumers[0].MsgType != "LaserScan" || g.Consumers[0].MsgTypeSource != "positional-arg" {
+				t.Fatalf("rospy positional type not captured: %+v", g.Consumers)
+			}
+			if g.Confidence != 0.9 { // sensor_msgs::LaserScan (C++) ≡ LaserScan (py)
+				t.Fatalf("cross-language type match should bump to 0.9, got %v", g.Confidence)
+			}
+		case "path":
+			if len(g.Producers) != 1 || g.Producers[0].MsgType != "nav_msgs.msg.Path" {
+				t.Fatalf("rospy publisher positional type not captured: %+v", g.Producers)
+			}
+		}
+	}
+}
+
 // A commented-out publisher is not a live edge, a dynamic (non-literal) topic is
 // counted as unresolved rather than linked, and a subscriber with no publisher
 // stays a one-sided (unconnected) group.
