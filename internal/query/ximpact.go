@@ -37,7 +37,19 @@ type XImpactCaller struct {
 	Module           string  // resolved target module ("" for a name-only match)
 	ResolutionMethod string  // import-resolved (precise) | unresolved-external (name-based)
 	Confidence       float64 // module-resolved > name-based
+	// ExpectedSignature is the per-caller contract-skew verdict (§8B.3):
+	// "current" — the contract captured when this caller was indexed matches
+	// the target's current signature; "stale" — it doesn't (this caller still
+	// expects the old shape); "" — unknown (no contract captured at index
+	// time; reported, never guessed).
+	ExpectedSignature string
 }
+
+// Per-caller skew verdicts.
+const (
+	SkewCurrent = "current"
+	SkewStale   = "stale"
+)
 
 // XImpactDef is one definition site of the target symbol in the store, with its
 // signature hash and its repo's module path — the "what is the current contract,
@@ -65,8 +77,13 @@ type XImpactResult struct {
 	// it is defined at — the API shape moved, so callers pinned to older refs may
 	// expect a stale contract (the deploy-safety signal, §8B.3).
 	ContractChanged bool
-	Note            string
-	Meta            Meta
+	// StaleCallers counts callers whose captured contract no longer matches the
+	// target's current signature — the "3 of 4 still expect the old shape"
+	// number (§8B.3). Callers with no captured contract are not counted (their
+	// skew is unknown, not assumed).
+	StaleCallers int
+	Note         string
+	Meta         Meta
 }
 
 // XImpact finds every caller of target across the store, fusing module-resolved
@@ -113,6 +130,11 @@ func XImpact(s Store, target, ref string) XImpactResult {
 	}
 	res.Modules = sortedSet(moduleSet)
 
+	// The target's CURRENT contract set: per definition identity (repo, qid),
+	// the signature at its preferred ref (HEAD when indexed, else the latest).
+	// A caller's captured contract is compared against this for per-caller skew.
+	currentSigs := currentSignatures(res.Definitions)
+
 	// --- tier 1: module-resolved callers (precise), fleet-wide ---
 	seen := map[[3]string]bool{} // (repo, ref, caller) already counted
 	for _, module := range res.Modules {
@@ -122,9 +144,19 @@ func XImpact(s Store, target, ref string) XImpactResult {
 				continue
 			}
 			seen[key] = true
+			skew := ""
+			if h.TargetSignatureHash != "" && len(currentSigs) > 0 {
+				if currentSigs[h.TargetSignatureHash] {
+					skew = SkewCurrent
+				} else {
+					skew = SkewStale
+					res.StaleCallers++
+				}
+			}
 			res.Callers = append(res.Callers, XImpactCaller{
 				Repo: h.Repo, Ref: h.Ref, Caller: h.Caller, Module: h.Module,
 				ResolutionMethod: h.ResolutionMethod, Confidence: h.Confidence,
+				ExpectedSignature: skew,
 			})
 		}
 	}
@@ -157,6 +189,29 @@ func XImpact(s Store, target, ref string) XImpactResult {
 	res.Note = ximpactNote(len(res.Modules) > 0)
 	res.Meta = Meta{Repo: "", Ref: ref}
 	return res
+}
+
+// currentSignatures picks, per definition identity (repo, qid), the signature
+// at that identity's preferred ref — HEAD when present, else the lexically
+// newest — and returns the set. This is "the target's current contract" that a
+// caller's captured contract is compared against for skew (§8B.3).
+func currentSignatures(defs []XImpactDef) map[string]bool {
+	type id struct{ repo, sym string }
+	best := map[id]XImpactDef{}
+	for _, d := range defs {
+		k := id{d.Repo, d.Symbol}
+		cur, ok := best[k]
+		if !ok || d.Ref == "HEAD" || (cur.Ref != "HEAD" && d.Ref > cur.Ref) {
+			best[k] = d
+		}
+	}
+	out := map[string]bool{}
+	for _, d := range best {
+		if d.SignatureHash != "" {
+			out[d.SignatureHash] = true
+		}
+	}
+	return out
 }
 
 func refsOf(s Store, repo, ref string) []string {

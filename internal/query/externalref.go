@@ -17,6 +17,13 @@ type ExternalRef struct {
 	Name             string // exported symbol name within that module
 	ResolutionMethod string
 	Confidence       float64
+	// TargetSignatureHash is the target's signature hash AS SEEN when this
+	// caller was indexed — captured only when the target was resolvable in the
+	// same store at index time (shared/fleet store, monorepo); "" otherwise
+	// (per-caller skew then reads unknown, never guessed). §8B.3: comparing it
+	// against the target's current signature answers "which callers still
+	// expect the old shape".
+	TargetSignatureHash string
 }
 
 // ExternalRefHit is one fleet-wide caller of an exported symbol, returned by
@@ -30,4 +37,7 @@ type ExternalRefHit struct {
 	Name             string
 	ResolutionMethod string
 	Confidence       float64
+	// TargetSignatureHash: the contract this caller was indexed against ("" =
+	// not captured; see ExternalRef.TargetSignatureHash).
+	TargetSignatureHash string
 }

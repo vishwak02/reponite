@@ -137,6 +137,48 @@ func TestXImpactModuleResolvedFusion(t *testing.T) {
 	}
 }
 
+// §8B.3 per-caller signature skew: a caller whose CAPTURED target contract no
+// longer matches the target's current signature reads "stale" ("still expects
+// the old shape"); a matching one reads "current"; a caller indexed without a
+// captured contract stays unknown ("") and is never counted stale.
+func TestXImpactPerCallerSignatureSkew(t *testing.T) {
+	m := storage.NewMem()
+	// The target's contract moved: v1 had sigOLD, HEAD has sigNEW.
+	m.Put("api", "v1", "api.getUser", rc("g1", "sigOLD", "b1", 1))
+	m.Put("api", "HEAD", "api.getUser", rc("g2", "sigNEW", "b2", 1))
+	if err := m.SetModulePath("api", "github.com/acme/api"); err != nil {
+		t.Fatal(err)
+	}
+	dep := func(from, capturedSig string) query.ExternalRef {
+		return query.ExternalRef{From: from, Module: "github.com/acme/api", Name: "getUser",
+			ResolutionMethod: query.ImportResolution, Confidence: 0.75, TargetSignatureHash: capturedSig}
+	}
+	m.PutExternalRefs("legacy", "HEAD", []query.ExternalRef{dep("legacy.fetch", "sigOLD")}) // captured before the change
+	m.PutExternalRefs("fresh", "HEAD", []query.ExternalRef{dep("fresh.fetch", "sigNEW")})   // captured after
+	m.PutExternalRefs("blind", "HEAD", []query.ExternalRef{dep("blind.fetch", "")})         // never captured
+
+	res := query.XImpact(m, "getUser", "")
+	skews := map[string]string{}
+	for _, c := range res.Callers {
+		skews[c.Caller] = c.ExpectedSignature
+	}
+	if skews["legacy.fetch"] != query.SkewStale {
+		t.Fatalf("legacy captured sigOLD vs current sigNEW must be stale, got %q", skews["legacy.fetch"])
+	}
+	if skews["fresh.fetch"] != query.SkewCurrent {
+		t.Fatalf("fresh captured the current contract, got %q", skews["fresh.fetch"])
+	}
+	if skews["blind.fetch"] != "" {
+		t.Fatalf("uncaptured contract must stay unknown, got %q", skews["blind.fetch"])
+	}
+	if res.StaleCallers != 1 {
+		t.Fatalf("StaleCallers = %d; want 1 (only legacy; unknown never counted)", res.StaleCallers)
+	}
+	if !res.ContractChanged {
+		t.Fatal("the target's own contract moved across refs; ContractChanged must hold")
+	}
+}
+
 // The false-positive guard the OLD name-based ximpact couldn't give: a caller in
 // an unrelated module that imports a DIFFERENT package's getUser is matched only
 // when its own module matches the target's — a distinct module never collides.

@@ -3,6 +3,7 @@ package processing
 import (
 	"testing"
 
+	"github.com/vishwak02/reponite/internal/content"
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
 )
@@ -238,5 +239,50 @@ func TestIndexFilesExternalRefs(t *testing.T) {
 	}
 	if got := m.ExternalRefsTo("github.com/x/bar", "Do"); len(got) != 0 {
 		t.Fatalf("reindex without imports must clear external refs, got %+v", got)
+	}
+}
+
+// §8B.3 capture half of per-caller signature skew: when the TARGET's repo lives
+// in the same store at index time (shared/fleet store, monorepo), each external
+// ref records the target's signature hash as seen NOW; an unresolvable or
+// ambiguous target leaves it "" — unknown, never guessed.
+func TestIndexFilesCapturesTargetSignature(t *testing.T) {
+	m := storage.NewMem()
+	// The target repo is already in the store with a module identity.
+	m.Put("api", "HEAD", "api.getUser", storage.SymbolRecord{SignatureHash: content.Hash("sigV1")})
+	// A second repo defines TWO symbols named dupe -> ambiguous, never captured.
+	m.Put("api", "HEAD", "a.dupe", storage.SymbolRecord{SignatureHash: content.Hash("d1")})
+	m.Put("api", "HEAD", "b.dupe", storage.SymbolRecord{SignatureHash: content.Hash("d2")})
+	if err := m.SetModulePath("api", "github.com/acme/api"); err != nil {
+		t.Fatal(err)
+	}
+
+	caller := Symbol{
+		Name: "Fetch", Kind: "function", Signature: "func Fetch()", CanonBody: []byte("b"),
+		Callees: []string{"getUser", "dupe", "Gone"},
+		QualifiedCalls: []QualifiedCall{
+			{Qualifier: "api", Name: "getUser"},
+			{Qualifier: "api", Name: "dupe"},
+			{Qualifier: "api", Name: "Gone"}, // not defined in the target -> unknown
+		},
+	}
+	files := []ParsedFile{{
+		Path: "web/fetch.go", Content: "x", Lang: "go",
+		Symbols: []Symbol{caller},
+		Imports: []ImportBinding{{Local: "api", Module: "github.com/acme/api"}},
+	}}
+	if err := IndexFiles(m, "web", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+
+	want := string(content.Hash("sigV1"))
+	if h := m.ExternalRefsTo("github.com/acme/api", "getUser"); len(h) != 1 || h[0].TargetSignatureHash != want {
+		t.Fatalf("resolvable target must capture its signature: %+v", h)
+	}
+	if h := m.ExternalRefsTo("github.com/acme/api", "dupe"); len(h) != 1 || h[0].TargetSignatureHash != "" {
+		t.Fatalf("ambiguous target name must capture nothing: %+v", h)
+	}
+	if h := m.ExternalRefsTo("github.com/acme/api", "Gone"); len(h) != 1 || h[0].TargetSignatureHash != "" {
+		t.Fatalf("absent target must capture nothing: %+v", h)
 	}
 }

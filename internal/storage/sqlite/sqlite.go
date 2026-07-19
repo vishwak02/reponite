@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS external_refs (
   repo TEXT NOT NULL, ref TEXT NOT NULL, from_name TEXT NOT NULL,
   target_module TEXT NOT NULL, target_name TEXT NOT NULL,
   resolution_method TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0.6,
+  target_signature_hash TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, ref, from_name, target_module, target_name)
 );
 CREATE INDEX IF NOT EXISTS idx_extref_target ON external_refs(target_module, target_name);
@@ -132,6 +133,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE callees ADD COLUMN resolution_method TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ref_history ADD COLUMN direct_conf REAL NOT NULL DEFAULT 1`,
 		`ALTER TABLE ref_history ADD COLUMN lang TEXT NOT NULL DEFAULT ''`,
+		// §8B.3 per-caller signature skew: the target contract each caller was
+		// indexed against ('' = not captured -> skew unknown, never guessed).
+		`ALTER TABLE external_refs ADD COLUMN target_signature_hash TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
@@ -292,9 +296,9 @@ func (s *Store) PutExternalRefs(repo, ref string, refs []query.ExternalRef) erro
 	}
 	for _, r := range refs {
 		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO external_refs(repo, ref, from_name, target_module, target_name, resolution_method, confidence)
-			 VALUES(?,?,?,?,?,?,?)`,
-			repo, ref, r.From, r.Module, r.Name, r.ResolutionMethod, r.Confidence); err != nil {
+			`INSERT OR REPLACE INTO external_refs(repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash)
+			 VALUES(?,?,?,?,?,?,?,?)`,
+			repo, ref, r.From, r.Module, r.Name, r.ResolutionMethod, r.Confidence, r.TargetSignatureHash); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -330,7 +334,7 @@ func (s *Store) ModulePath(repo string) string {
 
 func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 	rows, err := s.db.Query(
-		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence
+		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash
 		 FROM external_refs WHERE target_module=? AND target_name=?
 		 ORDER BY repo, ref, from_name`, module, name)
 	if err != nil {
@@ -340,7 +344,7 @@ func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 	var out []query.ExternalRefHit
 	for rows.Next() {
 		var h query.ExternalRefHit
-		if rows.Scan(&h.Repo, &h.Ref, &h.Caller, &h.Module, &h.Name, &h.ResolutionMethod, &h.Confidence) == nil {
+		if rows.Scan(&h.Repo, &h.Ref, &h.Caller, &h.Module, &h.Name, &h.ResolutionMethod, &h.Confidence, &h.TargetSignatureHash) == nil {
 			out = append(out, h)
 		}
 	}

@@ -7,6 +7,8 @@
 package processing
 
 import (
+	"strings"
+
 	"github.com/vishwak02/reponite/internal/content"
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
@@ -140,8 +142,91 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			return err
 		}
 	}
+	captureTargetSignatures(w, repo, extRefs)
 	if err := w.PutExternalRefs(repo, ref, extRefs); err != nil {
 		return err
 	}
 	return nil
+}
+
+// captureTargetSignatures stamps each external ref with the target's signature
+// hash AS SEEN NOW (§8B.3 per-caller skew: comparing this captured contract to
+// the target's future signature answers "does this caller still expect the old
+// shape"). Resolvable only when the target's repo lives in the SAME store being
+// written (shared/fleet store, monorepo) — capture-early, query-later (§8B.6).
+// Per-repo stores, an unindexed target, or an ambiguous name leave it "" —
+// unknown is reported, never guessed (invariant 5).
+func captureTargetSignatures(w Indexer, callerRepo string, extRefs []query.ExternalRef) {
+	s, ok := w.(query.Store)
+	if !ok || len(extRefs) == 0 {
+		return
+	}
+	repoByModule := map[string]string{}
+	for _, r := range s.Repos() {
+		if r == callerRepo {
+			continue
+		}
+		if m := s.ModulePath(r); m != "" {
+			repoByModule[m] = r
+		}
+	}
+	if len(repoByModule) == 0 {
+		return
+	}
+	type key struct{ module, name string }
+	cache := map[key]string{}
+	for i := range extRefs {
+		k := key{extRefs[i].Module, extRefs[i].Name}
+		sig, seen := cache[k]
+		if !seen {
+			sig = targetSignature(s, repoByModule[k.module], k.name)
+			cache[k] = sig
+		}
+		extRefs[i].TargetSignatureHash = sig
+	}
+}
+
+// targetSignature returns the signature hash of the UNIQUE symbol named name in
+// repo's preferred ref (HEAD if indexed, else the lexically-newest ref), or ""
+// when the repo is unknown, the name is absent, or several symbols share it.
+func targetSignature(s query.Store, repo, name string) string {
+	if repo == "" {
+		return ""
+	}
+	ref := preferredRef(s.Refs(repo))
+	if ref == "" {
+		return ""
+	}
+	sig, count := "", 0
+	for qid, facts := range s.SymbolsAt(repo, ref) {
+		if baseName(qid) == name {
+			sig = string(facts.SignatureHash)
+			count++
+		}
+	}
+	if count != 1 {
+		return "" // ambiguous or absent: unknown, never guessed
+	}
+	return sig
+}
+
+func preferredRef(refs []string) string {
+	best := ""
+	for _, r := range refs {
+		if r == "HEAD" {
+			return r
+		}
+		if r > best {
+			best = r
+		}
+	}
+	return best
+}
+
+// baseName mirrors query.baseName for target matching (bare name of a qid).
+func baseName(qid string) string {
+	if i := strings.LastIndex(qid, "."); i >= 0 {
+		return qid[i+1:]
+	}
+	return qid
 }

@@ -170,6 +170,7 @@ func (m *Mem) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 					Repo: k.repo, Ref: k.ref, Caller: r.From,
 					Module: r.Module, Name: r.Name,
 					ResolutionMethod: r.ResolutionMethod, Confidence: r.Confidence,
+					TargetSignatureHash: r.TargetSignatureHash,
 				})
 			}
 		}
