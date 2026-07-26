@@ -25,16 +25,23 @@ External adapters live behind **build tags** and are fetched on demand:
 | `sqlite`     | SQLite store (`modernc.org/sqlite`)                              |
 | `treesitter` | tree-sitter parser (CGO) + go-git ref indexing + go/types edges  |
 | `mcp`        | MCP server (`mark3labs/mcp-go`)                                  |
+| `neural`     | optional embeddings client for semantic search — standard library only, tagged because it opens a **network path**, not because of a dependency |
 
 ```sh
 make cli          # full binary with every adapter -> bin/reponite
 
 # Per-adapter checks (mirror CI):
-make sqlite | make treesitter | make mcp | make e2e
+make sqlite | make treesitter | make mcp | make e2e | make neural
 ```
 
-CI (`.github/workflows/go.yml`) runs five jobs — `core` (pure), `sqlite`,
-`treesitter`, `mcp`, `e2e`. **Keep all five green.**
+CI (`.github/workflows/go.yml`) runs five jobs — `core` (pure, which also builds
+and tests the standard-library `neural` adapter), `sqlite`, `treesitter`, `mcp`,
+and `e2e`. **Keep all five green.**
+
+> **Careful with build tags.** A file's tag must cover every helper it uses. A
+> `//go:build sqlite` file that calls a helper from a `//go:build sqlite && treesitter`
+> file compiles under `make cli` and breaks `make sqlite` — so run the full matrix,
+> not just `go test ./...`.
 
 ## The invariants (load-bearing — read before you touch the core)
 
@@ -83,11 +90,25 @@ Design decisions are recorded under [`docs/adr/`](docs/adr/); see
 (some are standalone files, some are embedded in `docs/agent-features.md`). A
 change that alters a public seam or an invariant should add or amend an ADR.
 
+## Dogfooding
+
+Before opening a PR that changes behavior, **run the change against real code** —
+ideally a multi-repo checkout, since most of the interesting bugs only appear
+there. Every significant bug this project has fixed was found by using the tool,
+not by reading it: the module tier that never matched a real import path, the
+migration that broke every existing index, the C++ names invented from parameter
+types. Put the before/after numbers in the PR body.
+
 ## Pull requests
 
-- Keep the diff focused; separate mechanical refactors from behavior changes.
+- **One focused change per PR.** It keeps review honest and a revert cheap.
 - All five CI jobs green; `go vet ./...` clean.
-- Update `docs/` and `PROGRESS.md` (the running build log) when you change behavior.
+- A test that would have failed before your change.
+- Update `README.md`, `docs/`, `CHANGELOG.md`, and `PROGRESS.md` (the running
+  build log) **in the same PR** when behavior changes. A doc that contradicts the
+  code is a bug.
+- Never commit `go.mod`/`go.sum` changes your code doesn't require — the adapter
+  targets rewrite them as a side effect, so check `git diff` before committing.
 - Open an [issue](https://github.com/vishwak02/reponite/issues) first for anything
   large or invariant-adjacent.
 

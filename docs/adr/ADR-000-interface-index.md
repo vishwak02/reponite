@@ -110,8 +110,9 @@ the end of any session that adds/changes a public signature. (⟳ planned / ✓ 
 Query layer (pure):
 - ✓ `query.Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProvider) BriefResult` — token-budgeted editing bundle (§8C/ADR-014)
 - ✓ `query.RootCauseTrace(s Store, repo, from, to, trace string) RootCauseTraceResult` + `ParseStackTrace(trace) []TraceFrame` (§8A.4/ADR-015)
-- ✓ `query.XImpact(s Store, target, ref string) XImpactResult` + `const ExternalResolution` (§8B/ADR-016, name-based; fleet registry deferred)
-- ✓ `query.SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) []SemanticHit` + `query.Embedder` / `TermEmbedder` (§10A.2/ADR-020)
+- ✓ `query.XImpact(s Store, target, ref string) XImpactResult` + `const ExternalResolution / ImportResolution / SCIPResolution` — three labeled cross-repo tiers with per-caller `ExpectedSignature` skew (§8B/§8B.3/§8B.4/ADR-016)
+- ✓ `query.ModuleMatches(root, importPath string) bool` — an import path is a module ROOT plus a package path; exact-or-slash-prefixed matching is what makes the module tier fire on real repos
+- ✓ `query.SemanticSearch(s Store, repo, ref, query string, limit int, r SemanticRanker) SemanticResult` + `query.SemanticRanker` / `TermIDFRanker` / `SemanticDoc` (§10A.2/ADR-020). `Embedder`/`TermEmbedder` survive as the term ranker's inner tokenizer seam; the STRATEGY seam is the ranker, because IDF is a corpus property that cannot be applied per text.
 - ✓ `query.ChangedCallees(symbol string, from, to RefSnapshot) []string` — attached to behavior_changed verdicts (CompatResult.ChangedCallees)
 - ✓ `query.DiffOptions{ChangedOnly,Package,MinConfidence}` + `FilterChanges`; `DiffRefsBy(...)` now takes DiffOptions
 - ✓ `query.IntentProvider` / `IntentRecord` / `ParseIntentMessage(commit, msg) IntentRecord` (§8A.6/ADR-017, linkage-only)
@@ -123,4 +124,18 @@ Adapters / surfaces:
 - ✓ MCP tools: `reponite_brief / reponite_rootcause_trace / reponite_ximpact / reponite_semsearch` + diff filter args
 - ✓ CLI: `brief / rootcause-trace / ci-check / ximpact / semsearch / serve` (+ `diff --changed-only/--package/--confidence-min`, `setup --client`)
 - ✓ `editors/vscode/` — VS Code extension (brief/compat/serve commands)
-- ⟳ Remaining: Phase 4 fleet registry (`module_path` + `global.db` + Oracle skew-fusion), SCIP edges (4.3), shared team server (4.2)
+
+## Phases 4–6b — fleet, precision, SCIP (✓ merged to main)
+Query layer (pure):
+- ✓ `query.Store.MonikersAt(repo, ref) map[string]string` + `ExternalRefsToSymbol(moniker) []ExternalRefHit` — the SCIP tier's lookups
+- ✓ `query.Usages / BlastRadius / VerifyEdit / CommGraph / Topic / Investigate / InvestigateWith / Overview / Suggest`
+- ✓ `query.SortSemanticHits` — the canonical hit order every ranker implementation must produce
+Pure packages:
+- ✓ `internal/scip` — `Parse(data) (Index, error)`, `Index.LocalDefs()`, `Map(doc, spans, localDefs) FileMonikers`: a standard-library protobuf subset (no dependency, no build tag)
+- ✓ `internal/fleet` — `Load/Save/Add/Remove/Live/DefaultPath`: the persistent cross-run repo registry
+- ✓ `processing.Ignore` / `NewIgnore` / `IndexOptions{Excludes, Peers}` — index-time exclusion and the peer view that lets contract capture work with one store per repo
+Adapters / surfaces:
+- ✓ `internal/semantic.NeuralRanker` implements `query.SemanticRanker` over an OpenAI-compatible embeddings endpoint (`-tags neural`), with a content-hash embedding cache
+- ✓ `storage.MultiStore` — fleet aggregation, fanning moniker and external-ref lookups across repos
+- ✓ CLI: `usages / topics / verify-edit / blast-radius / investigate / repos / fleet / watch` (+ `--local` on every fleet-wide command)
+- ⟳ Remaining: SCIP *relationship* edges (implementations/overrides); cross-repo behavior propagation (§8.4, deliberately out of scope)

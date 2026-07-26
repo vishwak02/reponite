@@ -29,11 +29,15 @@
 > skipped. **SCIP-grade cross-boundary confidence is built** (2026-07-19, Phase 6b): a repo's
 > `index.scip` gives every symbol its globally unique moniker, so cross-repo callers are matched
 > symbol-to-symbol (`scip-resolved`@0.95) above the module and name tiers — see §8B.4 "As built".
-> Deferred: fleet-wide per-caller skew CAPTURE (the registry now makes the peer stores
-> discoverable at index time — §8B.3's capture step could consult them), embedding CACHING keyed by
-> content hash (each semsearch re-embeds the corpus today), and consuming SCIP's own RELATIONSHIP
-> graph (implementations/overrides), not just definitions and references.
-> See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
+> **Fleet-wide skew capture and embedding caching are built** (2026-07-19): the CLI opens the
+> registry's repos as one store (so every cross-repo tier actually fires outside `serve`/`mcp`),
+> `IndexOptions.Peers` gives index time the same view so §8B.3 capture works with one store per
+> repo, and neural embeddings are cached by `(model, content hash)`. The same pass fixed the
+> module tier, which had compared a caller's import path to the target's module ROOT by exact
+> equality and so never matched a multi-package repo. Remaining: consuming SCIP's own RELATIONSHIP
+> graph (implementations/overrides) rather than only definitions and references, and cross-repo
+> BEHAVIOR propagation (§8.4 — deliberately out of scope; impact answers *who calls*, not *does it
+> still behave the same*). See `docs/BUILD_PLAN.md`, `CHANGELOG.md`, and `PROGRESS.md` for the log.
 
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*
 

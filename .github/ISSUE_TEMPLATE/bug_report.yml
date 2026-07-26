@@ -1,0 +1,71 @@
+name: Bug report
+description: Something is wrong — especially a wrong answer
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. **A wrong answer reported with high confidence is the most
+        valuable bug report for this project** — reponite's core promise is that it never
+        claims more certainty than it computed, so please flag those first.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did reponite report, and what should it have reported?
+      placeholder: |
+        `reponite compat Charge` said `compatible`, but the signature changed
+        between v1.0.0 and HEAD.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: >
+        Exact commands. A tiny repo that reproduces it is ideal, but a description of the
+        code shape (nested class, C++ template, multi-package module…) is often enough.
+      placeholder: |
+        1. mkdir demo && cd demo
+        2. …
+        3. reponite index . && reponite compat Charge
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Actual output
+      description: Paste the full JSON, including the `_meta`/`note` fields — the provenance usually explains the answer.
+      render: json
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: reponite version
+      description: Output of `reponite version`
+      placeholder: reponite v0.2.0 (norm_ver=1, go_target=1.22)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: language
+    attributes:
+      label: Language of the affected code
+      multiple: true
+      options: [Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, ROS interface files, Other/N.A.]
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and architecture
+      placeholder: Ubuntu 24.04 / amd64
+    validations:
+      required: true
