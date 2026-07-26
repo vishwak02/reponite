@@ -26,10 +26,14 @@
 > metadata only, no content, so it stays pure stdlib and hand-editable (the original design called
 > this `global.db`; there is nothing to query, so a database would only add a build tag). Explicit
 > dirs still win, and a registered repo whose index vanished is reported stale, never silently
-> skipped. Deferred: fleet-wide per-caller skew CAPTURE (the registry now makes the peer stores
+> skipped. **SCIP-grade cross-boundary confidence is built** (2026-07-19, Phase 6b): a repo's
+> `index.scip` gives every symbol its globally unique moniker, so cross-repo callers are matched
+> symbol-to-symbol (`scip-resolved`@0.95) above the module and name tiers — see §8B.4 "As built".
+> Deferred: fleet-wide per-caller skew CAPTURE (the registry now makes the peer stores
 > discoverable at index time — §8B.3's capture step could consult them), embedding CACHING keyed by
-> content hash (each semsearch re-embeds the corpus today), and SCIP-grade
-> cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
+> content hash (each semsearch re-embeds the corpus today), and consuming SCIP's own RELATIONSHIP
+> graph (implementations/overrides), not just definitions and references.
+> See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*
 
