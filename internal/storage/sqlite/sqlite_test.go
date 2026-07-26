@@ -193,6 +193,32 @@ func TestSQLiteExternalRefsAndModulePath(t *testing.T) {
 	if len(st.ExternalRefsTo("github.com/acme/api", "getUser")) != 0 {
 		t.Fatal("empty PutExternalRefs must clear the ref's external refs")
 	}
+	// Phase 6b: SCIP monikers round-trip, are matched exactly, and ClearRef
+	// drops them with the rest of the ref.
+	if err := st.PutMonikers("web", "HEAD", map[string]string{"web.fetch": "scip-go gomod github.com/acme/web v1 `svc`/fetch()."}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.MonikersAt("web", "HEAD"); got["web.fetch"] == "" {
+		t.Fatalf("moniker round-trip: %v", got)
+	}
+	scipRef := query.ExternalRef{From: "web.fetch", TargetSymbol: "scip-go gomod github.com/acme/api v1 `pkg/user`/GetUser().",
+		ResolutionMethod: "scip-resolved", Confidence: 0.95}
+	if err := st.PutExternalRefs("web", "prod", []query.ExternalRef{scipRef}); err != nil {
+		t.Fatal(err)
+	}
+	if h := st.ExternalRefsToSymbol(scipRef.TargetSymbol); len(h) != 1 || h[0].TargetSymbol != scipRef.TargetSymbol {
+		t.Fatalf("ExternalRefsToSymbol round-trip: %+v", h)
+	}
+	if h := st.ExternalRefsToSymbol("scip-go gomod other v1 `x`/Nope()."); len(h) != 0 {
+		t.Fatalf("a different moniker must not match: %+v", h)
+	}
+	if err := st.ClearRef("web", "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.MonikersAt("web", "HEAD")) != 0 {
+		t.Fatal("ClearRef must remove monikers")
+	}
+
 	// ClearRef also removes external refs.
 	st.PutExternalRefs("web", "HEAD", refs)
 	if err := st.ClearRef("web", "HEAD"); err != nil {

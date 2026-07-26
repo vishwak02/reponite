@@ -2,6 +2,10 @@
 // ext §8B / ADR-016): the question before changing an exported API. It fuses two
 // caller signals over the Store, in decreasing precision:
 //
+//  0. SCIP-resolved (symbol-precise, Phase 6b). When both repos have a SCIP
+//     index, a reference carries the target's globally unique MONIKER, so the
+//     match is symbol-to-symbol — the only tier that crosses the repo boundary
+//     without a name guess (§8B.4).
 //  1. Module-resolved (import-path precise). At index time each caller file's
 //     imports resolve its qualified calls to (module_path, name) external
 //     references (§9A.2). If the target is itself defined+indexed, we know its
@@ -17,7 +21,10 @@
 // (§8B.5): source-call-graph only — RPC/HTTP/gRPC/queue calls are invisible.
 package query
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // ExternalResolution is the resolution_method the resolver stamps on a call that
 // does not resolve within its own repo (mirrors processing.MethodExternal). Such
@@ -25,8 +32,13 @@ import "sort"
 const ExternalResolution = "unresolved-external"
 
 // ImportResolution is the resolution_method stamped on an import-path-resolved
-// external reference (mirrors processing.MethodImport) — the precise tier.
+// external reference (mirrors processing.MethodImport) — the module-precise tier.
 const ImportResolution = "import-resolved"
+
+// SCIPResolution is the resolution_method stamped on a reference matched by
+// SCIP moniker (mirrors processing.MethodSCIP) — symbol-resolved across the
+// repo boundary, the highest cross-repo tier (§8B.4, Phase 6b).
+const SCIPResolution = "scip-resolved"
 
 // XImpactCaller is one caller (in some repo/ref) of an external symbol, labeled
 // with how the dependency was resolved (invariant 5: never overclaim).
@@ -60,6 +72,9 @@ type XImpactDef struct {
 	Symbol        string
 	Module        string
 	SignatureHash string
+	// Moniker is this definition's SCIP symbol identity ("" without a SCIP
+	// index) — what tier-0 callers match against.
+	Moniker string
 }
 
 // XImpactResult is the fleet caller set for a target symbol name, fused with the
@@ -100,15 +115,21 @@ func XImpact(s Store, target, ref string) XImpactResult {
 	// (e.g. storage.Mem.Put vs sqlite.Store.Put, or a C++ header decl vs its impl).
 	sigsByID := map[[2]string]map[string]bool{}
 	moduleSet := map[string]bool{}
+	monikerSet := map[string]bool{}
 	for _, repo := range s.Repos() {
 		module := s.ModulePath(repo)
 		for _, rf := range refsOf(s, repo, ref) {
 			snap := s.Snapshot(repo, rf)
+			mons := s.MonikersAt(repo, rf)
 			for name, facts := range snap.Symbols {
 				if baseName(name) == target {
+					moniker := mons[name]
+					if moniker != "" {
+						monikerSet[moniker] = true
+					}
 					res.Definitions = append(res.Definitions, XImpactDef{
 						Repo: repo, Ref: rf, Symbol: name, Module: module,
-						SignatureHash: string(facts.SignatureHash),
+						SignatureHash: string(facts.SignatureHash), Moniker: moniker,
 					})
 					id := [2]string{repo, name}
 					if sigsByID[id] == nil {
@@ -135,29 +156,49 @@ func XImpact(s Store, target, ref string) XImpactResult {
 	// A caller's captured contract is compared against this for per-caller skew.
 	currentSigs := currentSignatures(res.Definitions)
 
-	// --- tier 1: module-resolved callers (precise), fleet-wide ---
 	seen := map[[3]string]bool{} // (repo, ref, caller) already counted
+	// addHit records a caller once, at the highest tier that found it, with its
+	// per-caller contract skew (§8B.3).
+	addHit := func(h ExternalRefHit) {
+		key := [3]string{h.Repo, h.Ref, h.Caller}
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		skew := ""
+		if h.TargetSignatureHash != "" && len(currentSigs) > 0 {
+			if currentSigs[h.TargetSignatureHash] {
+				skew = SkewCurrent
+			} else {
+				skew = SkewStale
+				res.StaleCallers++
+			}
+		}
+		res.Callers = append(res.Callers, XImpactCaller{
+			Repo: h.Repo, Ref: h.Ref, Caller: h.Caller, Module: h.Module,
+			ResolutionMethod: h.ResolutionMethod, Confidence: h.Confidence,
+			ExpectedSignature: skew,
+		})
+	}
+
+	// --- tier 0: SCIP-resolved callers (symbol-precise), fleet-wide ---
+	// A moniker is globally unique, so this needs no module comparison: a
+	// reference either targets this exact symbol or it does not.
+	scipCallers := 0
+	for _, moniker := range sortedSet(monikerSet) {
+		for _, h := range s.ExternalRefsToSymbol(moniker) {
+			before := len(res.Callers)
+			addHit(h)
+			if len(res.Callers) > before {
+				scipCallers++
+			}
+		}
+	}
+
+	// --- tier 1: module-resolved callers (precise), fleet-wide ---
 	for _, module := range res.Modules {
 		for _, h := range s.ExternalRefsTo(module, target) {
-			key := [3]string{h.Repo, h.Ref, h.Caller}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-			skew := ""
-			if h.TargetSignatureHash != "" && len(currentSigs) > 0 {
-				if currentSigs[h.TargetSignatureHash] {
-					skew = SkewCurrent
-				} else {
-					skew = SkewStale
-					res.StaleCallers++
-				}
-			}
-			res.Callers = append(res.Callers, XImpactCaller{
-				Repo: h.Repo, Ref: h.Ref, Caller: h.Caller, Module: h.Module,
-				ResolutionMethod: h.ResolutionMethod, Confidence: h.Confidence,
-				ExpectedSignature: skew,
-			})
+			addHit(h)
 		}
 	}
 
@@ -186,7 +227,7 @@ func XImpact(s Store, target, ref string) XImpactResult {
 
 	sortDefs(res.Definitions)
 	sortCallers(res.Callers)
-	res.Note = ximpactNote(len(res.Modules) > 0)
+	res.Note = ximpactNote(len(res.Modules) > 0, scipCallers)
 	res.Meta = Meta{Repo: "", Ref: ref}
 	return res
 }
@@ -243,14 +284,25 @@ func sortDefs(defs []XImpactDef) {
 	})
 }
 
-// sortCallers orders callers precise-tier-first (import-resolved before
-// name-based), then by (repo, ref, caller) for determinism.
+// tierRank orders resolution methods by precision: SCIP (symbol-resolved) >
+// import (module-resolved) > everything else (name-based).
+func tierRank(method string) int {
+	switch method {
+	case SCIPResolution:
+		return 0
+	case ImportResolution:
+		return 1
+	}
+	return 2
+}
+
+// sortCallers orders callers precise-tier-first (scip, then import-resolved,
+// then name-based), each group by (repo, ref, caller) for determinism.
 func sortCallers(callers []XImpactCaller) {
 	sort.Slice(callers, func(i, j int) bool {
 		a, b := callers[i], callers[j]
-		ap, bp := a.ResolutionMethod == ImportResolution, b.ResolutionMethod == ImportResolution
-		if ap != bp {
-			return ap // precise tier first
+		if ra, rb := tierRank(a.ResolutionMethod), tierRank(b.ResolutionMethod); ra != rb {
+			return ra < rb
 		}
 		if a.Repo != b.Repo {
 			return a.Repo < b.Repo
@@ -262,10 +314,14 @@ func sortCallers(callers []XImpactCaller) {
 	})
 }
 
-func ximpactNote(moduleResolved bool) string {
+func ximpactNote(moduleResolved bool, scipCallers int) string {
 	base := "source-call-graph impact (RPC/HTTP invisible; version skew defaults to each caller's indexed ref, §8B.5)"
+	prefix := "name-based only — target module unknown (not indexed), so callers matched by bare name; "
 	if moduleResolved {
-		return "module-resolved callers (import-path precise) fused with name-based fallback; " + base
+		prefix = "module-resolved callers (import-path precise) fused with name-based fallback; "
 	}
-	return "name-based only — target module unknown (not indexed), so callers matched by bare name; " + base
+	if scipCallers > 0 {
+		prefix = fmt.Sprintf("%d caller(s) SCIP-resolved by symbol moniker (no name guessing); ", scipCallers) + prefix
+	}
+	return prefix + base
 }

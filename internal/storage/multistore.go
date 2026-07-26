@@ -113,3 +113,21 @@ func (m *MultiStore) ExternalRefsTo(module, name string) []query.ExternalRefHit 
 	}
 	return out
 }
+
+// ExternalRefsToSymbol fans out the SCIP-moniker lookup across the fleet — the
+// point of a globally unique moniker is that any repo may reference it.
+func (m *MultiStore) ExternalRefsToSymbol(moniker string) []query.ExternalRefHit {
+	var out []query.ExternalRefHit
+	for _, s := range m.stores {
+		out = append(out, s.ExternalRefsToSymbol(moniker)...)
+	}
+	return out
+}
+
+// MonikersAt routes to the store owning repo (monikers are per-repo).
+func (m *MultiStore) MonikersAt(repo, ref string) map[string]string {
+	if s := m.owner[repo]; s != nil {
+		return s.MonikersAt(repo, ref)
+	}
+	return nil
+}

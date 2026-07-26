@@ -7,6 +7,7 @@
 package processing
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/vishwak02/reponite/internal/content"
 	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/scip"
 )
 
 // IndexDir indexes every supported source file under dir as one repo ref. Each
@@ -29,6 +31,7 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 // IndexDirWith is IndexDir with caller-supplied filters (CLI --exclude).
 func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOptions) error {
 	ig := loadIgnore(dir, opt.Excludes)
+	scipIdx, scipLocal := loadSCIP(dir)
 	var files []ParsedFile
 	hasGo := false
 	manifests := map[string][]byte{} // module-manifest files (go.mod, package.json, ...) by rel path
@@ -94,6 +97,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		files = append(files, ParsedFile{
 			Path: rel, Content: string(src), Lang: rules.Name,
 			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
+			SCIP: scipFor(scipIdx, scipLocal, rel, spans),
 		})
 		return nil
 	})
@@ -114,6 +118,47 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		return w.SetModulePath(repo, mod)
 	}
 	return nil
+}
+
+// SCIPFileName is the conventional SCIP index location at a repo root.
+const SCIPFileName = "index.scip"
+
+// loadSCIP reads dir/index.scip when present, returning the decoded documents
+// (by path) and the set of monikers DEFINED in this repo. A missing file is the
+// normal case (no SCIP tier). An unreadable/corrupt one is reported on stderr
+// and skipped: indexing must still succeed, but silently pretending there was
+// no index would hide a broken toolchain from the user.
+func loadSCIP(dir string) (map[string]scip.Document, map[string]bool) {
+	data, err := os.ReadFile(filepath.Join(dir, SCIPFileName))
+	if err != nil {
+		return nil, nil
+	}
+	idx, err := scip.Parse(data)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "reponite: ignoring %s (%v)\n", SCIPFileName, err)
+		return nil, nil
+	}
+	docs := make(map[string]scip.Document, len(idx.Documents))
+	for _, d := range idx.Documents {
+		docs[filepath.ToSlash(d.Path)] = d
+	}
+	return docs, idx.LocalDefs()
+}
+
+// scipFor maps a file's SCIP occurrences onto its extracted symbol spans.
+func scipFor(docs map[string]scip.Document, local map[string]bool, rel string, spans []query.SymbolSpan) scip.FileMonikers {
+	if len(docs) == 0 {
+		return scip.FileMonikers{}
+	}
+	doc, ok := docs[filepath.ToSlash(rel)]
+	if !ok {
+		return scip.FileMonikers{}
+	}
+	ss := make([]scip.Span, 0, len(spans))
+	for _, sp := range spans {
+		ss = append(ss, scip.Span{Name: sp.Name, StartLine: sp.StartLine, EndLine: sp.EndLine})
+	}
+	return scip.Map(doc, ss, local)
 }
 
 // loadIgnore builds the index-time exclusion set: defaults + the repo's

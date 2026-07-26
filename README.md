@@ -105,7 +105,7 @@ reponite ximpact getUserV2
 - 🔍 **Compatibility Oracle** — `absent` / `shape_changed` / `behavior_changed` / `compatible` across every indexed ref and repo, with honest confidence scores
 - 🧬 **Root-cause drill-down** — walks a behavior change to its exact mutation site; can be seeded directly from a pasted stack trace
 - 📦 **Editing brief** — one token-budgeted bundle (body + callees + callers + tests + compat snapshot) replacing 5–6 file reads for an agent
-- 🌐 **Cross-repo impact** — who across the fleet calls a symbol, and whether their expected contract still matches (module-path precise)
+- 🌐 **Cross-repo impact** — who across the fleet calls a symbol, and whether their expected contract still matches (module-path precise; **symbol-precise** when SCIP indexes are present, and per-caller "still expects the old shape")
 - 🧭 **Investigate** — ask "how does X work?" in plain language, get one cited dossier of the relevant symbols fleet-wide (replaces the search→brief→context loop)
 - 🎯 **Usages** — every call site of a symbol with its exact line + enclosing function, cross-checked against the call graph (`confirmed` vs lexical)
 - 💥 **Blast radius** — before an edit, the in-repo + fleet callers, covering tests, and cross-ref contract state in one call
@@ -116,6 +116,21 @@ reponite ximpact getUserV2
 - 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break (per-language "exported" rule), drops straight into a PR workflow
 - 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, and **ROS** interface files (`.msg`/`.srv`/`.action`)
 - 📡 **Four surfaces** — CLI · MCP server (17 tools) · web dashboard · VS Code extension
+
+---
+
+## SCIP: symbol-precise cross-repo edges
+
+`symbol_hash` deliberately can't match across repos, so cross-boundary links normally key on `(module path, name)` — precise about the module, still a name match. Drop a **SCIP index** (`index.scip`, from `scip-go`, `scip-typescript`, `scip-python`, …) at a repo root and reponite reads it at index time: each symbol gains its globally unique **moniker**, and a caller's reference is matched to a definition *symbol-to-symbol*.
+
+```jsonc
+// reponite ximpact GetUser  (both repos SCIP-indexed)
+"callers":     [{ "repo": "web", "caller": "svc.Handle",
+                  "resolution_method": "scip-resolved", "confidence": 0.95 }],
+"note": "1 caller(s) SCIP-resolved by symbol moniker (no name guessing); …"
+```
+
+SCIP-resolved callers sort above module-resolved (0.75) and name-based (0.6) ones and are labeled, never merged. Without an index nothing changes — the existing tiers answer exactly as before, and a corrupt index is reported and skipped rather than silently trusted. Because monikers match by exact string, a decoding or version mismatch can only *lose* a match (falling back a tier), never fabricate one.
 
 ---
 

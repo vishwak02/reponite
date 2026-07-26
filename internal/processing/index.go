@@ -11,6 +11,7 @@ import (
 
 	"github.com/vishwak02/reponite/internal/content"
 	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/scip"
 	"github.com/vishwak02/reponite/internal/storage"
 )
 
@@ -24,6 +25,8 @@ type Indexer interface {
 	PutFile(repo, ref string, f query.File) error
 	// PutExternalRefs records a ref's cross-repo dependency edges (§8B).
 	PutExternalRefs(repo, ref string, refs []query.ExternalRef) error
+	// PutMonikers records each symbol's SCIP moniker at a ref (§8B.4).
+	PutMonikers(repo, ref string, monikers map[string]string) error
 	// SetModulePath records repo's module/package identity (idempotent per repo).
 	SetModulePath(repo, modulePath string) error
 }
@@ -41,6 +44,11 @@ type ParsedFile struct {
 	// Imports are the file's external import bindings (imports.go), used to
 	// resolve qualified calls to (module, name) external references (§8B).
 	Imports []ImportBinding
+	// SCIP is this file's contribution from a SCIP index, when the repo has
+	// one: each locally defined symbol's globally unique moniker, and its
+	// references to monikers defined elsewhere (§8B.4, Phase 6b). Zero value =
+	// no SCIP index, and every downstream tier behaves exactly as before.
+	SCIP scip.FileMonikers
 }
 
 // IndexFiles indexes all files of one repo ref with name-based edge resolution.
@@ -66,6 +74,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	byQID := map[string]computed{}  // qid -> facts
 	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
 	var extRefs []query.ExternalRef // cross-repo dependency edges (§8B)
+	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
 	for _, f := range files {
 		pkg := pkgOf(f.Path)
 		lang := f.Lang
@@ -91,6 +100,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			if len(byLocal) > 0 {
 				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, byLocal)...)
 			}
+			if mon := f.SCIP.Defs[s.Name]; mon != "" {
+				monikers[qid] = mon
+			}
+		}
+		// SCIP references are symbol-resolved: the moniker IS the target's
+		// global identity, so these need no module/name guessing (§8B.4).
+		for _, r := range f.SCIP.Refs {
+			extRefs = append(extRefs, query.ExternalRef{
+				From: qualify(pkg, r.From), TargetSymbol: r.Symbol,
+				ResolutionMethod: MethodSCIP, Confidence: ConfSCIP,
+			})
 		}
 	}
 
@@ -146,7 +166,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	if err := w.PutExternalRefs(repo, ref, extRefs); err != nil {
 		return err
 	}
-	return nil
+	return w.PutMonikers(repo, ref, monikers)
 }
 
 // captureTargetSignatures stamps each external ref with the target's signature

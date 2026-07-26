@@ -81,9 +81,17 @@ CREATE TABLE IF NOT EXISTS external_refs (
   target_module TEXT NOT NULL, target_name TEXT NOT NULL,
   resolution_method TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0.6,
   target_signature_hash TEXT NOT NULL DEFAULT '',
+  target_symbol TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (repo, ref, from_name, target_module, target_name)
 );
+-- SCIP monikers (§8B.4/Phase 6b): a symbol's GLOBALLY unique identity, so a
+-- reference in another repo matches symbol-to-symbol instead of by name.
+CREATE TABLE IF NOT EXISTS symbol_monikers (
+  repo TEXT NOT NULL, ref TEXT NOT NULL, symbol TEXT NOT NULL, moniker TEXT NOT NULL,
+  PRIMARY KEY (repo, ref, symbol)
+);
 CREATE INDEX IF NOT EXISTS idx_extref_target ON external_refs(target_module, target_name);
+CREATE INDEX IF NOT EXISTS idx_extref_symbol ON external_refs(target_symbol);
 -- Per-repo module/package identity (§8B.2): a symbol's cross-repo identity is
 -- (module_path, name), so a target's module resolves its precise fleet callers.
 CREATE TABLE IF NOT EXISTS repo_modules (
@@ -114,7 +122,7 @@ func Open(path string) (*Store, error) {
 // the dashboard's index/database view — making the stored model tangible. The
 // counts are the physical persistence behind the logical query.Overview.
 func (s *Store) DBStats() (string, map[string]int64) {
-	tables := []string{"refs", "ref_history", "callees", "external_refs", "repo_modules", "file_blobs", "ref_files", "file_symbols", "manifest_blobs"}
+	tables := []string{"refs", "ref_history", "callees", "external_refs", "symbol_monikers", "repo_modules", "file_blobs", "ref_files", "file_symbols", "manifest_blobs"}
 	counts := make(map[string]int64, len(tables))
 	for _, t := range tables {
 		var n int64
@@ -136,6 +144,10 @@ func (s *Store) migrate() error {
 		// §8B.3 per-caller signature skew: the target contract each caller was
 		// indexed against ('' = not captured -> skew unknown, never guessed).
 		`ALTER TABLE external_refs ADD COLUMN target_signature_hash TEXT NOT NULL DEFAULT ''`,
+		// Phase 6b: the SCIP moniker a reference resolves to ('' = no SCIP index).
+		`ALTER TABLE external_refs ADD COLUMN target_symbol TEXT NOT NULL DEFAULT ''`,
+		`CREATE TABLE IF NOT EXISTS symbol_monikers (repo TEXT NOT NULL, ref TEXT NOT NULL, symbol TEXT NOT NULL, moniker TEXT NOT NULL, PRIMARY KEY (repo, ref, symbol))`,
+		`CREATE INDEX IF NOT EXISTS idx_extref_symbol ON external_refs(target_symbol)`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
@@ -178,6 +190,7 @@ func (s *Store) ClearRef(repo, ref string) error {
 		`DELETE FROM ref_files WHERE repo=? AND ref=?`,
 		`DELETE FROM file_symbols WHERE repo=? AND ref=?`,
 		`DELETE FROM external_refs WHERE repo=? AND ref=?`,
+		`DELETE FROM symbol_monikers WHERE repo=? AND ref=?`,
 	} {
 		if _, err := tx.Exec(q, repo, ref); err != nil {
 			tx.Rollback()
@@ -296,14 +309,79 @@ func (s *Store) PutExternalRefs(repo, ref string, refs []query.ExternalRef) erro
 	}
 	for _, r := range refs {
 		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO external_refs(repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash)
-			 VALUES(?,?,?,?,?,?,?,?)`,
-			repo, ref, r.From, r.Module, r.Name, r.ResolutionMethod, r.Confidence, r.TargetSignatureHash); err != nil {
+			`INSERT OR REPLACE INTO external_refs(repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash, target_symbol)
+			 VALUES(?,?,?,?,?,?,?,?,?)`,
+			repo, ref, r.From, r.Module, r.Name, r.ResolutionMethod, r.Confidence, r.TargetSignatureHash, r.TargetSymbol); err != nil {
 			tx.Rollback()
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// PutMonikers replaces a ref's symbol -> SCIP moniker map (§8B.4).
+func (s *Store) PutMonikers(repo, ref string, mons map[string]string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM symbol_monikers WHERE repo=? AND ref=?`, repo, ref); err != nil {
+		tx.Rollback()
+		return err
+	}
+	for sym, mon := range mons {
+		if mon == "" {
+			continue
+		}
+		if _, err := tx.Exec(
+			`INSERT OR REPLACE INTO symbol_monikers(repo, ref, symbol, moniker) VALUES(?,?,?,?)`,
+			repo, ref, sym, mon); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// MonikersAt returns the ref's symbol -> SCIP moniker map (empty without SCIP).
+func (s *Store) MonikersAt(repo, ref string) map[string]string {
+	rows, err := s.db.Query(`SELECT symbol, moniker FROM symbol_monikers WHERE repo=? AND ref=?`, repo, ref)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var sym, mon string
+		if rows.Scan(&sym, &mon) == nil {
+			out[sym] = mon
+		}
+	}
+	return out
+}
+
+// ExternalRefsToSymbol returns every reference targeting this exact SCIP
+// moniker — the symbol-resolved cross-repo tier (Phase 6b).
+func (s *Store) ExternalRefsToSymbol(moniker string) []query.ExternalRefHit {
+	if moniker == "" {
+		return nil
+	}
+	rows, err := s.db.Query(
+		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash, target_symbol
+		 FROM external_refs WHERE target_symbol=?
+		 ORDER BY repo, ref, from_name`, moniker)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []query.ExternalRefHit
+	for rows.Next() {
+		var h query.ExternalRefHit
+		if rows.Scan(&h.Repo, &h.Ref, &h.Caller, &h.Module, &h.Name, &h.ResolutionMethod, &h.Confidence, &h.TargetSignatureHash, &h.TargetSymbol) == nil {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // SetModulePath records repo's module/package identity (§8B.2).
@@ -334,7 +412,7 @@ func (s *Store) ModulePath(repo string) string {
 
 func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 	rows, err := s.db.Query(
-		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash
+		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash, target_symbol
 		 FROM external_refs WHERE target_module=? AND target_name=?
 		 ORDER BY repo, ref, from_name`, module, name)
 	if err != nil {
@@ -344,7 +422,7 @@ func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 	var out []query.ExternalRefHit
 	for rows.Next() {
 		var h query.ExternalRefHit
-		if rows.Scan(&h.Repo, &h.Ref, &h.Caller, &h.Module, &h.Name, &h.ResolutionMethod, &h.Confidence, &h.TargetSignatureHash) == nil {
+		if rows.Scan(&h.Repo, &h.Ref, &h.Caller, &h.Module, &h.Name, &h.ResolutionMethod, &h.Confidence, &h.TargetSignatureHash, &h.TargetSymbol) == nil {
 			out = append(out, h)
 		}
 	}
