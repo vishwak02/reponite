@@ -19,11 +19,28 @@ Ship a **pluggable `query.Embedder`** (`Embed(text) map[string]float64`) with a
 by cosine similarity against each symbol's `name + body` (the same source spans
 grep/brief use). `SemanticSearch` returns the top-N hits with scores.
 
-No model, no network, no external dependency — the whole layer stays in the pure
-core and is unit-tested in-sandbox (ADR-018). A higher-recall neural embedder
-(bundled | ollama | remote, keyed by `content.EmbedHash` for cache-on-model-
-change) is a drop-in behind the same interface and is deferred until there is
-demand; nothing on the critical path requires it.
+No model, no network, no external dependency — the default stays in the pure
+core and is unit-tested in-sandbox (ADR-018).
+
+**Revision (2026-07-19): the seam moved up a level.** The original `Embedder`
+(text → sparse term vector) could not host a dense neural model, because
+`SemanticSearch` applies IDF weighting *after* embedding and IDF is a property of
+the whole corpus, not of one text. The strategy seam is therefore
+`query.SemanticRanker` (`RankerName() string`, `Rank(query, docs, limit)`), with
+`TermIDFRanker` wrapping the original TF×IDF+cosine logic as the default;
+`Embedder`/`TermEmbedder` remain as that ranker's inner tokenizer seam.
+
+The neural adapter ships in `internal/semantic` behind `-tags neural`: an
+OpenAI-compatible `/v1/embeddings` client (Ollama, OpenAI, LiteLLM, vLLM),
+configured by `REPONITE_EMBED_ENDPOINT` / `REPONITE_EMBED_MODEL`. It is tagged
+because it opens a **network path**, not because of a dependency — it is standard
+library only. Embeddings are cached by `(model, sha256(text))` so a long-lived
+`serve`/`mcp` embeds each symbol once.
+
+Two honesty properties are part of the contract: every result carries the
+`ranker` that actually produced it, and a failing adapter falls back to
+`term-idf` with the failure recorded in `note` — a degraded ranking is never
+presented as a normal one.
 
 ## Consequences
 

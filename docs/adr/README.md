@@ -12,7 +12,7 @@ a set of missing documents.
 |-----|-------|--------|----------|
 | 000 | Interface index (living document) | living | [`ADR-000-interface-index.md`](ADR-000-interface-index.md) |
 | 006 | Bounded transitive-closure traversal (`GraphStore`) | planned seam | inline in [ADR-000](ADR-000-interface-index.md) |
-| 007 | Pluggable `Embedder` (bundled \| ollama \| remote) | partly shipped (ADR-020) | inline in [ADR-000](ADR-000-interface-index.md); see [ADR-020](ADR-020-semantic-search-layer.md) |
+| 007 | Pluggable embedder (bundled \| ollama \| remote) | shipped as the `SemanticRanker` seam + `-tags neural` adapter | inline in [ADR-000](ADR-000-interface-index.md); see [ADR-020](ADR-020-semantic-search-layer.md) |
 | 012 | `Authenticator` seam (token/mTLS now, OIDC later) | planned seam | inline in [ADR-000](ADR-000-interface-index.md) |
 | 013 | `WorkQueue` seam (in-memory now, Redis/NATS later) | planned seam | inline in [ADR-000](ADR-000-interface-index.md) |
 | 014 | Agent-shaped bundle reads with token-budgeted assembly (`brief`) | shipped | [`../agent-features.md` §ADR-014](../agent-features.md) |
@@ -21,7 +21,8 @@ a set of missing documents.
 | 017 | Promote linkage-only intent to the critical path; defer summaries | shipped (linkage) | [`../agent-features.md` §ADR-017](../agent-features.md) |
 | 019 | Trigram lexical layer as the retrieval ladder's base (`grep`) | shipped | [`../agent-features.md` §ADR-019](../agent-features.md) |
 | 018 | Pure core / thin build-tagged adapters | shipped (invariant 6) | [`ADR-018-pure-core-thin-adapters.md`](ADR-018-pure-core-thin-adapters.md) |
-| 020 | Semantic search layer (pluggable embedder) | shipped (default `TermEmbedder`) | [`ADR-020-semantic-search-layer.md`](ADR-020-semantic-search-layer.md) |
+| 020 | Semantic search layer (pluggable ranker) | shipped (default `TermIDFRanker`; optional neural adapter) | [`ADR-020-semantic-search-layer.md`](ADR-020-semantic-search-layer.md) |
+| 021 | SCIP monikers for symbol-precise cross-repo edges | shipped | [`../agent-features.md` §8B.4](../agent-features.md) |
 
 Numbers 001–005, 008–011 were consolidated into the base architecture spec
 (`../architecture.md`) rather than split into separate records; they are listed

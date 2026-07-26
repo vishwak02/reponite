@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest a capability or an improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: What question can't you answer today?
+      description: >
+        reponite is organized around questions about *change* ("did this break anyone?"),
+        so describing the question usually shapes the feature better than describing a
+        solution.
+      placeholder: >
+        I want to know which of my Kubernetes services still run a build that predates a
+        breaking change to a shared library.
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What do you do instead right now?
+      placeholder: I diff two `ximpact` runs by hand and compare the signature hashes.
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: What might the answer look like?
+      description: A sketch of the command and its output is very welcome, and doesn't have to be right.
+      render: shell
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints you think apply
+      description: See the design principles in the README — these shape what's feasible.
+      options:
+        - label: This should work offline / with no external service
+        - label: This needs a confidence score, because it can't always be proven
+        - label: This crosses repository boundaries
