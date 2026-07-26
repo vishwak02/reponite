@@ -19,6 +19,7 @@ External adapters live behind **build tags** and are fetched on demand:
 | `sqlite`    | SQLite store (`modernc.org/sqlite`) |
 | `treesitter`| tree-sitter parser (CGO) + go-git ref indexing + go/types precise edges (pulls a current `golang.org/x/tools`; build with a recent Go) |
 | `mcp`       | MCP server (`mark3labs/mcp-go`)     |
+| `neural`    | neural semantic ranker (stdlib-only `net/http` client for an OpenAI-compatible embeddings endpoint; tagged because a network path stays out of the pure core — its tests ride the `core` CI job) |
 
 Build the full CLI (all adapters):
 

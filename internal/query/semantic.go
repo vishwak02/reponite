@@ -1,13 +1,16 @@
 // semantic.go is the retrieval ladder's semantic rung (architecture ext §10A.2:
 // "where is the thing that does X"). It ranks a ref's symbols by similarity to a
-// natural-language query. The scoring is pluggable via an Embedder; the default
-// TermEmbedder is pure stdlib — it tokenizes identifiers (camelCase / snake_case
-// split, lowercased) into a term-frequency vector, which SemanticSearch then
-// weights by inverse document frequency over the in-scope corpus (so rare,
-// discriminative terms outrank ubiquitous ones) and compares with cosine
-// similarity. That needs no model or network, so the whole layer is pure and
-// tested in-sandbox (ADR-018); a real neural embedder (ollama/remote, keyed by
-// content.EmbedHash) can drop in behind the same interface for higher recall.
+// natural-language query. The ranking strategy is pluggable via the
+// SemanticRanker seam (ADR-020): the default TermIDFRanker is pure stdlib —
+// identifier-aware bag-of-terms (camelCase / snake_case split) weighted by
+// inverse document frequency over the in-scope corpus (a corpus property, which
+// is why the seam sits at the RANKER, not per-text embedding) and compared with
+// cosine similarity. That needs no model or network, so the default layer is
+// pure and tested in-sandbox (ADR-018); the build-tagged neural adapter
+// (internal/semantic, `-tags neural`) drops in behind the same seam, ranking by
+// dense embeddings from a config-driven endpoint. Every result names the ranker
+// that actually produced it, and an adapter failure falls back to the term
+// ranker with the failure recorded — provenance is never silent (invariant 5).
 package query
 
 import (
@@ -17,7 +20,9 @@ import (
 	"unicode"
 )
 
-// Embedder turns text into a sparse term→weight vector for similarity scoring.
+// Embedder turns text into a sparse term→weight vector; it is the tokenizer
+// seam INSIDE the default term ranker (not the neural seam — that is
+// SemanticRanker, because IDF weighting needs the whole corpus).
 type Embedder interface {
 	Embed(text string) map[string]float64
 }
@@ -43,49 +48,66 @@ type SemanticHit struct {
 	Score  float64
 }
 
-// SemanticSearch ranks symbols by similarity of (name + body) to query,
-// returning the top limit (default 10) with score > 0. repo may be FleetRepo
-// ("*") to rank across every repo in the store. emb defaults to TermEmbedder.
-// Pure over the Store's files (same source spans grep/brief use).
-func SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) []SemanticHit {
+// SemanticDoc is one rankable symbol: its identity plus the text a ranker
+// scores (symbol name + body span).
+type SemanticDoc struct {
+	Repo   string
+	Path   string
+	Symbol string
+	Line   int
+	Text   string
+}
+
+// SemanticRanker is the semantic rung's strategy seam (ADR-020): rank docs by
+// relevance to a natural-language query and return the top limit hits, best
+// first. Implementations must be deterministic for a fixed input corpus.
+// RankerName labels every result with the strategy that produced it — an agent
+// deciding how much to trust a ranking needs to know whether it came from
+// bag-of-terms or a neural model (invariant 5: never overclaim).
+type SemanticRanker interface {
+	RankerName() string
+	Rank(query string, docs []SemanticDoc, limit int) ([]SemanticHit, error)
+}
+
+// TermIDFRanker is the pure default SemanticRanker: TF (via Emb, default
+// TermEmbedder) × smoothed IDF over the doc corpus, cosine-compared. No model,
+// no network, fully deterministic.
+type TermIDFRanker struct {
+	Emb Embedder // nil = TermEmbedder
+}
+
+func (TermIDFRanker) RankerName() string { return "term-idf" }
+
+func (r TermIDFRanker) Rank(query string, docs []SemanticDoc, limit int) ([]SemanticHit, error) {
+	emb := r.Emb
 	if emb == nil {
 		emb = TermEmbedder{}
 	}
-	if limit <= 0 {
-		limit = 10
-	}
 	qv := emb.Embed(query)
 	if len(qv) == 0 {
-		return nil
+		return nil, nil
 	}
-	// Two passes with IDF weighting: a term shared by most symbols (e.g. "repo",
-	// "get", "error") carries little signal, while a rare one ("ximpact",
-	// "picking") is highly discriminative. Without this, a query like "cross-repo
-	// impact" ranks every *repo*-named helper above the actual impact code. IDF is
-	// a corpus property, so it's computed here over the in-scope symbols rather
-	// than in the (per-text) Embedder.
-	type doc struct {
+	// IDF weighting: a term shared by most symbols (e.g. "repo", "get", "error")
+	// carries little signal, while a rare one ("ximpact", "picking") is highly
+	// discriminative. Without this, a query like "cross-repo impact" ranks every
+	// *repo*-named helper above the actual impact code.
+	type scored struct {
 		hit SemanticHit
 		vec map[string]float64
 	}
-	var docs []doc
+	var svs []scored
 	df := map[string]int{}
-	for _, rp := range reposFor(s, repo) {
-		for _, f := range s.Files(rp, ref) {
-			for _, sp := range f.Symbols {
-				body := sliceLines(f.Content, sp.StartLine, sp.EndLine)
-				vec := emb.Embed(sp.Name + " " + body)
-				if len(vec) == 0 {
-					continue
-				}
-				for term := range vec {
-					df[term]++
-				}
-				docs = append(docs, doc{SemanticHit{Repo: rp, Path: f.Path, Symbol: sp.Name, Line: sp.StartLine}, vec})
-			}
+	for _, d := range docs {
+		vec := emb.Embed(d.Symbol + " " + d.Text)
+		if len(vec) == 0 {
+			continue
 		}
+		for term := range vec {
+			df[term]++
+		}
+		svs = append(svs, scored{SemanticHit{Repo: d.Repo, Path: d.Path, Symbol: d.Symbol, Line: d.Line}, vec})
 	}
-	n := float64(len(docs))
+	n := float64(len(svs))
 	idf := func(term string) float64 {
 		d := df[term]
 		if d == 0 {
@@ -107,14 +129,73 @@ func SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) [
 	}
 	qw := weighted(qv)
 	var hits []SemanticHit
-	for _, dc := range docs {
-		score := cosine(qw, weighted(dc.vec))
+	for _, sv := range svs {
+		score := cosine(qw, weighted(sv.vec))
 		if score > 0 {
-			h := dc.hit
+			h := sv.hit
 			h.Score = score
 			hits = append(hits, h)
 		}
 	}
+	SortSemanticHits(hits)
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
+}
+
+// SemanticResult is the semantic rung's result: the ranked hits plus the name
+// of the ranker that ACTUALLY produced them and, when an adapter failed and the
+// search fell back, a note saying so — the ranking's provenance is part of the
+// answer, never implied.
+type SemanticResult struct {
+	Hits   []SemanticHit
+	Ranker string
+	Note   string
+	Meta   Meta
+}
+
+// SemanticSearch ranks symbols by similarity of (name + body) to query,
+// returning the top limit (default 10). repo may be FleetRepo ("*") to rank
+// across every repo in the store. r defaults to TermIDFRanker; if a non-default
+// ranker fails (a neural endpoint down, mid-flight error), the search FALLS
+// BACK to the term ranker and records both the failure and the ranker that
+// produced the returned hits. Doc collection is pure over the Store's files
+// (the same source spans grep/brief use).
+func SemanticSearch(s Store, repo, ref, query string, limit int, r SemanticRanker) SemanticResult {
+	if r == nil {
+		r = TermIDFRanker{}
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	var docs []SemanticDoc
+	for _, rp := range reposFor(s, repo) {
+		for _, f := range s.Files(rp, ref) {
+			for _, sp := range f.Symbols {
+				docs = append(docs, SemanticDoc{
+					Repo: rp, Path: f.Path, Symbol: sp.Name, Line: sp.StartLine,
+					Text: sliceLines(f.Content, sp.StartLine, sp.EndLine),
+				})
+			}
+		}
+	}
+	res := SemanticResult{Ranker: r.RankerName(), Meta: Meta{Repo: repo, Ref: ref}}
+	hits, err := r.Rank(query, docs, limit)
+	if err != nil {
+		fallback := TermIDFRanker{}
+		res.Note = "ranker " + r.RankerName() + " failed (" + err.Error() + "); results ranked by " + fallback.RankerName() + " instead"
+		res.Ranker = fallback.RankerName()
+		hits, _ = fallback.Rank(query, docs, limit)
+	}
+	res.Hits = hits
+	return res
+}
+
+// SortSemanticHits orders by score desc, then (repo, path, symbol) for
+// determinism — the canonical hit order every SemanticRanker implementation
+// (including build-tagged adapters) must produce.
+func SortSemanticHits(hits []SemanticHit) {
 	sort.Slice(hits, func(i, j int) bool {
 		if hits[i].Score != hits[j].Score {
 			return hits[i].Score > hits[j].Score
@@ -127,10 +208,6 @@ func SemanticSearch(s Store, repo, ref, query string, limit int, emb Embedder) [
 		}
 		return hits[i].Symbol < hits[j].Symbol
 	})
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
-	return hits
 }
 
 // tokenizeIdentifiers splits text into lowercased terms, breaking identifiers on

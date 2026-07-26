@@ -23,7 +23,7 @@ LDFLAGS := -X github.com/vishwak02/reponite/internal/version.Version=$(VERSION)
 # Full CLI with all adapters (-mod=mod self-heals go.sum for tag-gated deps):
 cli:
 	go get modernc.org/sqlite $(GRAMMARS) github.com/mark3labs/mcp-go github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
-	go build -mod=mod -tags "sqlite treesitter mcp" -ldflags "$(LDFLAGS)" -o bin/reponite ./cmd/reponite
+	go build -mod=mod -tags "sqlite treesitter mcp neural" -ldflags "$(LDFLAGS)" -o bin/reponite ./cmd/reponite
 
 # Individual adapter checks (mirror CI):
 sqlite:
@@ -35,6 +35,8 @@ treesitter:
 mcp:
 	go get modernc.org/sqlite github.com/mark3labs/mcp-go
 	go build -mod=mod -tags "sqlite mcp" ./...
+neural:
+	go build -mod=mod -tags neural ./... && go test -mod=mod -tags neural ./internal/semantic/
 e2e:
 	go get modernc.org/sqlite $(GRAMMARS) github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
 	go test -mod=mod -tags "sqlite treesitter" ./internal/e2e/

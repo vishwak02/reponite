@@ -50,6 +50,14 @@ type InvestigateResult struct {
 // for each — in relevance order until the budget is spent — attaches a body
 // preview and its callers/callees, and renders a cited markdown dossier.
 func Investigate(s Store, repo, ref, question string, budget int) InvestigateResult {
+	return InvestigateWith(s, repo, ref, question, budget, nil)
+}
+
+// InvestigateWith is Investigate with an explicit SemanticRanker for the
+// candidate-discovery rung (nil = the pure term-idf default) — the same seam
+// semsearch exposes (ADR-020), so a configured neural ranker improves the
+// dossier's recall too.
+func InvestigateWith(s Store, repo, ref, question string, budget int, r SemanticRanker) InvestigateResult {
 	if budget <= 0 {
 		budget = DefaultInvestigateBudget
 	}
@@ -57,7 +65,14 @@ func Investigate(s Store, repo, ref, question string, budget int) InvestigateRes
 		repo = FleetRepo
 	}
 	res := InvestigateResult{Question: question, Meta: Meta{Repo: repo, Ref: ref}}
-	hits := SemanticSearch(s, repo, ref, question, investigateCandidates, nil)
+	sem := SemanticSearch(s, repo, ref, question, investigateCandidates, r)
+	// A degraded discovery rung must reach the caller: if the configured ranker
+	// failed and the search fell back, the dossier says so (never-lie) — its
+	// findings were selected by a weaker strategy than the agent asked for.
+	if sem.Note != "" {
+		res.Meta.Warnings = append(res.Meta.Warnings, sem.Note)
+	}
+	hits := sem.Hits
 	if len(hits) == 0 {
 		res.Dossier = "# Investigation: " + question + "\n\n_No symbols matched. Try different words, or `reponite_repos` to see what's indexed._"
 		return res

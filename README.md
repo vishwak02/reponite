@@ -112,7 +112,7 @@ reponite ximpact getUserV2
 - 🛡️ **Verify edit** — pass a proposed file change and get what breaks *before* saving/compiling: every signature change/removal + the exact call sites that rely on it
 - 🤖 **ROS topic graph** — the runtime edges no call graph contains: pairs publishers with subscribers (and service/action clients with servers) by name across the fleet, so you can answer "who reacts when I publish `/cmd_vel`?" — roscpp · rospy · rclcpp · rclpy
 - 🚀 **Fleet-aware** — mount many repos at once; `search`/`grep`/`semsearch` default fleet-wide, and misses return "did you mean …?" instead of empty
-- 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (IDF-ranked, no model needed) → compat
+- 🔎 **Retrieval ladder** — `grep` (trigram + regex, fused with enclosing symbol) → structural → semantic (IDF-ranked by default, no model needed; optional neural ranking via any OpenAI-compatible embeddings endpoint — `REPONITE_EMBED_ENDPOINT` + `REPONITE_EMBED_MODEL`, results always labeled with the ranker that produced them) → compat
 - 🚦 **CI gate** — `ci-check` exits non-zero on any exported API break (per-language "exported" rule), drops straight into a PR workflow
 - 🗣️ **Multi-language** — Go, Python, JavaScript, TypeScript, Java, C, C++, Rust, and **ROS** interface files (`.msg`/`.srv`/`.action`)
 - 📡 **Four surfaces** — CLI · MCP server (17 tools) · web dashboard · VS Code extension
@@ -156,8 +156,12 @@ reponite grep validateCard
 reponite grep "TODO|FIXME"      # real regex (alternation stays trigram-prefiltered); --fixed for literal
 reponite grep "TODO|FIXME" --offset 50   # page a big result (--limit N / -1 = all); `total` is always ground truth
 
-# Semantic — no model, no network
+# Semantic — no model, no network by default
 reponite semsearch "where we charge a card"
+# Optional neural ranking (Ollama/OpenAI/any /v1/embeddings endpoint); falls back
+# to term-idf with the failure recorded if the endpoint is down:
+#   REPONITE_EMBED_ENDPOINT=http://localhost:11434/v1/embeddings \
+#   REPONITE_EMBED_MODEL=nomic-embed-text reponite semsearch "..."
 
 # Structural diff across refs
 reponite diff v0.1.0 HEAD --changed-only --package internal/query
