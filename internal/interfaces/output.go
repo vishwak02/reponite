@@ -277,6 +277,8 @@ type ximpactDefDTO struct {
 	Symbol        string `json:"symbol"`
 	Module        string `json:"module,omitempty"`
 	SignatureHash string `json:"signature_hash,omitempty"`
+	// Moniker is the SCIP symbol identity callers match against (Phase 6b).
+	Moniker string `json:"moniker,omitempty"`
 }
 
 type ximpactDTO struct {
@@ -313,7 +315,7 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 		})
 	}
 	for _, d := range r.Definitions {
-		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash})
+		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash, Moniker: d.Moniker})
 	}
 	return marshal(dto)
 }
@@ -353,7 +355,7 @@ func BlastRadiusJSON(r query.BlastRadiusResult) (string, error) {
 		dto.FleetCallers = append(dto.FleetCallers, ximpactCallerDTO{Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Module: c.Module, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
 	}
 	for _, d := range r.Definitions {
-		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash})
+		dto.Definitions = append(dto.Definitions, ximpactDefDTO{Repo: d.Repo, Ref: d.Ref, Symbol: d.Symbol, Module: d.Module, SignatureHash: d.SignatureHash, Moniker: d.Moniker})
 	}
 	for _, v := range r.Compat {
 		dto.Compat = append(dto.Compat, blastCompatDTO{Ref: v.Ref, Verdict: string(v.Verdict), Confidence: v.Confidence})

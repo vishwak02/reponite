@@ -96,6 +96,8 @@ adapters are build-tagged and verified in CI:
 
 ## Status
 
-v1 core complete for Go. Deferred: SCIP edge upgrade (confidence → 1.0), the
+v1 core complete for Go. SCIP cross-boundary edges now upgrade cross-repo links
+from name/path to symbol-resolved (0.95) when an `index.scip` is present.
+Deferred: the
 `brief`/`rootcause`/`ximpact` MCP tools, intent linkage, freshness
 (`watch`/`sync`), the shared team server, and additional Tier-1 languages.

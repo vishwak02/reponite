@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vishwak02/reponite/internal/query"
@@ -176,6 +177,92 @@ func TestXImpactPerCallerSignatureSkew(t *testing.T) {
 	}
 	if !res.ContractChanged {
 		t.Fatal("the target's own contract moved across refs; ContractChanged must hold")
+	}
+}
+
+// Phase 6b tier 0: with SCIP indexes on both sides, a caller is matched to the
+// target by MONIKER — a globally unique symbol identity — so the link is
+// symbol-resolved (0.95) rather than a (module, name) match (0.75) or a bare
+// name guess (0.6), and it sorts above both.
+func TestXImpactSCIPResolvedTier(t *testing.T) {
+	const moniker = "scip-go gomod github.com/acme/api v1.2.0 `pkg/user`/GetUser()."
+	m := storage.NewMem()
+	m.Put("api", "HEAD", "user.GetUser", rc("g", "sig", "b", 1))
+	if err := m.SetModulePath("api", "github.com/acme/api"); err != nil {
+		t.Fatal(err)
+	}
+	// The api repo has a SCIP index, so its definition owns a moniker.
+	if err := m.PutMonikers("api", "HEAD", map[string]string{"user.GetUser": moniker}); err != nil {
+		t.Fatal(err)
+	}
+	// web was SCIP-indexed too: its reference carries the exact moniker.
+	m.PutExternalRefs("web", "HEAD", []query.ExternalRef{
+		{From: "svc.Fetch", TargetSymbol: moniker, ResolutionMethod: query.SCIPResolution, Confidence: 0.95},
+	})
+	// legacy had no SCIP index: only the import-resolved (module, name) tier.
+	m.PutExternalRefs("legacy", "HEAD", []query.ExternalRef{
+		{From: "old.Fetch", Module: "github.com/acme/api", Name: "GetUser",
+			ResolutionMethod: query.ImportResolution, Confidence: 0.75},
+	})
+
+	res := query.XImpact(m, "GetUser", "")
+	if len(res.Callers) != 2 {
+		t.Fatalf("want both callers, got %+v", res.Callers)
+	}
+	// The SCIP tier sorts first and keeps its own method/confidence.
+	top := res.Callers[0]
+	if top.Caller != "svc.Fetch" || top.ResolutionMethod != query.SCIPResolution || top.Confidence != 0.95 {
+		t.Fatalf("SCIP-resolved caller must lead, labeled and at its own confidence: %+v", top)
+	}
+	if res.Callers[1].ResolutionMethod != query.ImportResolution {
+		t.Fatalf("import-resolved caller must follow the SCIP tier: %+v", res.Callers[1])
+	}
+	// The definition exposes its moniker, and the note says how many were
+	// symbol-resolved (never implied).
+	if len(res.Definitions) != 1 || res.Definitions[0].Moniker != moniker {
+		t.Fatalf("definition must carry its moniker: %+v", res.Definitions)
+	}
+	if !strings.Contains(res.Note, "1 caller(s) SCIP-resolved") {
+		t.Fatalf("note must state the SCIP-resolved count, got %q", res.Note)
+	}
+}
+
+// A moniker is globally unique, so a same-named symbol in another module is
+// never matched by the SCIP tier — and a repo without SCIP simply keeps the
+// old tiers (no regression, nothing invented).
+func TestXImpactSCIPNoFalsePositivesAndNoRegression(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("api", "HEAD", "user.GetUser", rc("g", "sig", "b", 1))
+	m.SetModulePath("api", "github.com/acme/api")
+	m.PutMonikers("api", "HEAD", map[string]string{
+		"user.GetUser": "scip-go gomod github.com/acme/api v1 `pkg/user`/GetUser().",
+	})
+	// A DIFFERENT project's GetUser moniker — same bare name, different symbol.
+	m.PutExternalRefs("other", "HEAD", []query.ExternalRef{
+		{From: "x.Call", TargetSymbol: "scip-go gomod github.com/other/lib v1 `pkg/user`/GetUser().",
+			ResolutionMethod: query.SCIPResolution, Confidence: 0.95},
+	})
+	res := query.XImpact(m, "GetUser", "")
+	for _, c := range res.Callers {
+		if c.ResolutionMethod == query.SCIPResolution {
+			t.Fatalf("a different module's moniker must never match: %+v", c)
+		}
+	}
+	if strings.Contains(res.Note, "SCIP-resolved") {
+		t.Fatalf("no SCIP matches, so the note must not claim any: %q", res.Note)
+	}
+
+	// No monikers at all → the pre-Phase-6b behavior, unchanged.
+	m2 := storage.NewMem()
+	m2.Put("api", "HEAD", "user.GetUser", rc("g", "sig", "b", 1))
+	m2.SetModulePath("api", "github.com/acme/api")
+	m2.PutExternalRefs("web", "HEAD", []query.ExternalRef{
+		{From: "svc.Fetch", Module: "github.com/acme/api", Name: "GetUser",
+			ResolutionMethod: query.ImportResolution, Confidence: 0.75},
+	})
+	plain := query.XImpact(m2, "GetUser", "")
+	if len(plain.Callers) != 1 || plain.Callers[0].ResolutionMethod != query.ImportResolution {
+		t.Fatalf("without SCIP the existing tiers must be untouched: %+v", plain.Callers)
 	}
 }
 

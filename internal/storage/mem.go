@@ -29,25 +29,27 @@ type refKey struct{ repo, ref string }
 
 // Mem is an in-memory query.Store.
 type Mem struct {
-	repos   map[string]struct{}
-	refs    map[string]map[string]struct{}
-	syms    map[refKey]map[string]SymbolRecord
-	files   map[refKey][]query.File
-	mans    map[refKey]content.Manifest
-	extrefs map[refKey][]query.ExternalRef
-	modules map[string]string // repo -> module_path (§8B)
+	repos    map[string]struct{}
+	refs     map[string]map[string]struct{}
+	syms     map[refKey]map[string]SymbolRecord
+	files    map[refKey][]query.File
+	mans     map[refKey]content.Manifest
+	extrefs  map[refKey][]query.ExternalRef
+	monikers map[refKey]map[string]string // qid -> SCIP moniker (§8B.4)
+	modules  map[string]string            // repo -> module_path (§8B)
 }
 
 // NewMem returns an empty in-memory store.
 func NewMem() *Mem {
 	return &Mem{
-		repos:   map[string]struct{}{},
-		refs:    map[string]map[string]struct{}{},
-		syms:    map[refKey]map[string]SymbolRecord{},
-		files:   map[refKey][]query.File{},
-		mans:    map[refKey]content.Manifest{},
-		extrefs: map[refKey][]query.ExternalRef{},
-		modules: map[string]string{},
+		repos:    map[string]struct{}{},
+		refs:     map[string]map[string]struct{}{},
+		syms:     map[refKey]map[string]SymbolRecord{},
+		files:    map[refKey][]query.File{},
+		mans:     map[refKey]content.Manifest{},
+		extrefs:  map[refKey][]query.ExternalRef{},
+		monikers: map[refKey]map[string]string{},
+		modules:  map[string]string{},
 	}
 }
 
@@ -68,6 +70,7 @@ func (m *Mem) ClearRef(repo, ref string) error {
 	delete(m.syms, k)
 	delete(m.files, k)
 	delete(m.extrefs, k)
+	delete(m.monikers, k)
 	return nil
 }
 
@@ -103,6 +106,47 @@ func (m *Mem) PutExternalRefs(repo, ref string, refs []query.ExternalRef) error 
 	}
 	m.extrefs[k] = refs
 	return nil
+}
+
+// PutMonikers records a ref's symbol -> SCIP moniker map (§8B.4).
+func (m *Mem) PutMonikers(repo, ref string, mons map[string]string) error {
+	m.touch(repo, ref)
+	k := refKey{repo, ref}
+	if len(mons) == 0 {
+		delete(m.monikers, k)
+		return nil
+	}
+	m.monikers[k] = mons
+	return nil
+}
+
+// MonikersAt returns the ref's symbol -> SCIP moniker map (empty when the repo
+// has no SCIP index).
+func (m *Mem) MonikersAt(repo, ref string) map[string]string {
+	return m.monikers[refKey{repo, ref}]
+}
+
+// ExternalRefsToSymbol returns every reference whose target is exactly this
+// SCIP moniker — the symbol-resolved cross-repo tier.
+func (m *Mem) ExternalRefsToSymbol(moniker string) []query.ExternalRefHit {
+	if moniker == "" {
+		return nil
+	}
+	var out []query.ExternalRefHit
+	for k, refs := range m.extrefs {
+		for _, r := range refs {
+			if r.TargetSymbol == moniker {
+				out = append(out, query.ExternalRefHit{
+					Repo: k.repo, Ref: k.ref, Caller: r.From,
+					Module: r.Module, Name: r.Name,
+					ResolutionMethod: r.ResolutionMethod, Confidence: r.Confidence,
+					TargetSymbol: r.TargetSymbol, TargetSignatureHash: r.TargetSignatureHash,
+				})
+			}
+		}
+	}
+	sortHits(out)
+	return out
 }
 
 // SetModulePath records repo's module/package identity.
@@ -170,11 +214,17 @@ func (m *Mem) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 					Repo: k.repo, Ref: k.ref, Caller: r.From,
 					Module: r.Module, Name: r.Name,
 					ResolutionMethod: r.ResolutionMethod, Confidence: r.Confidence,
-					TargetSignatureHash: r.TargetSignatureHash,
+					TargetSymbol: r.TargetSymbol, TargetSignatureHash: r.TargetSignatureHash,
 				})
 			}
 		}
 	}
+	sortHits(out)
+	return out
+}
+
+// sortHits orders external-reference hits (repo, ref, caller) for determinism.
+func sortHits(out []query.ExternalRefHit) {
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if a.Repo != b.Repo {
@@ -185,7 +235,6 @@ func (m *Mem) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 		}
 		return a.Caller < b.Caller
 	})
-	return out
 }
 
 func asRef(rec SymbolRecord) query.SymbolRef {

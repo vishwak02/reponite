@@ -32,12 +32,20 @@ const (
 	// but still name/path-based across the repo boundary, not type-proven
 	// (§8B.4). Used for external_refs, not for in-repo CALLS edges.
 	MethodImport = "import-resolved"
+	// MethodSCIP: a cross-repo reference matched by SCIP moniker — a globally
+	// unique symbol identity produced independently by each repo's indexer, so
+	// the link is symbol-to-symbol, not a name/path match (§8B.4, Phase 6b).
+	MethodSCIP = "scip-resolved"
 )
 
 // Confidence per resolution method (§7, invariant 5), monotonic with certainty:
 // type-proven > uniquely name-resolved > opaque external > ambiguous.
 const (
-	ConfTypes     = 1.0
+	ConfTypes = 1.0
+	// ConfSCIP: cross-boundary but symbol-resolved. Just under type-proven
+	// in-repo resolution — the moniker is exact, yet it still asserts a
+	// SOURCE-level dependency, and SCIP indexes can lag the working tree.
+	ConfSCIP      = 0.95
 	ConfResolved  = 0.9
 	ConfImport    = 0.75
 	ConfExternal  = 0.6

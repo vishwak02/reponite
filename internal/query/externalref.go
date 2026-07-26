@@ -17,6 +17,11 @@ type ExternalRef struct {
 	Name             string // exported symbol name within that module
 	ResolutionMethod string
 	Confidence       float64
+	// TargetSymbol is the target's SCIP moniker when a SCIP index resolved
+	// this reference — a globally unique symbol identity, so matching it is
+	// symbol-to-symbol rather than by (module, name). "" when no SCIP index
+	// covered the caller (the reference then rides the import/name tiers).
+	TargetSymbol string
 	// TargetSignatureHash is the target's signature hash AS SEEN when this
 	// caller was indexed — captured only when the target was resolvable in the
 	// same store at index time (shared/fleet store, monorepo); "" otherwise
@@ -37,6 +42,8 @@ type ExternalRefHit struct {
 	Name             string
 	ResolutionMethod string
 	Confidence       float64
+	// TargetSymbol: the SCIP moniker this reference resolved to ("" = none).
+	TargetSymbol string
 	// TargetSignatureHash: the contract this caller was indexed against ("" =
 	// not captured; see ExternalRef.TargetSignatureHash).
 	TargetSignatureHash string

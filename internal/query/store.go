@@ -32,4 +32,13 @@ type Store interface {
 	// ExternalRefsTo returns every captured external reference resolving to
 	// (module, name): the fleet-wide callers of that exported symbol (§8B).
 	ExternalRefsTo(module, name string) []ExternalRefHit
+	// MonikersAt returns each symbol's SCIP moniker at a ref (qid -> moniker),
+	// empty when the repo has no SCIP index. A moniker is a GLOBALLY unique
+	// symbol identity, so it links across the repo boundary that symbol_hash
+	// deliberately cannot cross (§8B.2/§8B.4).
+	MonikersAt(repo, ref string) map[string]string
+	// ExternalRefsToSymbol returns every captured reference whose target is
+	// this exact SCIP moniker — symbol-resolved cross-repo callers, the
+	// highest-confidence tier (Phase 6b).
+	ExternalRefsToSymbol(moniker string) []ExternalRefHit
 }
