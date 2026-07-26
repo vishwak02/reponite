@@ -14,9 +14,16 @@
 > `external_refs.target_signature_hash` captures the contract each caller was indexed against when
 > the target is resolvable in the same store; ximpact fuses it into per-caller
 > `expected_signature: current|stale` + a `stale_callers` count ("3 of 4 still expect the old
-> shape"); unknown is reported, never guessed. Deferred: a persistent cross-run `global.db` registry
+> shape"); unknown is reported, never guessed. **The neural semantic adapter is built** (2026-07-19,
+> ADR-020): the semantic rung's strategy seam is `query.SemanticRanker` (ranker-level, because IDF
+> is a corpus property); the pure `TermIDFRanker` stays the default, and the `-tags neural` adapter
+> (`internal/semantic`, stdlib-only net/http) ranks by dense embeddings from a config-driven
+> OpenAI-compatible endpoint (`REPONITE_EMBED_ENDPOINT` + `REPONITE_EMBED_MODEL`); every result
+> carries `ranker`, and an endpoint failure falls back to term-idf with the failure recorded in
+> `note`. Deferred: a persistent cross-run `global.db` registry
 > (the `serve`/`mcp` MultiStore aggregates a multi-dir fleet today — and is where skew capture
-> becomes fleet-wide), a neural embedder behind the `Embedder` seam, and SCIP-grade
+> becomes fleet-wide), embedding CACHING keyed by content hash (each semsearch re-embeds the
+> corpus today), and SCIP-grade
 > cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*

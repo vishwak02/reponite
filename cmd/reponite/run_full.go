@@ -294,7 +294,7 @@ func cmdSemSearch(args []string) {
 	}
 	st := openStore(".")
 	defer st.Close()
-	printJSON(interfaces.SemanticJSON(query.SemanticSearch(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], limit, nil)))
+	printJSON(interfaces.SemanticJSON(query.SemanticSearch(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], limit, semanticRanker())))
 }
 
 // cmdXImpact reports who across every indexed repo calls an external symbol.
@@ -327,7 +327,7 @@ func cmdInvestigate(args []string) {
 	question := strings.Join(pos, " ")
 	st := openStore(".")
 	defer st.Close()
-	res := query.Investigate(st, query.FleetRepo, "HEAD", question, budget)
+	res := query.InvestigateWith(st, query.FleetRepo, "HEAD", question, budget, semanticRanker())
 	if asJSON {
 		printJSON(interfaces.InvestigateJSON(res))
 		return

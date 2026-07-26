@@ -88,7 +88,7 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),
 		mcp.WithString("budget", mcp.Description("token budget (default 3000)"))))
 	add(mcp.NewTool("reponite_semsearch",
-		mcp.WithDescription("Semantic symbol search — 'where is the thing that does X'. Ranks symbols by identifier-aware similarity to a natural-language query (no model needed)."),
+		mcp.WithDescription("Semantic symbol search — 'where is the thing that does X'. Ranks symbols by similarity to a natural-language query. The result's `ranker` field names the strategy that produced the ordering: `term-idf` (pure identifier-aware default, no model needed) or `neural:<model>` when an embeddings endpoint is configured; if a configured endpoint fails, results fall back to term-idf and `note` records the failure."),
 		mcp.WithString("query", mcp.Required()),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)")),

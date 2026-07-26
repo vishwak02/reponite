@@ -35,6 +35,9 @@ type WebHandler struct {
 	// ParseSymbols parses proposed file content for /api/verify_edit (injected by
 	// the tree-sitter serve command; nil otherwise).
 	ParseSymbols func(path, content string) []query.EditedSymbol
+	// Ranker overrides the semantic rung for /api/investigate (ADR-020);
+	// injected by the neural build when configured, nil = term-idf default.
+	Ranker query.SemanticRanker
 }
 
 // Routes returns the handler's mux (dashboard at /, JSON under /api/*).
@@ -222,7 +225,7 @@ func (h *WebHandler) apiInvestigate(w http.ResponseWriter, r *http.Request) {
 		repo = query.FleetRepo
 	}
 	budget, _ := strconv.Atoi(q.Get("budget"))
-	body, err := InvestigateJSON(query.Investigate(h.Store, repo, h.refOr(r), q.Get("q"), budget))
+	body, err := InvestigateJSON(query.InvestigateWith(h.Store, repo, h.refOr(r), q.Get("q"), budget, h.Ranker))
 	writeJSON(w, body, err)
 }
 

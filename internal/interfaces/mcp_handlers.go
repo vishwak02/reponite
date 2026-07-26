@@ -22,6 +22,10 @@ type ToolServer struct {
 	// Injected by the tree-sitter build (nil otherwise, so verify_edit reports it's
 	// unavailable rather than failing) — keeps this dispatch layer pure (ADR-018).
 	ParseSymbols func(path, content string) []query.EditedSymbol
+	// Ranker overrides the semantic rung's strategy for semsearch/investigate
+	// (ADR-020). Injected by the neural build when an endpoint is configured;
+	// nil = the pure term-idf default. Keeps this dispatch layer pure.
+	Ranker query.SemanticRanker
 }
 
 // Call dispatches a tool by name; args are string-valued (as MCP delivers them).
@@ -129,10 +133,10 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return BlastRadiusJSON(query.BlastRadius(t.Store, repo, ref, args["symbol"]))
 	case "reponite_semsearch":
 		limit, _ := strconv.Atoi(args["limit"])
-		return SemanticJSON(query.SemanticSearch(t.Store, discoverRepo, ref, args["query"], limit, nil))
+		return SemanticJSON(query.SemanticSearch(t.Store, discoverRepo, ref, args["query"], limit, t.Ranker))
 	case "reponite_investigate":
 		budget, _ := strconv.Atoi(args["budget"])
-		return InvestigateJSON(query.Investigate(t.Store, discoverRepo, ref, args["question"], budget))
+		return InvestigateJSON(query.InvestigateWith(t.Store, discoverRepo, ref, args["question"], budget, t.Ranker))
 	case "reponite_refs":
 		return RefsJSON(repo, t.Store.Refs(repo))
 	default:

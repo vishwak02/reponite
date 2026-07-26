@@ -27,7 +27,7 @@ func mcpCommand(args []string) {
 	if len(stores) > 1 {
 		store = storage.NewMultiStore(stores...)
 	}
-	ts := &interfaces.ToolServer{Store: store, Repo: repos[0], Intent: newIntentProvider(dirs[0]), ParseSymbols: newSymbolParser()}
+	ts := &interfaces.ToolServer{Store: store, Repo: repos[0], Intent: newIntentProvider(dirs[0]), ParseSymbols: newSymbolParser(), Ranker: semanticRanker()}
 	if err := interfaces.ServeStdio(ts); err != nil {
 		fail(err)
 	}

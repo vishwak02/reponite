@@ -471,13 +471,28 @@ func sortedTables(counts map[string]int64) []dbTableDTO {
 	return out
 }
 
-// SemanticJSON renders semantic-search hits (ext §10A.2, the semantic rung).
-func SemanticJSON(hits []query.SemanticHit) (string, error) {
-	out := make([]semanticHitDTO, 0, len(hits))
-	for _, h := range hits {
-		out = append(out, semanticHitDTO{Repo: h.Repo, Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
+type semanticDTO struct {
+	// Ranker names the strategy that ACTUALLY produced this ranking —
+	// "term-idf" (pure default) or "neural:<model>" — so an agent knows how
+	// much to trust the ordering. Note records an adapter failure + fallback.
+	Ranker string           `json:"ranker"`
+	Hits   []semanticHitDTO `json:"hits"`
+	Note   string           `json:"note,omitempty"`
+	Meta   metaDTO          `json:"_meta"`
+}
+
+// SemanticJSON renders the semantic-search result (ext §10A.2, ADR-020): the
+// ranked hits plus the ranking's provenance.
+func SemanticJSON(r query.SemanticResult) (string, error) {
+	dto := semanticDTO{
+		Ranker: r.Ranker, Note: r.Note,
+		Hits: make([]semanticHitDTO, 0, len(r.Hits)),
+		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
 	}
-	return marshal(out)
+	for _, h := range r.Hits {
+		dto.Hits = append(dto.Hits, semanticHitDTO{Repo: h.Repo, Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
+	}
+	return marshal(dto)
 }
 
 type investigateFindingDTO struct {

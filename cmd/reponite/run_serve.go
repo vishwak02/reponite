@@ -49,6 +49,7 @@ func serveCommand(args []string) {
 		ParseSymbols: func(path, content string) []query.EditedSymbol {
 			return processing.ParseEditedSymbols(path, content, version.NormVer)
 		},
+		Ranker: semanticRanker(),
 	}
 	fmt.Printf("reponite serve: http://%s  (repos %v)\n", addr, repos)
 	if err := http.ListenAndServe(addr, h.Routes()); err != nil {
