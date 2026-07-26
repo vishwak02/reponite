@@ -3,6 +3,8 @@
 package sqlite
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -142,6 +144,58 @@ func TestSQLiteDBStats(t *testing.T) {
 	}
 	if _, ok := tables["external_refs"]; !ok {
 		t.Fatal("DBStats must report every index table, including external_refs")
+	}
+}
+
+// Opening a database created by an OLDER reponite must migrate cleanly. This
+// caught a real upgrade break: an index over a column that migrate() adds was
+// declared in the base schema, where CREATE TABLE IF NOT EXISTS is a no-op on
+// an existing table — so the column did not exist yet and Open failed for
+// every previously indexed repo.
+func TestSQLiteOpensLegacyDatabase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.db")
+
+	// A pre-Phase-6b external_refs table: no target_symbol, no symbol_monikers.
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+CREATE TABLE refs (repo TEXT NOT NULL, ref TEXT NOT NULL, commit_hash TEXT, indexed_at TEXT, PRIMARY KEY (repo, ref));
+CREATE TABLE external_refs (
+  repo TEXT NOT NULL, ref TEXT NOT NULL, from_name TEXT NOT NULL,
+  target_module TEXT NOT NULL, target_name TEXT NOT NULL,
+  resolution_method TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 0.6,
+  PRIMARY KEY (repo, ref, from_name, target_module, target_name)
+);
+INSERT INTO external_refs(repo, ref, from_name, target_module, target_name, resolution_method, confidence)
+VALUES('web','HEAD','web.fetch','github.com/acme/api','getUser','import-resolved',0.75);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatalf("opening a legacy index must migrate, not fail: %v", err)
+	}
+	defer st.Close()
+
+	// The pre-existing row survives and reads through the new columns.
+	hits := st.ExternalRefsTo("github.com/acme/api", "getUser")
+	if len(hits) != 1 || hits[0].Caller != "web.fetch" {
+		t.Fatalf("legacy rows must survive migration: %+v", hits)
+	}
+	if hits[0].TargetSymbol != "" || hits[0].TargetSignatureHash != "" {
+		t.Fatalf("migrated columns must default to empty (unknown), got %+v", hits[0])
+	}
+	// And the new tables/queries work on the migrated database.
+	if err := st.PutMonikers("web", "HEAD", map[string]string{"web.fetch": "moniker"}); err != nil {
+		t.Fatalf("symbol_monikers must exist after migration: %v", err)
+	}
+	if len(st.ExternalRefsToSymbol("moniker")) != 0 {
+		t.Fatal("no reference targets that moniker yet")
 	}
 }
 

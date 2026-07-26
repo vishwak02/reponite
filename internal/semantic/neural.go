@@ -12,11 +12,13 @@ package semantic
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -51,10 +53,61 @@ func New(cfg Config) *NeuralRanker {
 }
 
 // NeuralRanker ranks docs by cosine similarity of dense embeddings fetched
-// from the configured endpoint.
+// from the configured endpoint. Embeddings are cached by content hash for the
+// process lifetime: a long-lived `serve`/`mcp` mount would otherwise re-embed
+// the entire corpus on every query, and a symbol's text is unchanged between
+// queries unless it was reindexed. The cache is keyed by (model, sha256(text))
+// so switching models can never serve another model's vectors.
 type NeuralRanker struct {
 	cfg    Config
 	client *http.Client
+
+	mu    sync.Mutex
+	cache map[string][]float64
+}
+
+// maxCacheEntries bounds the cache so a huge fleet can't grow it without limit;
+// on overflow it is cleared wholesale (simple and predictable — the next query
+// repopulates only what it needs).
+const maxCacheEntries = 50000
+
+func (n *NeuralRanker) cacheKey(text string) string {
+	sum := sha256.Sum256([]byte(n.cfg.Model + "\x00" + text))
+	return string(sum[:])
+}
+
+// cached returns the embeddings already known for inputs (nil entries where a
+// fetch is still needed) plus the list of texts to fetch.
+func (n *NeuralRanker) cached(inputs []string) (have [][]float64, missing []string) {
+	have = make([][]float64, len(inputs))
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	need := map[string]bool{}
+	for i, text := range inputs {
+		if v, ok := n.cache[n.cacheKey(text)]; ok {
+			have[i] = v
+			continue
+		}
+		if !need[text] {
+			need[text] = true
+			missing = append(missing, text)
+		}
+	}
+	return have, missing
+}
+
+// store records freshly fetched embeddings.
+func (n *NeuralRanker) store(texts []string, vecs [][]float64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.cache == nil || len(n.cache) > maxCacheEntries {
+		n.cache = make(map[string][]float64, len(texts))
+	}
+	for i, t := range texts {
+		if i < len(vecs) {
+			n.cache[n.cacheKey(t)] = vecs[i]
+		}
+	}
 }
 
 // RankerName labels results with the model that ranked them (invariant 5:
@@ -79,7 +132,7 @@ func (n *NeuralRanker) Rank(q string, docs []query.SemanticDoc, limit int) ([]qu
 	for _, d := range docs {
 		inputs = append(inputs, truncateUTF8(d.Symbol+" "+d.Text, maxDocBytes))
 	}
-	vecs, err := n.embed(inputs)
+	vecs, err := n.embedCached(inputs)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +160,34 @@ func (n *NeuralRanker) Rank(q string, docs []query.SemanticDoc, limit int) ([]qu
 		hits = hits[:limit]
 	}
 	return hits, nil
+}
+
+// embedCached fetches only the inputs not already embedded (the query text
+// changes every call; symbol bodies almost never do), then reassembles the
+// full ordered vector list.
+func (n *NeuralRanker) embedCached(inputs []string) ([][]float64, error) {
+	have, missing := n.cached(inputs)
+	if len(missing) == 0 {
+		return have, nil
+	}
+	fetched, err := n.embed(missing)
+	if err != nil {
+		return nil, err
+	}
+	if len(fetched) != len(missing) {
+		return nil, fmt.Errorf("endpoint returned %d embeddings for %d inputs", len(fetched), len(missing))
+	}
+	n.store(missing, fetched)
+	byText := make(map[string][]float64, len(missing))
+	for i, t := range missing {
+		byText[t] = fetched[i]
+	}
+	for i, text := range inputs {
+		if have[i] == nil {
+			have[i] = byText[text]
+		}
+	}
+	return have, nil
 }
 
 // embed fetches embeddings for inputs in bounded batches, preserving order.

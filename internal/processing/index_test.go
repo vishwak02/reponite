@@ -242,6 +242,48 @@ func TestIndexFilesExternalRefs(t *testing.T) {
 	}
 }
 
+// The capture step also works across SEPARATE per-repo stores via a peer view
+// (the fleet registry's other repos), which is what makes per-caller skew fire
+// on a real machine — one store per repo is the normal layout. The import path
+// is the module ROOT plus a package path, so matching must be prefix-based.
+func TestIndexFilesCapturesTargetSignatureFromPeers(t *testing.T) {
+	peer := storage.NewMem() // a DIFFERENT store: the api repo's own index
+	peer.Put("api", "HEAD", "pkg/user.GetUser", storage.SymbolRecord{SignatureHash: content.Hash("sigV1")})
+	if err := peer.SetModulePath("api", "github.com/acme/api"); err != nil {
+		t.Fatal(err)
+	}
+
+	local := storage.NewMem() // the web repo's own store: knows nothing of api
+	files := []ParsedFile{{
+		Path: "svc/handler.go", Content: "x", Lang: "go",
+		Symbols: []Symbol{{
+			Name: "Handle", Kind: "function", Signature: "func Handle()", CanonBody: []byte("b"),
+			Callees:        []string{"GetUser"},
+			QualifiedCalls: []QualifiedCall{{Qualifier: "user", Name: "GetUser"}},
+		}},
+		Imports: []ImportBinding{{Local: "user", Module: "github.com/acme/api/pkg/user"}},
+	}}
+	if err := indexFiles(local, "web", "HEAD", 1, files, nil, peer); err != nil {
+		t.Fatal(err)
+	}
+	hits := local.ExternalRefsTo("github.com/acme/api", "GetUser")
+	if len(hits) != 1 {
+		t.Fatalf("the module ROOT must match a subpackage import: %+v", hits)
+	}
+	if hits[0].TargetSignatureHash != string(content.Hash("sigV1")) {
+		t.Fatalf("the peer store's contract must be captured: %+v", hits[0])
+	}
+
+	// Without peers the same index captures nothing — unknown, never guessed.
+	solo := storage.NewMem()
+	if err := indexFiles(solo, "web", "HEAD", 1, files, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if h := solo.ExternalRefsTo("github.com/acme/api", "GetUser"); len(h) != 1 || h[0].TargetSignatureHash != "" {
+		t.Fatalf("no peer view means unknown contract, not a guess: %+v", h)
+	}
+}
+
 // §8B.3 capture half of per-caller signature skew: when the TARGET's repo lives
 // in the same store at index time (shared/fleet store, monorepo), each external
 // ref records the target's signature hash as seen NOW; an unresolvable or

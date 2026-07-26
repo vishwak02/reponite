@@ -204,12 +204,15 @@ func (m *Mem) Manifest(repo, ref string) (content.Manifest, bool) {
 func (m *Mem) ModulePath(repo string) string { return m.modules[repo] }
 
 // ExternalRefsTo returns every external reference resolving to (module, name),
-// across all repos/refs, sorted (repo, ref, caller) for determinism.
+// across all repos/refs, sorted (repo, ref, caller) for determinism. module is
+// a module ROOT (see query.Store): an import path is the module path plus a
+// package path, so "github.com/acme/api" must match a reference to
+// "github.com/acme/api/pkg/user".
 func (m *Mem) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 	var out []query.ExternalRefHit
 	for k, refs := range m.extrefs {
 		for _, r := range refs {
-			if r.Module == module && r.Name == name {
+			if query.ModuleMatches(module, r.Module) && r.Name == name {
 				out = append(out, query.ExternalRefHit{
 					Repo: k.repo, Ref: k.ref, Caller: r.From,
 					Module: r.Module, Name: r.Name,
