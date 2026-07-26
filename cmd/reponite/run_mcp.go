@@ -9,10 +9,9 @@ import (
 )
 
 func mcpCommand(args []string) {
-	dirs := args
-	if len(dirs) == 0 {
-		dirs = []string{"."}
-	}
+	// No dirs named: mount the whole registered fleet (§8B.7), so an agent's
+	// MCP config needn't list every repo. Explicit dirs always win.
+	dirs := resolveDirs(args)
 	var stores []query.Store
 	var repos []string
 	for _, dir := range dirs {

@@ -20,10 +20,15 @@
 > (`internal/semantic`, stdlib-only net/http) ranks by dense embeddings from a config-driven
 > OpenAI-compatible endpoint (`REPONITE_EMBED_ENDPOINT` + `REPONITE_EMBED_MODEL`); every result
 > carries `ranker`, and an endpoint failure falls back to term-idf with the failure recorded in
-> `note`. Deferred: a persistent cross-run `global.db` registry
-> (the `serve`/`mcp` MultiStore aggregates a multi-dir fleet today — and is where skew capture
-> becomes fleet-wide), embedding CACHING keyed by content hash (each semsearch re-embeds the
-> corpus today), and SCIP-grade
+> `note`. **The persistent fleet registry is built** (2026-07-19,
+> `internal/fleet`): `reponite index` records each repo (name, dir, module, timestamp) in a small
+> JSON registry, and `serve`/`mcp` with no directory argument mount every live registered repo —
+> metadata only, no content, so it stays pure stdlib and hand-editable (the original design called
+> this `global.db`; there is nothing to query, so a database would only add a build tag). Explicit
+> dirs still win, and a registered repo whose index vanished is reported stale, never silently
+> skipped. Deferred: fleet-wide per-caller skew CAPTURE (the registry now makes the peer stores
+> discoverable at index time — §8B.3's capture step could consult them), embedding CACHING keyed by
+> content hash (each semsearch re-embeds the corpus today), and SCIP-grade
 > cross-boundary confidence (Phase 6b). See `docs/BUILD_PLAN.md` and `PROGRESS.md` for the log.
 
 *Extends the base architecture. Adds four capabilities that turn Reponite's index into concrete "faster / fewer tokens / minutes-to-answer" wins for coding, explanation, and debugging agents: an editing-brief bundle, a root-cause drill-down, cross-repo impact, and a lexical/grep retrieval layer (the base of a retrieval ladder, §10A). Section numbers slot into the base spec (e.g. §8A extends §8). ADRs continue from ADR-013. Read alongside the base spec and the two build-plan docs.*

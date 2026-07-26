@@ -119,6 +119,25 @@ reponite ximpact getUserV2
 
 ---
 
+## The fleet registry
+
+`reponite index` records each repo it indexes in a small registry, so fleet-wide commands don't need every directory handed to them again:
+
+```sh
+reponite index ~/src/api        # indexing registers the repo
+reponite serve                  # …so this mounts the whole fleet, from anywhere
+reponite mcp                    # …and so does the agent mount
+
+reponite fleet list             # what's registered (stale entries flagged)
+reponite fleet add <dir>        # register an already-indexed repo
+reponite fleet remove <dir|repo>
+reponite fleet path             # where the registry lives
+```
+
+The registry is a small JSON file (`$REPONITE_FLEET`, else `$XDG_CONFIG_HOME/reponite/fleet.json`, else `~/.config/reponite/fleet.json`) holding **metadata only** — repo, directory, module path, last-index time. Per-repo `.reponite/index.db` files remain the only content store. Naming directories explicitly always wins over the registry, and a registered repo whose index has been deleted or moved is reported as stale rather than silently skipped.
+
+---
+
 ## Ignoring vendored code
 
 Vendored trees drown search/grep/investigate in third-party noise, so exclusion happens **at index time** and every surface benefits. Three layers, all gitignore syntax:
@@ -187,8 +206,9 @@ Every response is **token-budgeted** and carries a `_meta` envelope with confide
 ## Web dashboard
 
 ```sh
+reponite serve              # every registered repo (see "The fleet registry")
 reponite serve .            # single-repo view → http://127.0.0.1:8899
-reponite serve repo-a repo-b repo-c   # shared team/fleet view
+reponite serve repo-a repo-b repo-c   # explicit team/fleet view
 ```
 
 Views: **Overview** (index/database stats) · **Explore** (search → editing brief) · **Diff** · **Impact** (fleet callers) · **Topics** (ROS comms graph) · **Usages** (call sites, call-graph-confirmed) · **Verify** (paste a proposed edit, see what breaks before saving).

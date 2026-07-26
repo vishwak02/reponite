@@ -16,7 +16,8 @@ import (
 
 // serveCommand starts the read-only web dashboard + JSON API. With one dir it
 // serves that repo; with several it aggregates them into a MultiStore team/fleet
-// view (roadmap 4.2) where cross-repo ximpact spans all of them. Bound to
+// view (roadmap 4.2) where cross-repo ximpact spans all of them. With NO dir it
+// mounts every repo in the persistent fleet registry (§8B.7). Bound to
 // localhost by default; --addr overrides.
 func serveCommand(args []string) {
 	var addr string
@@ -26,9 +27,9 @@ func serveCommand(args []string) {
 	if addr == "" {
 		addr = "127.0.0.1:8899"
 	}
-	if len(dirs) == 0 {
-		dirs = []string{"."}
-	}
+	// No dirs named: mount the whole registered fleet (§8B.7). Explicit dirs
+	// always win; stale registry entries are reported by resolveDirs.
+	dirs = resolveDirs(dirs)
 	var stores []query.Store
 	var repos []string
 	repoStores := map[string]query.Store{}
