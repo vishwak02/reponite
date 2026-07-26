@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS symbol_monikers (
   PRIMARY KEY (repo, ref, symbol)
 );
 CREATE INDEX IF NOT EXISTS idx_extref_target ON external_refs(target_module, target_name);
-CREATE INDEX IF NOT EXISTS idx_extref_symbol ON external_refs(target_symbol);
+-- NOTE: an index over a column introduced by migrate() (target_symbol) must be
+-- created THERE, not here. On an existing database CREATE TABLE IF NOT EXISTS
+-- is a no-op, so the column does not exist yet when this block runs and Open
+-- would fail for every previously indexed repo.
 -- Per-repo module/package identity (§8B.2): a symbol's cross-repo identity is
 -- (module_path, name), so a target's module resolves its precise fleet callers.
 CREATE TABLE IF NOT EXISTS repo_modules (
@@ -411,10 +414,16 @@ func (s *Store) ModulePath(repo string) string {
 }
 
 func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
+	// module is a module ROOT: an import path is the module path plus a package
+	// path, so a reference to "<root>/pkg/user" must match root. substr() is
+	// used rather than LIKE because module paths legitimately contain "_" and
+	// "%", which LIKE would treat as wildcards.
+	prefix := module + "/"
 	rows, err := s.db.Query(
 		`SELECT repo, ref, from_name, target_module, target_name, resolution_method, confidence, target_signature_hash, target_symbol
-		 FROM external_refs WHERE target_module=? AND target_name=?
-		 ORDER BY repo, ref, from_name`, module, name)
+		 FROM external_refs
+		 WHERE target_name=? AND (target_module=? OR substr(target_module, 1, ?)=?)
+		 ORDER BY repo, ref, from_name`, name, module, len(prefix), prefix)
 	if err != nil {
 		return nil
 	}

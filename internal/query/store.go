@@ -31,6 +31,11 @@ type Store interface {
 	ModulePath(repo string) string
 	// ExternalRefsTo returns every captured external reference resolving to
 	// (module, name): the fleet-wide callers of that exported symbol (§8B).
+	// module is matched as a module ROOT: a reference to
+	// "github.com/acme/api/pkg/user" belongs to the repo whose module_path is
+	// "github.com/acme/api", because an import path is the module path plus a
+	// package path. Matching is exact-or-slash-prefixed, so a sibling module
+	// like "github.com/acme/apiv2" never collides.
 	ExternalRefsTo(module, name string) []ExternalRefHit
 	// MonikersAt returns each symbol's SCIP moniker at a ref (qid -> moniker),
 	// empty when the repo has no SCIP index. A moniker is a GLOBALLY unique

@@ -7,6 +7,8 @@
 // instead of by bare name alone. Pure types in the query layer, next to Callee.
 package query
 
+import "strings"
+
 // ExternalRef is one caller symbol's resolved dependency on a symbol outside its
 // own repo, produced at index time and stored per (repo, ref). It records the
 // module the call resolves to and the exported name within it, with the method
@@ -29,6 +31,19 @@ type ExternalRef struct {
 	// against the target's current signature answers "which callers still
 	// expect the old shape".
 	TargetSignatureHash string
+}
+
+// ModuleMatches reports whether an import path (refModule, e.g.
+// "github.com/acme/api/pkg/user") belongs to a module ROOT (e.g.
+// "github.com/acme/api"). An import path is the module path plus a package
+// path, so exact equality alone never matches a multi-package repo — which
+// silently demoted every such caller to the name-based tier. The slash guard
+// keeps a sibling module ("github.com/acme/apiv2") from colliding.
+func ModuleMatches(root, refModule string) bool {
+	if root == "" || refModule == "" {
+		return false
+	}
+	return refModule == root || strings.HasPrefix(refModule, root+"/")
 }
 
 // ExternalRefHit is one fleet-wide caller of an exported symbol, returned by

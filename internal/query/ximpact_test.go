@@ -138,6 +138,45 @@ func TestXImpactModuleResolvedFusion(t *testing.T) {
 	}
 }
 
+// The module-resolved tier must treat the target's module_path as a module
+// ROOT. A real import path is the module path PLUS a package path
+// ("github.com/acme/api/pkg/user"), so exact-equality matching silently
+// demoted every multi-package repo's callers to the name-based tier — the
+// "module-path precise" tier never fired outside single-package toy repos.
+func TestXImpactMatchesModuleRootNotExactPath(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("api", "HEAD", "pkg/user.GetUser", rc("g", "sig", "b", 1))
+	if err := m.SetModulePath("api", "github.com/acme/api"); err != nil {
+		t.Fatal(err)
+	}
+	// What a real Go indexer captures: the full import path of the package.
+	m.PutExternalRefs("web", "HEAD", []query.ExternalRef{{
+		From: "svc.Handle", Module: "github.com/acme/api/pkg/user", Name: "GetUser",
+		ResolutionMethod: query.ImportResolution, Confidence: 0.75,
+	}})
+	// A SIBLING module that merely shares a prefix must never match.
+	m.PutExternalRefs("other", "HEAD", []query.ExternalRef{{
+		From: "x.Call", Module: "github.com/acme/apiv2/pkg/user", Name: "GetUser",
+		ResolutionMethod: query.ImportResolution, Confidence: 0.75,
+	}})
+
+	res := query.XImpact(m, "GetUser", "")
+	var precise []query.XImpactCaller
+	for _, c := range res.Callers {
+		if c.ResolutionMethod == query.ImportResolution {
+			precise = append(precise, c)
+		}
+	}
+	if len(precise) != 1 || precise[0].Caller != "svc.Handle" {
+		t.Fatalf("the subpackage import must match its module root exactly once: %+v", res.Callers)
+	}
+	for _, c := range res.Callers {
+		if c.Repo == "other" && c.ResolutionMethod == query.ImportResolution {
+			t.Fatalf("sibling module apiv2 must not match root api: %+v", c)
+		}
+	}
+}
+
 // §8B.3 per-caller signature skew: a caller whose CAPTURED target contract no
 // longer matches the target's current signature reads "stale" ("still expects
 // the old shape"); a matching one reads "current"; a caller indexed without a

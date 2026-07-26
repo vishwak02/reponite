@@ -91,6 +91,17 @@ func parseCmd(name, usage string, args []string, define func(fs *flag.FlagSet)) 
 	return positional
 }
 
+// joinNote appends a scope note to a result note without doubling separators.
+func joinNote(note, extra string) string {
+	if extra == "" {
+		return note
+	}
+	if note == "" {
+		return extra
+	}
+	return note + " — " + extra
+}
+
 // arg returns the i-th positional or a default when absent.
 func arg(pos []string, i int, def string) string {
 	if i < len(pos) {
@@ -129,7 +140,12 @@ func cmdIndex(args []string) {
 	st := openStore(dir)
 	defer st.Close()
 
-	opt := processing.IndexOptions{Excludes: excludes}
+	// Peer stores (the other registered repos) let index time capture the
+	// contract each cross-repo reference was written against — §8B.3's
+	// per-caller skew. Without them the skew is honestly "unknown".
+	peers := openPeers(dir)
+	defer peers.Close()
+	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store}
 	if gitRev != "" {
 		commit, err := processing.IndexGitRefWith(st, repo, ref, dir, gitRev, version.NormVer, opt)
 		if err != nil {
@@ -208,34 +224,39 @@ func cmdDiff(args []string) {
 func cmdGrep(args []string) {
 	var fixed bool
 	var limit, offset int
-	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed] [--limit N] [--offset N]", args, func(fs *flag.FlagSet) {
+	var local bool
+	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed] [--limit N] [--offset N] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&fixed, "fixed", false, "treat the pattern as a literal string, not a regex")
 		fs.IntVar(&limit, "limit", 0, "max matches returned (0 = default 50, -1 = all)")
 		fs.IntVar(&offset, "offset", 0, "matches to skip — page through a truncated result")
+		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 	})
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite grep <pattern> [ref] [--fixed] [--limit N] [--offset N]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	res, err := query.GrepRepo(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed, Limit: limit, Offset: offset})
+	f := openFleet(local)
+	defer f.Close()
+	res, err := query.GrepRepo(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed, Limit: limit, Offset: offset})
 	if err != nil {
 		fail(err)
 	}
+	res.Note = joinNote(res.Note, f.fleetNote())
 	printJSON(interfaces.GrepJSON(res))
 }
 
 func cmdSearch(args []string) {
 	var tests bool
-	pos := parseCmd("search", "search <substr> [ref] [--tests]", args, func(fs *flag.FlagSet) {
+	var local bool
+	pos := parseCmd("search", "search <substr> [ref] [--tests] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&tests, "tests", false, "include test symbols (Test*/Benchmark*/…)")
+		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite search <substr> [ref] [--tests]"))
+		fail(fmt.Errorf("usage: reponite search <substr> [ref] [--tests] [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.SearchJSON(query.SearchName(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], tests)))
+	f := openFleet(local)
+	defer f.Close()
+	printJSON(interfaces.SearchJSON(query.SearchName(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], tests)))
 }
 
 func cmdRootCause(args []string) {
@@ -290,29 +311,37 @@ func cmdCICheck(args []string) {
 // cmdSemSearch ranks symbols by semantic similarity to a natural-language query.
 func cmdSemSearch(args []string) {
 	var limit int
-	pos := parseCmd("semsearch", "semsearch <query> [ref] [--limit N]", args, func(fs *flag.FlagSet) {
+	var local bool
+	pos := parseCmd("semsearch", "semsearch <query> [ref] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
 		fs.IntVar(&limit, "limit", 0, "max results (0 = default)")
+		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite semsearch <query> [ref] [--limit N]"))
+		fail(fmt.Errorf("usage: reponite semsearch <query> [ref] [--limit N] [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.SemanticJSON(query.SemanticSearch(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], limit, semanticRanker())))
+	f := openFleet(local)
+	defer f.Close()
+	res := query.SemanticSearch(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], limit, semanticRanker())
+	res.Note = joinNote(res.Note, f.fleetNote())
+	printJSON(interfaces.SemanticJSON(res))
 }
 
 // cmdXImpact reports who across every indexed repo calls an external symbol.
 func cmdXImpact(args []string) {
 	var ref string
-	pos := parseCmd("ximpact", "ximpact <symbol> [--ref R]", args, func(fs *flag.FlagSet) {
+	var local bool
+	pos := parseCmd("ximpact", "ximpact <symbol> [--ref R] [--local]", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&ref, "ref", "", "restrict each repo to this ref")
+		fs.BoolVar(&local, "local", false, "consider only this repo instead of the registered fleet")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite ximpact <symbol> [--ref R]"))
+		fail(fmt.Errorf("usage: reponite ximpact <symbol> [--ref R] [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.XImpactJSON(query.XImpact(st, pos[0], ref)))
+	f := openFleet(local)
+	defer f.Close()
+	res := query.XImpact(f, pos[0], ref)
+	res.Note = joinNote(res.Note, f.fleetNote())
+	printJSON(interfaces.XImpactJSON(res))
 }
 
 // cmdInvestigate answers a natural-language question with one cited dossier of
@@ -329,9 +358,9 @@ func cmdInvestigate(args []string) {
 		fail(fmt.Errorf("usage: reponite investigate <question...> [--budget N] [--json]"))
 	}
 	question := strings.Join(pos, " ")
-	st := openStore(".")
-	defer st.Close()
-	res := query.InvestigateWith(st, query.FleetRepo, "HEAD", question, budget, semanticRanker())
+	f := openFleet(false)
+	defer f.Close()
+	res := query.InvestigateWith(f, query.FleetRepo, "HEAD", question, budget, semanticRanker())
 	if asJSON {
 		printJSON(interfaces.InvestigateJSON(res))
 		return
@@ -342,13 +371,16 @@ func cmdInvestigate(args []string) {
 // cmdBlastRadius fuses in-repo callers, fleet callers, covering tests, and
 // cross-ref contract state into one pre-edit impact dossier.
 func cmdBlastRadius(args []string) {
-	pos := parseCmd("blast-radius", "blast-radius <symbol> [ref]", args, nil)
+	var local bool
+	pos := parseCmd("blast-radius", "blast-radius <symbol> [ref] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "consider only this repo instead of the registered fleet")
+	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite blast-radius <symbol> [ref]"))
+		fail(fmt.Errorf("usage: reponite blast-radius <symbol> [ref] [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(st, repoName("."), arg(pos, 1, "HEAD"), pos[0])))
+	f := openFleet(local)
+	defer f.Close()
+	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(f, f.Local, arg(pos, 1, "HEAD"), pos[0])))
 }
 
 // cmdVerifyEdit compares the (edited) working-tree file at path against its
@@ -382,35 +414,44 @@ func cmdVerifyEdit(args []string) {
 // cmdUsages lists every call site of a symbol (fleet-wide), each with its line
 // and whether it's a confirmed call-graph caller.
 func cmdUsages(args []string) {
-	pos := parseCmd("usages", "usages <symbol>", args, nil)
+	var local bool
+	pos := parseCmd("usages", "usages <symbol> [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
+	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite usages <symbol>"))
+		fail(fmt.Errorf("usage: reponite usages <symbol> [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.UsagesJSON(query.Usages(st, query.FleetRepo, "HEAD", pos[0])))
+	f := openFleet(local)
+	defer f.Close()
+	res := query.Usages(f, query.FleetRepo, "HEAD", pos[0])
+	res.Note = joinNote(res.Note, f.fleetNote())
+	printJSON(interfaces.UsagesJSON(res))
 }
 
 // cmdTopics renders the ROS communication graph fleet-wide (pub/sub/service/
 // action edges linked by name). With a name argument it focuses on that one
 // topic/service/action: who produces it and who consumes it.
 func cmdTopics(args []string) {
-	pos := parseCmd("topics", "topics [name]", args, nil)
-	st := openStore(".")
-	defer st.Close()
+	var local bool
+	pos := parseCmd("topics", "topics [name] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
+	})
+	f := openFleet(local)
+	defer f.Close()
+	res := query.CommGraph(f, query.FleetRepo, "HEAD")
 	if len(pos) >= 1 {
-		printJSON(interfaces.TopicsJSON(query.Topic(st, query.FleetRepo, "HEAD", pos[0])))
-		return
+		res = query.Topic(f, query.FleetRepo, "HEAD", pos[0])
 	}
-	printJSON(interfaces.TopicsJSON(query.CommGraph(st, query.FleetRepo, "HEAD")))
+	res.Note = joinNote(res.Note, f.fleetNote())
+	printJSON(interfaces.TopicsJSON(res))
 }
 
 // cmdRepos lists every indexed repo with its module + per-ref stats.
 func cmdRepos(args []string) {
 	parseCmd("repos", "repos", args, nil)
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.OverviewJSON(query.Overview(st), nil))
+	f := openFleet(false)
+	defer f.Close()
+	printJSON(interfaces.OverviewJSON(query.Overview(f), nil))
 }
 
 func cmdBrief(args []string) {

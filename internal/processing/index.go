@@ -56,13 +56,13 @@ type ParsedFile struct {
 // directory) so distinct definitions sharing a bare name (e.g. storage.Mem.Put
 // vs sqlite.Store.Put) are distinct nodes and never conflated (correctness).
 func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error {
-	return indexFiles(w, repo, ref, normVer, files, nil)
+	return indexFiles(w, repo, ref, normVer, files, nil, nil)
 }
 
 // indexFiles is IndexFiles with an optional precise edge map (callerQID -> base
 // callee name -> type-checker-proven callee QID) that upgrades matching edges to
 // go-types confidence; nil precise means pure name-based resolution.
-func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string]string) error {
+func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string]string, peers query.Store) error {
 	type computed struct {
 		sym        Symbol
 		pkg        string
@@ -162,7 +162,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			return err
 		}
 	}
-	captureTargetSignatures(w, repo, extRefs)
+	captureTargetSignatures(w, peers, repo, extRefs)
 	if err := w.PutExternalRefs(repo, ref, extRefs); err != nil {
 		return err
 	}
@@ -176,10 +176,19 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 // written (shared/fleet store, monorepo) — capture-early, query-later (§8B.6).
 // Per-repo stores, an unindexed target, or an ambiguous name leave it "" —
 // unknown is reported, never guessed (invariant 5).
-func captureTargetSignatures(w Indexer, callerRepo string, extRefs []query.ExternalRef) {
-	s, ok := w.(query.Store)
-	if !ok || len(extRefs) == 0 {
+func captureTargetSignatures(w Indexer, peers query.Store, callerRepo string, extRefs []query.ExternalRef) {
+	if len(extRefs) == 0 {
 		return
+	}
+	// Prefer the fleet view (other repos indexed on this machine) — a lone
+	// per-repo store contains only its own symbols, so without peers the
+	// contract is simply unknown.
+	s := peers
+	if s == nil {
+		var ok bool
+		if s, ok = w.(query.Store); !ok {
+			return
+		}
 	}
 	repoByModule := map[string]string{}
 	for _, r := range s.Repos() {
@@ -199,11 +208,24 @@ func captureTargetSignatures(w Indexer, callerRepo string, extRefs []query.Exter
 		k := key{extRefs[i].Module, extRefs[i].Name}
 		sig, seen := cache[k]
 		if !seen {
-			sig = targetSignature(s, repoByModule[k.module], k.name)
+			sig = targetSignature(s, repoForModule(repoByModule, k.module), k.name)
 			cache[k] = sig
 		}
 		extRefs[i].TargetSignatureHash = sig
 	}
+}
+
+// repoForModule maps an import path to the repo owning it, by longest module
+// ROOT match — an import path is a module path plus a package path, so exact
+// equality alone would miss every multi-package repo.
+func repoForModule(repoByModule map[string]string, importPath string) string {
+	best, bestLen := "", -1
+	for root, repo := range repoByModule {
+		if query.ModuleMatches(root, importPath) && len(root) > bestLen {
+			best, bestLen = repo, len(root)
+		}
+	}
+	return best
 }
 
 // targetSignature returns the signature hash of the UNIQUE symbol named name in

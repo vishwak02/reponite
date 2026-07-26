@@ -111,7 +111,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	if hasGo {
 		precise = TypeResolvedEdges(dir)
 	}
-	if err := indexFiles(w, repo, ref, normVer, files, precise); err != nil {
+	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers); err != nil {
 		return err
 	}
 	if mod, ok := DetectModulePath(manifests); ok {

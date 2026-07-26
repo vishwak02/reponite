@@ -10,6 +10,8 @@ package processing
 import (
 	"path"
 	"strings"
+
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 // DefaultIgnorePatterns is the always-on exclusion set: vendored/generated
@@ -24,11 +26,17 @@ var DefaultIgnorePatterns = []string{
 	"testdata/",
 }
 
-// IndexOptions carries caller-supplied indexing filters (CLI --exclude).
+// IndexOptions carries caller-supplied indexing settings.
 type IndexOptions struct {
 	// Excludes are extra ignore patterns (gitignore syntax), applied after the
 	// defaults and the repo's .reponiteignore.
 	Excludes []string
+	// Peers is a read-only view of the OTHER repos already indexed on this
+	// machine (the fleet registry's stores). It lets §8B.3's capture step
+	// record the contract each cross-repo reference was written against, which
+	// a lone per-repo store cannot see. nil = capture only what this store
+	// knows; the skew then reads unknown, never guessed.
+	Peers query.Store
 }
 
 // Ignore is an ordered list of gitignore-style patterns; the LAST matching

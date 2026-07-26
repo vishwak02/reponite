@@ -4,6 +4,7 @@ package semantic
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,7 +80,9 @@ func TestNeuralRankerBatches(t *testing.T) {
 	n := New(Config{Endpoint: srv.URL, Model: "m"})
 	var docs []query.SemanticDoc
 	for i := 0; i < 100; i++ {
-		sym := "filler"
+		// Distinct text per doc: identical texts are deduped by the cache, so
+		// batching is only exercised by genuinely distinct inputs.
+		sym := fmt.Sprintf("filler%d", i)
 		if i == 90 {
 			sym = "validateCard" // lives in the SECOND batch
 		}
@@ -190,6 +193,74 @@ func TestNeuralRankerRejectsDimensionSkew(t *testing.T) {
 	}
 	if len(res.Hits) != 1 {
 		t.Fatalf("the fallback must still answer, got %+v", res.Hits)
+	}
+}
+
+// Embeddings are cached by (model, content hash): a long-lived serve/mcp mount
+// must not re-embed the whole corpus on every query, and identical texts are
+// embedded once. Only the changing query text is fetched on a repeat call.
+func TestNeuralRankerCachesEmbeddings(t *testing.T) {
+	requests, batches := 0, []int{}
+	srv := fakeEmbeddings(t, &requests, &batches)
+	defer srv.Close()
+
+	n := New(Config{Endpoint: srv.URL, Model: "m"})
+	docs := []query.SemanticDoc{
+		{Repo: "r", Path: "a.go", Symbol: "validateCard", Line: 1, Text: "func validateCard() {}"},
+		{Repo: "r", Path: "b.go", Symbol: "renderTemplate", Line: 1, Text: "func renderTemplate() {}"},
+		// A genuinely duplicated symbol (same name and body in another file):
+		// its embedded text is identical, so it is embedded once.
+		{Repo: "r", Path: "c.go", Symbol: "validateCard", Line: 1, Text: "func validateCard() {}"},
+	}
+	if _, err := n.Rank("first query", docs, 5); err != nil {
+		t.Fatal(err)
+	}
+	// 4 inputs (query + 3 docs) but only 3 unique texts to embed.
+	if batches[0] != 3 {
+		t.Fatalf("identical doc texts must be embedded once: batch sizes %v", batches)
+	}
+
+	before := requests
+	hits, err := n.Rank("second query", docs, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != before+1 {
+		t.Fatalf("a repeat rank should need one request, got %d", requests-before)
+	}
+	if got := batches[len(batches)-1]; got != 1 {
+		t.Fatalf("only the new query text should be fetched, got a batch of %d", got)
+	}
+	// The property that matters: caching must not change the answer. A fresh
+	// ranker with an empty cache produces the identical ranking.
+	fresh, err := New(Config{Endpoint: srv.URL, Model: "m"}).Rank("second query", docs, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != len(fresh) {
+		t.Fatalf("cached ranking differs in length: cached %+v vs fresh %+v", hits, fresh)
+	}
+	for i := range hits {
+		if hits[i].Symbol != fresh[i].Symbol || hits[i].Path != fresh[i].Path || hits[i].Score != fresh[i].Score {
+			t.Fatalf("cached ranking differs at %d: %+v vs %+v", i, hits[i], fresh[i])
+		}
+	}
+}
+
+// Switching models must never serve the previous model's vectors.
+func TestNeuralRankerCacheIsPerModel(t *testing.T) {
+	requests, batches := 0, []int{}
+	srv := fakeEmbeddings(t, &requests, &batches)
+	defer srv.Close()
+	docs := []query.SemanticDoc{{Repo: "r", Path: "a.go", Symbol: "x", Line: 1, Text: "same text"}}
+
+	a := New(Config{Endpoint: srv.URL, Model: "model-a"})
+	b := New(Config{Endpoint: srv.URL, Model: "model-b"})
+	a.Rank("q", docs, 1)
+	before := requests
+	b.Rank("q", docs, 1)
+	if requests == before {
+		t.Fatal("a different model must not reuse the first model's cached vectors")
 	}
 }
 
