@@ -33,6 +33,7 @@ Per-adapter checks (mirror CI):
 - `internal/content`   — `canon()`, the three hashes, manifests (pure)
 - `internal/processing`— behavior-hash pass, language-agnostic extractor, indexer (pure); tree-sitter parser (`treesitter`)
 - `internal/query`     — `Store` interface, Oracle/diff/rootcause/grep, coordinators (pure)
+- `internal/fleet`     — the persistent cross-run repo registry serve/mcp mount by default (pure)
 - `internal/storage`   — in-memory `Store` (pure); `storage/sqlite` (`sqlite`)
 - `internal/interfaces`— JSON output; MCP server (`mcp`)
 - `cmd/reponite`       — CLI; index-backed commands + `mcp`/`watch` under build tags

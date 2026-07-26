@@ -33,7 +33,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "verify-edit", "repos", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "verify-edit", "repos", "fleet", "context", "brief", "refs":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
@@ -82,6 +82,7 @@ index-backed (build with `+"`make cli`"+`):
   topics [name]        ROS comms graph: publishers <-> subscribers linked by name (the call graph can't see it)
   verify-edit <path>   pre-commit check: what breaks if you save your edits to this file
   repos                fleet overview: every indexed repo with its module + per-ref stats
+  fleet [list|add <dir>|remove <dir|repo>|path]   the persistent registry serve/mcp mount by default
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
   semsearch <query> [ref] [--limit N]   semantic search ("where is the thing that does X")
@@ -91,9 +92,9 @@ index-backed (build with `+"`make cli`"+`):
   rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace
   brief <symbol> [ref] [--budget N]   one bundle to edit a symbol: body + callees/callers + tests + compat
   refs                 list the repo's indexed refs
-  mcp [dir]            serve the tools over MCP (stdio) for an AI agent
+  mcp [dir...]         serve the tools over MCP (stdio) for an AI agent (no dir = the registered fleet)
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
-  serve [dir...] [--addr host:port]   web dashboard + JSON API (default 127.0.0.1:8899); multiple dirs = team/fleet view
+  serve [dir...] [--addr host:port]   web dashboard + JSON API (default 127.0.0.1:8899); no dir = the registered fleet
 `)
 }

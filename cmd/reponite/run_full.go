@@ -45,6 +45,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdVerifyEdit(args)
 	case "repos":
 		cmdRepos(args)
+	case "fleet":
+		cmdFleet(args)
 	case "semsearch":
 		cmdSemSearch(args)
 	case "investigate":
@@ -136,12 +138,14 @@ func cmdIndex(args []string) {
 		if err := st.AddRef(repo, ref, commit, ""); err != nil {
 			fail(err)
 		}
+		registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
 		fmt.Printf("indexed %s@%s (git %s @ %s)%s — refs now: %v\n", repo, ref, gitRev, shortHash(commit), moduleNote(st, repo), st.Refs(repo))
 		return
 	}
 	if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
 		fail(err)
 	}
+	registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
 	fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))
 }
 
