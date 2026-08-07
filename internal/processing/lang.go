@@ -5,6 +5,8 @@
 // parse tests in CI.
 package processing
 
+import "strings"
+
 // LangRules tells the generic extractor which AST node types matter for a language.
 type LangRules struct {
 	Name          string
@@ -45,7 +47,7 @@ type LangRules struct {
 }
 
 // languages is the registry consulted by RulesForExt.
-var languages = []LangRules{GoRules, PythonRules, JavaScriptRules, TypeScriptRules, JavaRules, CRules, CppRules, RustRules}
+var languages = []LangRules{GoRules, PythonRules, JavaScriptRules, TypeScriptRules, JavaRules, CRules, CppRules, RustRules, ShellRules}
 
 // RulesForExt returns the language rules for a file extension (".go", ".py", …).
 func RulesForExt(ext string) (LangRules, bool) {
@@ -190,6 +192,71 @@ var CppRules = LangRules{
 // RustRules extracts functions, structs/enums/unions/traits/type-aliases, and
 // methods inside `impl T { ... }` blocks (ScopeDecl qualifies them by T without
 // emitting T twice). Trait methods are function_signature_item bodies-less sigs.
+// shBuiltins are POSIX/bash builtins and ubiquitous coreutils. Filtering them
+// keeps a shell call graph meaningful: without it every function "calls" echo,
+// cd, and local, and the graph says nothing.
+var shBuiltins = map[string]bool{
+	"echo": true, "printf": true, "print": true, "read": true, "cd": true, "pwd": true,
+	"local": true, "declare": true, "typeset": true, "export": true, "unset": true, "readonly": true,
+	"set": true, "shift": true, "eval": true, "exec": true, "exit": true, "return": true, "trap": true,
+	"test": true, "true": true, "false": true, "shopt": true, "source": true, "alias": true,
+	"break": true, "continue": true, "wait": true, "sleep": true, "command": true, "builtin": true,
+	"cat": true, "grep": true, "sed": true, "awk": true, "cut": true, "tr": true, "sort": true,
+	"uniq": true, "head": true, "tail": true, "wc": true, "ls": true, "cp": true, "mv": true,
+	"rm": true, "mkdir": true, "rmdir": true, "touch": true, "chmod": true, "chown": true,
+	"ln": true, "find": true, "xargs": true, "tee": true, "which": true, "basename": true,
+	"dirname": true, "date": true, "env": true, "sudo": true, "getopts": true, "seq": true,
+}
+
+// ShellRules extracts shell functions (`f() { … }` and `function f { … }`).
+// Shell has no type declarations and no signature beyond the name, so a
+// changed body is a behavior change and the signature never moves — the Oracle
+// therefore reports shell edits as behavior_changed, never shape_changed, which
+// is the honest reading for a language with no declared parameter list.
+//
+// The callee name is the `command_name` node, deliberately NOT `word`: a
+// command's arguments are bare `word` nodes too, so matching `word` would make
+// the LAST argument look like the callee.
+var ShellRules = LangRules{
+	Name: "shell", Exts: []string{".sh", ".bash", ".zsh", ".ksh"},
+	FuncDecl:      []string{"function_definition"},
+	NameTypes:     []string{"word"},
+	CallNameTypes: []string{"command_name"},
+	BodyTypes:     []string{"compound_statement"},
+	CallTypes:     []string{"command"},
+	Builtins:      shBuiltins,
+}
+
+// RulesForShebang maps a script's first line to its language, for files that
+// carry no extension. CLI entry points (`installer/rdt`, `bin/deploy`) are
+// exactly that shape — and are usually the most valuable file in the tree to
+// index, since they are where a reader starts.
+func RulesForShebang(firstLine string) (LangRules, bool) {
+	if !strings.HasPrefix(firstLine, "#!") {
+		return LangRules{}, false
+	}
+	line := firstLine
+	if i := strings.IndexAny(line, "\r\n"); i >= 0 {
+		line = line[:i]
+	}
+	// Take the last path segment of each token so "/usr/bin/env bash" and
+	// "/bin/sh" both reduce to the interpreter name.
+	for _, tok := range strings.Fields(line) {
+		if i := strings.LastIndexByte(tok, '/'); i >= 0 {
+			tok = tok[i+1:]
+		}
+		switch {
+		case tok == "sh", tok == "bash", tok == "zsh", tok == "ksh", tok == "dash":
+			return ShellRules, true
+		case strings.HasPrefix(tok, "python"):
+			return PythonRules, true
+		case tok == "node", tok == "nodejs":
+			return JavaScriptRules, true
+		}
+	}
+	return LangRules{}, false
+}
+
 var RustRules = LangRules{
 	Name: "rust", Exts: []string{".rs"},
 	FuncDecl:  []string{"function_item", "function_signature_item"},

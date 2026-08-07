@@ -76,15 +76,11 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
-		rules, ok := RulesForExt(filepath.Ext(path))
+		src, rules, ext, ok := readSource(path)
 		if !ok {
 			return nil
 		}
-		src, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return readErr
-		}
-		root, spans, parseErr := parseFileRules(src, filepath.Ext(path), rules)
+		root, spans, parseErr := parseFileRules(src, ext, rules)
 		if parseErr != nil {
 			return parseErr
 		}
@@ -118,6 +114,38 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		return w.SetModulePath(repo, mod)
 	}
 	return nil
+}
+
+// readSource reads a file and resolves its language. Extension-less files fall
+// back to their shebang: CLI entry points (`installer/rdt`, `bin/deploy`) carry
+// no extension and are usually the most valuable file in a tree to index. Only
+// files with NO extension are peeked, so a known-but-unsupported extension
+// (.yaml, .tf) still costs nothing. ok=false means "skip this file".
+func readSource(path string) (src []byte, rules LangRules, ext string, ok bool) {
+	ext = filepath.Ext(path)
+	if rules, ok = RulesForExt(ext); ok {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, rules, ext, false
+		}
+		return b, rules, ext, true
+	}
+	if ext != "" {
+		return nil, rules, ext, false // an unsupported extension, not a script
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) < 2 || b[0] != '#' || b[1] != '!' {
+		return nil, rules, ext, false
+	}
+	line := string(b)
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	if rules, ok = RulesForShebang(line); !ok {
+		return nil, rules, ext, false
+	}
+	// Grammar lookup is keyed on extension, so use the language's canonical one.
+	return b, rules, rules.Exts[0], true
 }
 
 // SCIPFileName is the conventional SCIP index location at a repo root.

@@ -13,6 +13,7 @@ import (
 	"context"
 
 	sitter "github.com/smacker/go-tree-sitter"
+	bash "github.com/smacker/go-tree-sitter/bash"
 	cgrammar "github.com/smacker/go-tree-sitter/c"
 	cpp "github.com/smacker/go-tree-sitter/cpp"
 	golang "github.com/smacker/go-tree-sitter/golang"
@@ -55,6 +56,8 @@ func grammarForExt(ext string) *sitter.Language {
 		return golang.GetLanguage()
 	case ".py":
 		return python.GetLanguage()
+	case ".sh", ".bash", ".zsh", ".ksh":
+		return bash.GetLanguage()
 	case ".js", ".jsx", ".mjs", ".cjs":
 		return javascript.GetLanguage()
 	case ".ts":

@@ -147,6 +147,44 @@ private:
 		}
 	})
 
+	t.Run("shell", func(t *testing.T) {
+		src := `#!/bin/bash
+connect() {
+  local host="$1"
+  configure_ssh "$host"
+  exec ssh -A "user@$host"
+}
+
+function allow_ssh {
+  update_hosts
+  echo done
+}
+`
+		syms := extractSrc(t, ".sh", src)
+		// Both shell function forms: `f() { }` and `function f { }`.
+		wantFn(t, syms, "connect")
+		wantFn(t, syms, "allow_ssh")
+		callees := find(syms, "connect").Callees
+		if !hasCallee(callees, "configure_ssh") {
+			t.Errorf("connect should call configure_ssh; callees=%v", callees)
+		}
+		// A command's ARGUMENTS are bare `word` nodes just like its name, so
+		// matching `word` would make the last argument the callee. Only
+		// command_name counts.
+		for _, bad := range []string{"host", "-A", "user@$host", "$1"} {
+			if hasCallee(callees, bad) {
+				t.Errorf("argument %q must not be read as a callee: %v", bad, callees)
+			}
+		}
+		// Builtins are filtered, or every function "calls" echo and local.
+		if hasCallee(find(syms, "allow_ssh").Callees, "echo") {
+			t.Errorf("builtins must be filtered: %v", find(syms, "allow_ssh").Callees)
+		}
+		if !hasCallee(find(syms, "allow_ssh").Callees, "update_hosts") {
+			t.Errorf("allow_ssh should call update_hosts: %v", find(syms, "allow_ssh").Callees)
+		}
+	})
+
 	t.Run("rust", func(t *testing.T) {
 		src := `pub struct User { pub id: u32 }
 pub trait Greet { fn hello(&self); }

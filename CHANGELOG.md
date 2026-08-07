@@ -55,6 +55,12 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
 
 ### Added
 
+- **Shell/Bash language support** (the 10th language) — `.sh`, `.bash`, `.zsh`, `.ksh`, plus
+  **extension-less scripts identified by their shebang**, since a CLI's entry point rarely
+  has an extension and is usually the most valuable file in the tree (`#!/usr/bin/env
+  python3` and `#!/usr/bin/node` are recognized too). Found by dogfooding: a shell-based CLI
+  repo indexed 22 of ~460 files — Python only — and every shell tree was invisible. It now
+  indexes 60. ([#35])
 - **SCIP support** — drop an `index.scip` at a repo root and cross-repo callers are matched
   by globally unique symbol moniker (`scip-resolved`, 0.95) instead of by name. Reads the
   protobuf with a small standard-library decoder: no new dependency, no build tag. ([#30])
@@ -164,3 +170,4 @@ First release.
 [#30]: https://github.com/vishwak02/reponite/pull/30
 [#32]: https://github.com/vishwak02/reponite/pull/32
 [#34]: https://github.com/vishwak02/reponite/pull/34
+[#35]: https://github.com/vishwak02/reponite/pull/35
