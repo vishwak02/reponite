@@ -178,7 +178,11 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 		sub.Limit = opt.Offset + limit
 	}
 	var out GrepResult
+	var missing []string // repos that have no such ref — a silent 0 would lie
 	for _, rp := range repos {
+		if !refIndexed(s, rp, ref) {
+			missing = append(missing, rp)
+		}
 		res, err := BuildTrigramIndex(s.Files(rp, ref)).Grep(pattern, sub)
 		if err != nil {
 			return GrepResult{}, err
@@ -215,6 +219,14 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 	out.Offset = opt.Offset
 	out.Truncated = opt.Offset+len(out.Matches) < out.Total
 	out.Note = strings.TrimSpace(out.Note + " (fleet-wide)")
+	// The single-repo path already says "(ref not indexed)"; the fleet path must
+	// too, or "0 matches" is indistinguishable from "searched and found none".
+	switch {
+	case len(missing) == len(repos):
+		out.Note = strings.TrimSpace(out.Note + " — ref " + ref + " is not indexed in ANY searched repo; this result is empty because nothing was searched")
+	case len(missing) > 0:
+		out.Note = strings.TrimSpace(out.Note + " — ref " + ref + " is not indexed in " + strings.Join(missing, ", ") + "; those repos contributed nothing")
+	}
 	return out, nil
 }
 
@@ -285,6 +297,26 @@ func IsTestName(name string) bool {
 	}
 	return false
 }
+
+// UnindexedRefs returns which of refs are NOT indexed for repo, in the order
+// given. A gate or comparison whose answer would be meaningless without a ref
+// should call this first and refuse to answer, rather than produce an empty
+// diff that reads as "nothing changed".
+func UnindexedRefs(s Store, repo string, refs ...string) []string {
+	var missing []string
+	for _, r := range refs {
+		if !refIndexed(s, repo, r) {
+			missing = append(missing, r)
+		}
+	}
+	return missing
+}
+
+// RefIndexed reports whether repo has ref indexed. Callers whose ANSWER would
+// be meaningless without it — a CI gate, a diff — must check first: an
+// unindexed ref yields an empty comparison, which reads exactly like "nothing
+// changed" and is the most dangerous way for this tool to be wrong.
+func RefIndexed(s Store, repo, ref string) bool { return refIndexed(s, repo, ref) }
 
 func refIndexed(s Store, repo, ref string) bool {
 	for _, r := range s.Refs(repo) {

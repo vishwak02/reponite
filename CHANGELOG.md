@@ -14,6 +14,20 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
 
 ### Fixed
 
+- **The CI gate passed when it couldn't see the ref.** `ci-check --base <typo>` exited
+  **0** with "no exported API breaks": an unindexed base produces an empty diff, which is
+  indistinguishable from a clean one. A typo'd ref — or a CI job that forgot to index the
+  base — turned the gate into a rubber stamp. It now exits **2** ("couldn't check",
+  distinct from 1 "checked, and it breaks") and names the refs it lacks. ([#34])
+- **Fleet `grep` returned a silent zero at an unindexed ref.** The single-repo path said
+  "(ref not indexed)"; the fleet path had lost that, so `0 matches` looked like a real
+  answer. It now names the repos missing the ref, or says nothing was searched at all.
+  ([#34])
+- **`brief`, `context`, and `blast-radius` answered blank for a symbol in another fleet
+  repo.** Since `search` became fleet-wide, looking up a symbol it found would return an
+  empty target — which reads as "this symbol is empty", not "I looked in the wrong repo".
+  They now resolve the owning repo (reporting which one), refuse on ambiguity, and offer
+  "did you mean…?" on a miss. ([#34])
 - **`grep` under-matched on regex alternation.** `grep "TODO|FIXME"` returned *zero*
   matches while `grep TODO` returned 517: the pattern was matched literally, and the
   trigram prefilter then looked for trigrams of the raw alternation string, which exist in
@@ -149,3 +163,4 @@ First release.
 [#29]: https://github.com/vishwak02/reponite/pull/29
 [#30]: https://github.com/vishwak02/reponite/pull/30
 [#32]: https://github.com/vishwak02/reponite/pull/32
+[#34]: https://github.com/vishwak02/reponite/pull/34

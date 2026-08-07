@@ -284,7 +284,22 @@ func cmdCICheck(args []string) {
 	}
 	st := openStore(".")
 	defer st.Close()
-	rep := query.DiffRefsBy(st, repoName("."), baseRef, headRef, query.DiffOptions{ChangedOnly: true})
+	repo := repoName(".")
+
+	// A gate that cannot see a ref must FAIL, not pass. Diffing against an
+	// unindexed ref yields an empty or nonsense comparison that reads exactly
+	// like "nothing broke" — so a typo'd base, or a CI job that forgot to index
+	// it, would turn this gate into a rubber stamp. Exit 2 distinguishes
+	// "couldn't check" from exit 1 "checked, and it breaks".
+	if unindexed := query.UnindexedRefs(st, repo, baseRef, headRef); len(unindexed) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"reponite ci-check: cannot check — ref(s) not indexed in %s: %s\n"+
+				"Index them first, e.g. `reponite index . --git %s`. Indexed refs: %v\n",
+			repo, strings.Join(unindexed, ", "), unindexed[0], st.Refs(repo))
+		os.Exit(2)
+	}
+
+	rep := query.DiffRefsBy(st, repo, baseRef, headRef, query.DiffOptions{ChangedOnly: true})
 	var breaks []query.SymbolChange
 	for _, c := range rep.Changes {
 		if c.Kind != query.ChangeRemoved && c.Kind != query.ChangeShape {
@@ -380,7 +395,8 @@ func cmdBlastRadius(args []string) {
 	}
 	f := openFleet(local)
 	defer f.Close()
-	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(f, f.Local, arg(pos, 1, "HEAD"), pos[0])))
+	ref := arg(pos, 1, "HEAD")
+	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(f, f.repoFor(pos[0], ref), ref, pos[0])))
 }
 
 // cmdVerifyEdit compares the (edited) working-tree file at path against its
@@ -456,15 +472,18 @@ func cmdRepos(args []string) {
 
 func cmdBrief(args []string) {
 	var budget int
-	pos := parseCmd("brief", "brief <symbol> [ref] [--budget N]", args, func(fs *flag.FlagSet) {
+	var local bool
+	pos := parseCmd("brief", "brief <symbol> [ref] [--budget N] [--local]", args, func(fs *flag.FlagSet) {
 		fs.IntVar(&budget, "budget", 0, "token budget (0 = default ~3000)")
+		fs.BoolVar(&local, "local", false, "only consider this repo, not the registered fleet")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite brief <symbol> [ref] [--budget N]"))
+		fail(fmt.Errorf("usage: reponite brief <symbol> [ref] [--budget N] [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.BriefJSON(query.Brief(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], budget, processing.NewGitIntent("."))))
+	f := openFleet(local)
+	defer f.Close()
+	ref := arg(pos, 1, "HEAD")
+	printJSON(interfaces.BriefJSON(query.Brief(f, f.repoFor(pos[0], ref), ref, pos[0], budget, processing.NewGitIntent("."))))
 }
 
 // cmdRootCauseTrace reads a stack trace (from a file arg or stdin) and drills
@@ -495,15 +514,18 @@ func cmdRootCauseTrace(args []string) {
 
 func cmdContext(args []string) {
 	var tests bool
-	pos := parseCmd("context", "context <symbol> [ref] [--tests]", args, func(fs *flag.FlagSet) {
+	var local bool
+	pos := parseCmd("context", "context <symbol> [ref] [--tests] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&tests, "tests", false, "include test symbols among callers")
+		fs.BoolVar(&local, "local", false, "only consider this repo, not the registered fleet")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite context <symbol> [ref] [--tests]"))
+		fail(fmt.Errorf("usage: reponite context <symbol> [ref] [--tests] [--local]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.ContextJSON(query.Context(st, repoName("."), arg(pos, 1, "HEAD"), pos[0], tests)))
+	f := openFleet(local)
+	defer f.Close()
+	ref := arg(pos, 1, "HEAD")
+	printJSON(interfaces.ContextJSON(query.Context(f, f.repoFor(pos[0], ref), ref, pos[0], tests)))
 }
 
 func cmdRefs(args []string) {
