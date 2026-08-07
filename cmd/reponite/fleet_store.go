@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
@@ -116,6 +117,47 @@ func openPeers(dir string) *fleetStore {
 		f.Store = storage.NewMultiStore(stores...)
 	}
 	return f
+}
+
+// repoFor finds which repo in this store actually defines symbol at ref, so a
+// symbol-scoped command (brief, context, blast-radius) answers about the repo
+// that HAS it rather than silently returning a blank result for the working
+// directory. Preference order: the local repo, then a unique fleet match.
+//
+// It never guesses: an ambiguous symbol reports every candidate, and a missing
+// one reports the near names. Returning an empty brief for a symbol that plainly
+// exists elsewhere in the fleet reads as "this symbol is empty", which is worse
+// than an error.
+func (f *fleetStore) repoFor(symbol, ref string) string {
+	if len(query.ResolveSymbol(f, f.Local, ref, symbol)) > 0 {
+		return f.Local
+	}
+	var found []string
+	for _, repo := range f.Names {
+		if repo == f.Local {
+			continue
+		}
+		if len(query.ResolveSymbol(f, repo, ref, symbol)) > 0 {
+			found = append(found, repo)
+		}
+	}
+	switch len(found) {
+	case 1:
+		fmt.Fprintf(os.Stderr, "reponite: %q is not in %s; answering for %s\n", symbol, f.Local, found[0])
+		return found[0]
+	case 0:
+		near := query.Suggest(f, query.FleetRepo, ref, symbol, 5)
+		if len(near) > 0 {
+			names := make([]string, 0, len(near))
+			for _, n := range near {
+				names = append(names, n.Name)
+			}
+			fail(fmt.Errorf("symbol %q is not indexed in any registered repo at %s; did you mean: %s", symbol, ref, strings.Join(names, ", ")))
+		}
+		fail(fmt.Errorf("symbol %q is not indexed in any registered repo at %s (indexed repos: %v)", symbol, ref, f.Names))
+	}
+	fail(fmt.Errorf("symbol %q exists in several repos (%s); re-run in one of them, or use --local", symbol, strings.Join(found, ", ")))
+	return ""
 }
 
 // fleetNote describes the scope a fleet-wide command actually searched, so a

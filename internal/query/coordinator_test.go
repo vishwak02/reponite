@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -167,6 +168,84 @@ func TestGrepRepoFleetPaging(t *testing.T) {
 		if walked[i] != want[i] {
 			t.Fatalf("fleet paging order: got %v, want %v", walked, want)
 		}
+	}
+}
+
+// A fleet grep at a ref no repo has indexed must SAY SO. "0 matches" is
+// otherwise indistinguishable from "searched everything and found none" — the
+// same silent-zero failure the alternation bug produced.
+func TestGrepRepoFleetWarnsOnUnindexedRef(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("repo-a", "HEAD", query.File{Path: "a.txt", Content: "needle\n"})
+	m.PutFile("repo-b", "HEAD", query.File{Path: "b.txt", Content: "needle\n"})
+
+	res, err := query.GrepRepo(m, query.FleetRepo, "v9-nope", "needle", query.GrepOptions{Fixed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != 0 {
+		t.Fatalf("no repo has that ref, so there is nothing to match: %+v", res)
+	}
+	if !strings.Contains(res.Note, "not indexed in ANY") {
+		t.Fatalf("an empty result from an unindexed ref must say so, got note %q", res.Note)
+	}
+
+	// Indexed in one repo but not the other: the gap is named, not hidden.
+	m.PutFile("repo-a", "v1", query.File{Path: "a.txt", Content: "needle\n"})
+	res, _ = query.GrepRepo(m, query.FleetRepo, "v1", "needle", query.GrepOptions{Fixed: true})
+	if res.Total != 1 {
+		t.Fatalf("repo-a@v1 has a match: %+v", res)
+	}
+	if !strings.Contains(res.Note, "repo-b") {
+		t.Fatalf("the repo missing the ref must be named, got note %q", res.Note)
+	}
+}
+
+// The CI gate's precondition. This is the check whose absence let `ci-check`
+// exit 0 — "no exported API breaks" — when the base ref was a typo: an
+// unindexed ref yields an empty diff, which is indistinguishable from a clean
+// one. A gate must refuse to answer instead of passing by default.
+func TestUnindexedRefs(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "A", rc("a", "s", "b", 1))
+	m.Put("r", "v1", "A", rc("a", "s", "b", 1))
+
+	if got := query.UnindexedRefs(m, "r", "v1", "HEAD"); len(got) != 0 {
+		t.Fatalf("both refs are indexed, got missing %v", got)
+	}
+	got := query.UnindexedRefs(m, "r", "v9-typo", "HEAD")
+	if len(got) != 1 || got[0] != "v9-typo" {
+		t.Fatalf("the typo'd ref must be reported: %v", got)
+	}
+	if got := query.UnindexedRefs(m, "r", "nope1", "nope2"); len(got) != 2 {
+		t.Fatalf("both bogus refs must be reported: %v", got)
+	}
+
+	// The failure this guards: diffing against an unindexed ref looks clean.
+	rep := query.DiffRefsBy(m, "r", "v9-typo", "HEAD", query.DiffOptions{ChangedOnly: true})
+	breaks := 0
+	for _, c := range rep.Changes {
+		if c.Kind == query.ChangeRemoved || c.Kind == query.ChangeShape {
+			breaks++
+		}
+	}
+	if breaks != 0 {
+		t.Fatalf("precondition of this test: the bogus-base diff shows no breaks, got %d", breaks)
+	}
+	if len(rep.Meta.Warnings) == 0 {
+		t.Fatal("the diff must at least warn — that warning is what the gate now enforces")
+	}
+}
+
+// RefIndexed is what lets a gate refuse to answer rather than pass by default.
+func TestRefIndexed(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "A", rc("a", "s", "b", 1))
+	if !query.RefIndexed(m, "r", "HEAD") {
+		t.Fatal("HEAD is indexed")
+	}
+	if query.RefIndexed(m, "r", "v9-nope") || query.RefIndexed(m, "nope", "HEAD") {
+		t.Fatal("an unindexed ref (or unknown repo) must report false")
 	}
 }
 
