@@ -209,18 +209,21 @@ reuse of the compat Oracle + diff.
   (sqlite/mem), cleared on reindex. Behavior graph still keys off `Callees`, so no hash perturbs.
 - **4b. `module_path` in registry. ✅ DONE.** `module.go` `DetectModulePath` reads the repo's identity
   from `go.mod`/`package.json`/`pyproject.toml`/`pom.xml` (root-most wins); `IndexDir`/`IndexGitRef`
-  collect the manifest + `SetModulePath`. `Store.ModulePath(repo)` serves it. A persistent cross-run
-  `global.db` denorm is still deferred — the `serve` **MultiStore** aggregates several per-repo stores
-  into one fleet view today (fan-out `ExternalRefsTo`), covering the multi-dir case.
-- **4c. `reponite_ximpact` fleet query. ✅ DONE (name → module-precise).** `ximpact.go` fuses two
-  tiers: **(1) module-resolved** — match `external_refs` on the target's own `module_path` + name
-  (precise, `import-resolved`, listed first; a caller precisely bound to a *different* module no
-  longer collides); **(2) name-based** unresolved-external (fallback, deduped by caller). Contract
-  fusion (§8B.3, from phase4b) still flags `contract_changed` across definition refs. Honest limits
+  collect the manifest + `SetModulePath`. `Store.ModulePath(repo)` serves it. The cross-run registry **shipped** as
+  `internal/fleet` (a metadata-only JSON registry, not a `global.db` — there is nothing to query, so
+  keeping it in the pure core beat adding a build tag): `index` registers each repo, and
+  `serve`/`mcp`/the CLI mount every live registered repo as one MultiStore.
+- **4c. `reponite_ximpact` fleet query. ✅ DONE (all three tiers).** `ximpact.go` fuses, highest
+  first: **(0) `scip-resolved`@0.95** — a SCIP moniker, globally unique, so no module comparison is
+  needed at all; **(1) `import-resolved`@0.75** — the caller's import path matched against the
+  target's module **ROOT** (an import path is the module path PLUS a package path, so the original
+  exact-equality match never fired on a multi-package repo — see `query.ModuleMatches`);
+  **(2) `unresolved-external`@0.6** — name-based fallback, deduped by caller. Per-caller
+  *expected-signature* skew **shipped**: `external_refs.target_signature_hash` records the contract
+  each caller was indexed against (via `IndexOptions.Peers`, so it works with one store per repo),
+  and `XImpact` labels every caller `current`/`stale` with a `stale_callers` rollup. Honest limits
   stay in `note`: source-call-graph only (RPC/HTTP/gRPC/queue invisible), version-skew defaults to
-  each caller's indexed ref. **Deferred:** SCIP would raise cross-boundary edges above name/path
-  confidence (Phase 6b); per-caller *expected-signature* skew needs the caller's own captured
-  `target_signature_hash` (not yet recorded).
+  each caller's indexed ref.
 
 ---
 
@@ -235,13 +238,17 @@ reuse of the compat Oracle + diff.
 
 ## Phase 6 — Moonshots (roadmap Tier 4 — Large / research)
 
-- **6a. Semantic search layer (4.4).** Retrieval-ladder rung 3 ("where is the thing that does X").
-  **Spec gap:** no detailed design exists — only the one-line ladder entry + the deferred `Embedder`
-  interface. `EmbedHash`(+`domainEmbed`) exists but is **uncalled**; no embedder, no vector store.
-  **Write the spec/ADR first**, then build the adapter (bundled | ollama | remote) behind the
-  `Embedder` seam.
-- **6b. SCIP high-confidence edges (4.3).** Raise TS/Python/Java edge confidence from ~0.5 to 1.0
-  (SCIP from Sourcegraph), matching Go's go/types today. Upgrades the transitive floor fleet-wide.
+- **6a. Semantic search layer (4.4). ✅ DONE** (ADR-020). The strategy seam is
+  `query.SemanticRanker`, not `Embedder`: IDF weighting is a property of the whole corpus, applied
+  *after* embedding, so a dense model could never have plugged in below it. `TermIDFRanker` (pure,
+  no model, no network) is the default; `internal/semantic` (`-tags neural`) ranks by dense
+  embeddings from any OpenAI-compatible endpoint, cached by content hash. Every result names the
+  ranker that produced it, and a failed endpoint falls back with the failure recorded.
+- **6b. SCIP high-confidence edges (4.3). ✅ DONE for the cross-repo boundary.** `internal/scip`
+  reads an `index.scip` (a standard-library protobuf subset — no dependency, no build tag) and
+  matches cross-repo callers by globally unique moniker at 0.95. **Still open:** using SCIP to raise
+  *in-repo* TS/Python/Java edge confidence toward Go's go/types level, and consuming SCIP's
+  *relationship* graph (implementations/overrides) rather than only definitions and references.
 - **6c. Cross-language / ROS boundary (4.1).** Index `.msg`/`.srv`/`.action` as interface types so
   compat works across ROS packages.
 - **6d. Shared team server (4.2).** Org-wide index + fleet compat queries. The `Store` interface
