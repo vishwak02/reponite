@@ -161,8 +161,18 @@ func TestSQLiteOpensLegacyDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A pre-is_test ref_history: the CREATE TABLE IF NOT EXISTS in the base
+	// schema is a no-op against it, so every column added later must come from
+	// migrate() or Open fails for this database (invariant 8).
 	_, err = legacy.Exec(`
 CREATE TABLE refs (repo TEXT NOT NULL, ref TEXT NOT NULL, commit_hash TEXT, indexed_at TEXT, PRIMARY KEY (repo, ref));
+CREATE TABLE ref_history (
+  repo TEXT NOT NULL, ref TEXT NOT NULL, name TEXT NOT NULL, present INTEGER NOT NULL DEFAULT 1,
+  symbol_hash TEXT, signature_hash TEXT, behavior_hash TEXT, behavior_conf REAL,
+  PRIMARY KEY (repo, ref, name)
+);
+INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf)
+VALUES('web','HEAD','svc.Fetch',1,'sh','sig','bh',1.0);
 CREATE TABLE external_refs (
   repo TEXT NOT NULL, ref TEXT NOT NULL, from_name TEXT NOT NULL,
   target_module TEXT NOT NULL, target_name TEXT NOT NULL,
@@ -190,6 +200,19 @@ VALUES('web','HEAD','web.fetch','github.com/acme/api','getUser','import-resolved
 	if hits[0].TargetSymbol != "" || hits[0].TargetSignatureHash != "" {
 		t.Fatalf("migrated columns must default to empty (unknown), got %+v", hits[0])
 	}
+	// The pre-existing symbol still reads, with the migrated columns defaulting
+	// to their zero values rather than erroring.
+	sym, ok := st.SymbolAt("web", "svc.Fetch", "HEAD")
+	if !ok || !sym.Present {
+		t.Fatal("a symbol stored before the migration must still read back")
+	}
+	if sym.IsTest {
+		t.Error("a migrated is_test column must default to false, not garbage")
+	}
+	if len(st.SymbolsAt("web", "HEAD")) != 1 {
+		t.Fatalf("SymbolsAt must read the migrated table: %v", st.SymbolsAt("web", "HEAD"))
+	}
+
 	// And the new tables/queries work on the migrated database.
 	if err := st.PutMonikers("web", "HEAD", map[string]string{"web.fetch": "moniker"}); err != nil {
 		t.Fatalf("symbol_monikers must exist after migration: %v", err)
