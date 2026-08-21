@@ -14,10 +14,13 @@
 package query
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/vishwak02/reponite/internal/roslaunch"
 )
 
 // Communication roles. A ROS endpoint is one of these; producers and consumers
@@ -50,8 +53,19 @@ type CommEndpoint struct {
 	// positionally). Best-effort inference, labeled so it is never mistaken
 	// for a declared type ("never lie").
 	MsgTypeSource string
-	In            string // enclosing symbol (the node/callback), for a hop back into the call graph
-	Text          string // the source line, trimmed
+	// Effective is the topic name at RUNTIME, after launch-file remapping
+	// (§8D.4). It equals Name when nothing remaps it. Remapping is what makes a
+	// node whose source says `scan` actually receive `raw_scan_front`.
+	Effective string
+	// NameResolution labels how Effective was determined: as-written,
+	// launch-remapped, or launch-ambiguous (several launch files disagree, so
+	// no single answer is asserted).
+	NameResolution string
+	// RemapVia cites the launch file responsible, or lists the competing
+	// targets when ambiguous.
+	RemapVia string
+	In       string // enclosing symbol (the node/callback), for a hop back into the call graph
+	Text     string // the source line, trimmed
 }
 
 // CommGroup is every endpoint bound to one name within a family (topic / service
@@ -73,8 +87,38 @@ type CommGraphResult struct {
 	Groups     []CommGroup
 	Endpoints  int // total endpoints discovered
 	Unresolved int // pub/sub/etc. calls whose name was not a string literal (dynamic; not linkable)
-	Note       string
-	Meta       Meta
+	// LaunchFiles is how many launch files informed the remapping, Remapped how
+	// many endpoints a launch file rewrote, and UnresolvedIncludes the
+	// <include> directives whose $(find …) substitution was not expanded — so a
+	// reader knows how complete the remap picture is (§8D.4).
+	LaunchFiles        int
+	Remapped           int
+	UnresolvedIncludes int
+	// UnexpandedRemaps counts remaps whose target kept a substitution
+	// ($(find …), $(env …), an $(arg …) with no default), so the runtime name is
+	// unknown and the remap was NOT applied.
+	UnexpandedRemaps int
+	Note             string
+	Meta             Meta
+}
+
+// launchRemaps parses every indexed ROS launch file in scope into a remap
+// table. Query-time, over content the Store already holds — the same
+// zero-new-indexing model the rest of this file uses (§8D.5).
+func launchRemaps(s Store, repo, ref string) *roslaunch.Table {
+	var lf []roslaunch.File
+	for _, rp := range reposFor(s, repo) {
+		for _, f := range s.Files(rp, ref) {
+			if !roslaunch.IsLaunchFile(f.Path) {
+				continue
+			}
+			// A malformed launch file still contributes whatever parsed: losing
+			// its remaps entirely would silently return to pre-remap names.
+			parsed, _ := roslaunch.Parse(f.Path, f.Content)
+			lf = append(lf, parsed)
+		}
+	}
+	return roslaunch.NewTable(lf)
 }
 
 // commIdiom is a client-library idiom for one role: the method-name pattern to
@@ -129,11 +173,11 @@ var (
 	cppCallbackDefRe = regexp.MustCompile(`\b(?:void|bool)\s+(?:[\w~]+\s*::\s*)*(\w+)\s*\(([^)]*)\)`)
 	// The message-parameter shapes roscpp callbacks take, most specific first.
 	cppMsgParamRes = []*regexp.Regexp{
-		regexp.MustCompile(`([\w:]+)\s*::\s*ConstPtr`),                       // const T::ConstPtr&
+		regexp.MustCompile(`([\w:]+)\s*::\s*ConstPtr`),                                     // const T::ConstPtr&
 		regexp.MustCompile(`boost::shared_ptr<\s*(?:const\s+)?([\w:]+?)(?:\s+const)?\s*>`), // const boost::shared_ptr<T const>&
-		regexp.MustCompile(`MessageEvent<\s*([\w:]+?)(?:\s+const)?\s*>`),     // const ros::MessageEvent<T const>&
-		regexp.MustCompile(`([\w:]+)ConstPtr\b`),                             // typedef'd TConstPtr
-		regexp.MustCompile(`const\s+([\w:]+(?:::[\w:]+)+)\s*&`),              // const pkg::T& (needs a ::)
+		regexp.MustCompile(`MessageEvent<\s*([\w:]+?)(?:\s+const)?\s*>`),                   // const ros::MessageEvent<T const>&
+		regexp.MustCompile(`([\w:]+)ConstPtr\b`),                                           // typedef'd TConstPtr
+		regexp.MustCompile(`const\s+([\w:]+(?:::[\w:]+)+)\s*&`),                            // const pkg::T& (needs a ::)
 	}
 
 	// Python positional message-type capture: the identifier immediately before
@@ -312,20 +356,35 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 	res := CommGraphResult{Meta: Meta{Repo: repo, Ref: ref}}
 	type key struct{ family, name string }
 	groups := map[key]*CommGroup{}
+	// Launch-file remapping decides the RUNTIME topic name, so it must be known
+	// before endpoints are grouped: pairing on pre-remap names links the wrong
+	// producers and consumers (§8D.4's former limitation).
+	remaps := launchRemaps(s, repo, ref)
+	res.LaunchFiles = remaps.Files
+	res.UnresolvedIncludes = remaps.Unresolved
+	res.UnexpandedRemaps = remaps.Unexpanded
 	for _, rp := range reposFor(s, repo) {
 		for _, f := range s.Files(rp, ref) {
 			eps, un := scanComms(rp, f.Path, f.Content, f.Symbols)
 			res.Unresolved += un
+			for i := range eps {
+				eff, resolution, via := remaps.Effective(eps[i].Path, eps[i].Name)
+				eps[i].Effective, eps[i].NameResolution, eps[i].RemapVia = eff, resolution, via
+				if resolution == roslaunch.ResolvedRemapped {
+					res.Remapped++
+				}
+			}
 			for _, ep := range eps {
 				res.Endpoints++
 				fam, producer := roleFamily(ep.Role)
 				if fam == "" {
 					continue
 				}
-				k := key{fam, ep.Name}
+				// Group on the RUNTIME name.
+				k := key{fam, ep.Effective}
 				g := groups[k]
 				if g == nil {
-					g = &CommGroup{Family: fam, Name: ep.Name}
+					g = &CommGroup{Family: fam, Name: ep.Effective}
 					groups[k] = g
 				}
 				if producer {
@@ -343,8 +402,30 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 		res.Groups = append(res.Groups, *g)
 	}
 	sortGroups(res.Groups)
-	res.Note = "ROS communication graph: producers and consumers linked by name string (medium confidence). Namespace/launch-file remapping is NOT resolved, and RPC/DDS wire topology is inferred from source idioms only — a name match is a strong hint, not a proven runtime connection. msg_type is best-effort source inference, labeled by msg_type_source: template (C++ <T>), callback-param (ROS1 subscribe() infers the type from the callback; recovered from its message parameter in the same file), positional-arg (rospy/rclpy type class)."
+	res.Note = commGraphNote(res)
 	return res
+}
+
+// commGraphNote states what the graph is and, precisely, how far its remapping
+// knowledge goes. Launch remapping IS now resolved where a launch file covers
+// the endpoint's package; what remains unresolved is named rather than implied.
+func commGraphNote(res CommGraphResult) string {
+	b := "ROS communication graph: producers and consumers linked by the RUNTIME topic name (medium confidence). "
+	if res.LaunchFiles > 0 {
+		b += fmt.Sprintf("%d launch file(s) parsed; %d endpoint(s) remapped (each labeled launch-remapped with the file that did it). ",
+			res.LaunchFiles, res.Remapped)
+	} else {
+		b += "No launch files are indexed, so every name is taken as written — a remapped node will appear under its source name. "
+	}
+	if res.UnexpandedRemaps > 0 {
+		b += fmt.Sprintf("%d remap(s) were NOT applied because their target kept an unexpanded substitution ($(find …)/$(env …)/$(arg …) with no default) — those endpoints are labeled launch-unexpanded and keep their source name, since applying the literal would be worse than not remapping. ", res.UnexpandedRemaps)
+	}
+	if res.UnresolvedIncludes > 0 {
+		b += fmt.Sprintf("%d <include> directive(s) were NOT expanded ($(find …) substitution is not resolved), so remaps defined only in included files are missing. ", res.UnresolvedIncludes)
+	}
+	b += "A remap is associated to source by PACKAGE, which is a heuristic — a launch file names an executable, not a file — and a name remapped inconsistently within one package is reported launch-ambiguous rather than guessed. "
+	b += "RPC/DDS wire topology is still inferred from source idioms only, dynamic (non-literal) names are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source."
+	return b
 }
 
 // Topic returns the communication group(s) for one name across repo/fleet at ref
@@ -354,9 +435,22 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 func Topic(s Store, repo, ref, name string) CommGraphResult {
 	full := CommGraph(s, repo, ref)
 	want := normalizeTopic(name)
-	res := CommGraphResult{Meta: full.Meta, Note: full.Note}
+	res := CommGraphResult{Meta: full.Meta, Note: full.Note,
+		LaunchFiles: full.LaunchFiles, Remapped: full.Remapped, UnresolvedIncludes: full.UnresolvedIncludes}
 	for _, g := range full.Groups {
-		if g.Name == want {
+		// Groups are keyed on the RUNTIME name, but a reader may well ask using
+		// the name they saw in source. Match either, so a remapped topic is
+		// findable by both spellings instead of looking absent.
+		match := g.Name == want
+		if !match {
+			for _, ep := range append(append([]CommEndpoint{}, g.Producers...), g.Consumers...) {
+				if ep.Name == want {
+					match = true
+					break
+				}
+			}
+		}
+		if match {
 			res.Groups = append(res.Groups, g)
 			res.Endpoints += len(g.Producers) + len(g.Consumers)
 		}

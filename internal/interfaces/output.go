@@ -582,8 +582,14 @@ type commEndpointDTO struct {
 	// How msg_type was inferred: template | callback-param | positional-arg
 	// (best-effort source inference, labeled — see the result note).
 	MsgTypeSource string `json:"msg_type_source,omitempty"`
-	In            string `json:"in,omitempty"`
-	Text          string `json:"text,omitempty"`
+	// effective = the RUNTIME topic after launch-file remapping;
+	// name_resolution = as-written | launch-remapped | launch-ambiguous;
+	// remap_via cites the launch file (or the competing targets).
+	Effective      string `json:"effective,omitempty"`
+	NameResolution string `json:"name_resolution,omitempty"`
+	RemapVia       string `json:"remap_via,omitempty"`
+	In             string `json:"in,omitempty"`
+	Text           string `json:"text,omitempty"`
 }
 
 type commGroupDTO struct {
@@ -599,8 +605,14 @@ type topicsDTO struct {
 	Groups     []commGroupDTO `json:"groups"`
 	Endpoints  int            `json:"endpoints"`
 	Unresolved int            `json:"unresolved,omitempty"`
-	Note       string         `json:"note,omitempty"`
-	Meta       metaDTO        `json:"_meta"`
+	// How complete the remap picture is: launch files parsed, endpoints
+	// rewritten, and <include>s not expanded (§8D.4).
+	LaunchFiles        int     `json:"launch_files,omitempty"`
+	Remapped           int     `json:"remapped,omitempty"`
+	UnresolvedIncludes int     `json:"unresolved_includes,omitempty"`
+	UnexpandedRemaps   int     `json:"unexpanded_remaps,omitempty"`
+	Note               string  `json:"note,omitempty"`
+	Meta               metaDTO `json:"_meta"`
 }
 
 func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
@@ -608,7 +620,9 @@ func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
 	for _, e := range eps {
 		out = append(out, commEndpointDTO{
 			Repo: e.Repo, Path: e.Path, Line: e.Line, Role: e.Role,
-			Name: e.Name, Raw: e.Raw, MsgType: e.MsgType, MsgTypeSource: e.MsgTypeSource, In: e.In, Text: e.Text,
+			Name: e.Name, Raw: e.Raw, MsgType: e.MsgType, MsgTypeSource: e.MsgTypeSource,
+			Effective: e.Effective, NameResolution: e.NameResolution, RemapVia: e.RemapVia,
+			In: e.In, Text: e.Text,
 		})
 	}
 	return out
@@ -620,8 +634,10 @@ func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
 func TopicsJSON(r query.CommGraphResult) (string, error) {
 	dto := topicsDTO{
 		Endpoints: r.Endpoints, Unresolved: r.Unresolved, Note: r.Note,
-		Groups: make([]commGroupDTO, 0, len(r.Groups)),
-		Meta:   metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		LaunchFiles: r.LaunchFiles, Remapped: r.Remapped, UnresolvedIncludes: r.UnresolvedIncludes,
+		UnexpandedRemaps: r.UnexpandedRemaps,
+		Groups:           make([]commGroupDTO, 0, len(r.Groups)),
+		Meta:             metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
 	}
 	for _, g := range r.Groups {
 		dto.Groups = append(dto.Groups, commGroupDTO{

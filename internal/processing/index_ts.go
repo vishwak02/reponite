@@ -76,6 +76,14 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
+		// ROS launch/rostest XML: stored for search + read back by `topics` to
+		// resolve remapping. Not tree-sitter parsed, so it comes before dispatch.
+		if IsROSLaunchFile(path) {
+			if b, readErr := os.ReadFile(path); readErr == nil {
+				files = append(files, launchFile(rel, string(b)))
+			}
+			return nil
+		}
 		src, rules, ext, ok := readSource(path)
 		if !ok {
 			return nil

@@ -76,6 +76,12 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			return nil
 		}
+		if IsROSLaunchFile(f.Name) {
+			if src, cerr := f.Contents(); cerr == nil {
+				files = append(files, launchFile(f.Name, src))
+			}
+			return nil
+		}
 		ext := filepath.Ext(f.Name)
 		rules, ok := RulesForExt(ext)
 		src, err := f.Contents()
