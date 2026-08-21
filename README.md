@@ -8,7 +8,7 @@
   <a href="https://github.com/vishwak02/reponite/actions/workflows/go.yml"><img src="https://github.com/vishwak02/reponite/actions/workflows/go.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/vishwak02/reponite/releases"><img src="https://img.shields.io/github/v/release/vishwak02/reponite?color=00ADD8" alt="Release"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.22%2B-00ADD8.svg" alt="Go 1.22+"></a>
-  <a href="#languages"><img src="https://img.shields.io/badge/languages-9-00ADD8.svg" alt="9 languages"></a>
+  <a href="#languages"><img src="https://img.shields.io/badge/languages-10-00ADD8.svg" alt="10 languages"></a>
   <a href="#ai-agents-mcp"><img src="https://img.shields.io/badge/MCP-17%20tools-6E56CF.svg" alt="17 MCP tools"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
 </p>
@@ -680,9 +680,16 @@ Every command accepts `--help`. Fleet-wide commands accept `--local`.
 
 ### Languages
 
-Go · Python · JavaScript · TypeScript · Java · C · C++ · Rust — plus **ROS interface files**
-(`.msg`, `.srv`, `.action`), where the field list *is* the contract, so adding a field is
-correctly reported as `shape_changed`.
+Go · Python · JavaScript · TypeScript · Java · C · C++ · Rust · **Shell** — plus **ROS
+interface files** (`.msg`, `.srv`, `.action`), where the field list *is* the contract, so
+adding a field is correctly reported as `shape_changed`.
+
+**Shell** covers `.sh`, `.bash`, `.zsh`, `.ksh` and — importantly — **extension-less scripts
+identified by their shebang**, because a CLI's entry point (`installer/rdt`, `bin/deploy`) is
+usually the most valuable file in the tree and rarely has an extension. `#!/usr/bin/env
+python3` and `#!/usr/bin/node` are recognized too. Shell functions have no declared
+parameter list, so a shell edit is reported as `behavior_changed` and never
+`shape_changed` — the honest reading for a language with no signature.
 
 ---
 

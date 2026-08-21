@@ -76,15 +76,27 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			return nil
 		}
-		rules, ok := RulesForExt(filepath.Ext(f.Name))
-		if !ok {
-			return nil
-		}
+		ext := filepath.Ext(f.Name)
+		rules, ok := RulesForExt(ext)
 		src, err := f.Contents()
 		if err != nil {
 			return err
 		}
-		root, spans, perr := parseFileRules([]byte(src), filepath.Ext(f.Name), rules)
+		if !ok {
+			// Extension-less files fall back to their shebang (CLI entry points).
+			if ext != "" {
+				return nil
+			}
+			line := src
+			if i := strings.IndexByte(line, '\n'); i >= 0 {
+				line = line[:i]
+			}
+			if rules, ok = RulesForShebang(line); !ok {
+				return nil
+			}
+			ext = rules.Exts[0]
+		}
+		root, spans, perr := parseFileRules([]byte(src), ext, rules)
 		if perr != nil {
 			return perr
 		}
@@ -110,4 +122,3 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	}
 	return h.String(), nil
 }
-

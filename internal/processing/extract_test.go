@@ -194,6 +194,75 @@ func TestTypeReferenceNotExtracted(t *testing.T) {
 	}
 }
 
+// Shell: the callee is the `command_name` node, never a bare `word`. A shell
+// command's ARGUMENTS are `word` nodes exactly like its name, so matching
+// `word` would make the last argument look like the callee — this pure test
+// pins that rule without needing the grammar.
+func TestShellCalleeIsCommandNameNotArgument(t *testing.T) {
+	// connect() { configure_ssh "$host"; exec ssh -A user@host; }
+	cmd := func(name string, args ...string) *fakeNode {
+		// A real tree-sitter node reports the source text it spans, so
+		// command_name carries the command's text as well as its word child.
+		cn := &fakeNode{typ: "command_name", text: name, kids: []content.AST{leaf("word", name)}}
+		kids := []content.AST{content.AST(cn)}
+		for _, a := range args {
+			kids = append(kids, leaf("word", a))
+		}
+		return comp("command", kids...)
+	}
+	root := comp("program",
+		comp("function_definition",
+			leaf("word", "connect"),
+			tok("("), tok(")"),
+			comp("compound_statement", tok("{"),
+				cmd("configure_ssh", "$host"),
+				cmd("update_hosts"),
+				cmd("echo", "done"), // a builtin: filtered
+				tok("}"))))
+
+	syms := Extract(root, ShellRules, 1)
+	fn := find(syms, "connect")
+	if fn == nil {
+		t.Fatalf("shell function not extracted: %+v", syms)
+	}
+	got := map[string]bool{}
+	for _, c := range fn.Callees {
+		got[c] = true
+	}
+	if !got["configure_ssh"] || !got["update_hosts"] {
+		t.Errorf("callees must be the command names: %v", fn.Callees)
+	}
+	if got["$host"] || got["done"] {
+		t.Errorf("an argument must never be read as the callee: %v", fn.Callees)
+	}
+	if got["echo"] {
+		t.Errorf("builtins must be filtered, else every function calls echo: %v", fn.Callees)
+	}
+}
+
+// Shebang detection: a CLI entry point carries no extension, and is usually
+// the most valuable file in a tree to index.
+func TestRulesForShebang(t *testing.T) {
+	for line, want := range map[string]string{
+		"#!/bin/bash":            "shell",
+		"#!/bin/sh":              "shell",
+		"#!/usr/bin/env bash":    "shell",
+		"#!/usr/bin/env zsh":     "shell",
+		"#!/usr/bin/env python3": "python",
+		"#!/usr/bin/node":        "javascript",
+	} {
+		r, ok := RulesForShebang(line)
+		if !ok || r.Name != want {
+			t.Errorf("RulesForShebang(%q) = %q/%v, want %s", line, r.Name, ok, want)
+		}
+	}
+	for _, line := range []string{"", "# not a shebang", "package main", "#!/usr/bin/perl"} {
+		if _, ok := RulesForShebang(line); ok {
+			t.Errorf("RulesForShebang(%q) must not match", line)
+		}
+	}
+}
+
 func TestExtractCalleesFiltersBuiltins(t *testing.T) {
 	body := comp("block",
 		comp("expression_statement", call("append")),
