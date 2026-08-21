@@ -443,8 +443,26 @@ actions. Message types are recovered even where ROS 1 hides them: `subscribe()` 
 template, so the type comes from the callback's parameter, and `msg_type_source` tells you
 which method was used. Confidence rises to 0.9 when both ends agree on the type.
 
-Honest about its limits, in the output itself: launch-file remapping is **not** resolved,
-and a dynamic (non-literal) topic name is *counted as unresolved* rather than guessed.
+**Launch-file remapping is resolved.** A node whose source subscribes to `scan` may actually
+receive `raw_scan_front`, because a launch file rewrote it:
+
+```xml
+<node pkg="rr_navigation" type="scan_filter" name="filter">
+  <remap from="scan" to="raw_scan_front"/>
+</node>
+```
+
+reponite indexes `.launch`/`.test` XML and pairs producers with consumers on the **runtime**
+name, so remapped endpoints link to the right partner instead of dangling. Each one keeps its
+source name, reports its `effective` name, and cites the launch file that did it
+(`name_resolution: launch-remapped`). `$(arg …)` expands against declared defaults.
+
+Still honest about what it cannot know, in the output itself: a remap target that keeps an
+unexpanded substitution (`$(find …)`, `$(env …)`, an `$(arg …)` with no default) is **reported,
+not applied** — grouping endpoints under the literal `$(arg scan_topic)` would be worse than not
+remapping. `<include>` directives are not expanded, a name remapped inconsistently within one
+package reads `launch-ambiguous` rather than being guessed, and dynamic (non-literal) topic names
+are *counted as unresolved*.
 
 </details>
 
@@ -682,7 +700,8 @@ Every command accepts `--help`. Fleet-wide commands accept `--local`.
 
 Go · Python · JavaScript · TypeScript · Java · C · C++ · Rust · **Shell** — plus **ROS
 interface files** (`.msg`, `.srv`, `.action`), where the field list *is* the contract, so
-adding a field is correctly reported as `shape_changed`.
+adding a field is correctly reported as `shape_changed`, and **ROS launch files**
+(`.launch`, `.test`), which supply the runtime topic remapping the source cannot show.
 
 **Shell** covers `.sh`, `.bash`, `.zsh`, `.ksh` and — importantly — **extension-less scripts
 identified by their shebang**, because a CLI's entry point (`installer/rdt`, `bin/deploy`) is

@@ -71,6 +71,16 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
 
 ### Added
 
+- **ROS launch-file remapping is now resolved** — this removes a limitation `topics` used
+  to have to state in its own output ("launch-file remapping is NOT resolved"). A node whose
+  source subscribes to `scan` may actually receive `raw_scan_front`; the comms graph now
+  pairs producers and consumers on the **runtime** name, so remapped endpoints link to the
+  right partner instead of dangling. Each keeps its source name, reports `effective`, and
+  cites the launch file (`name_resolution: launch-remapped`); `$(arg …)` expands against
+  declared defaults. A target that keeps an unexpanded substitution is **reported, not
+  applied** — grouping endpoints under the literal `$(arg scan_topic)` would be worse than
+  not remapping. On `rr_io_amr`: 397 launch files parsed, **51 remaps applied**, 35
+  unexpanded reported, 0 groups keyed on a literal. ([#37])
 - **Shell/Bash language support** (the 10th language) — `.sh`, `.bash`, `.zsh`, `.ksh`, plus
   **extension-less scripts identified by their shebang**, since a CLI's entry point rarely
   has an extension and is usually the most valuable file in the tree (`#!/usr/bin/env
@@ -196,3 +206,4 @@ First release.
 [#34]: https://github.com/vishwak02/reponite/pull/34
 [#35]: https://github.com/vishwak02/reponite/pull/35
 [#36]: https://github.com/vishwak02/reponite/pull/36
+[#37]: https://github.com/vishwak02/reponite/pull/37

@@ -191,3 +191,107 @@ func TestTopicFocusedAndSuggest(t *testing.T) {
 		t.Fatalf("expected a 'did you mean: cmd_vel' note, got %q", miss.Note)
 	}
 }
+
+// The limitation this removes: a driver publishes `raw_scan_front` while a
+// filter's SOURCE subscribes to `scan`, and a launch file remaps
+// scan -> raw_scan_front. Pairing on the source name leaves both sides
+// dangling and reports two unconnected topics; pairing on the RUNTIME name is
+// the real edge.
+func TestCommGraphResolvesLaunchRemapping(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("robot", "HEAD", query.File{
+		Path:    "rr_drivers/src/lidar.cpp",
+		Content: "void init() {\n  pub_ = nh.advertise<sensor_msgs::LaserScan>(\"raw_scan_front\", 10);\n}\n",
+	})
+	m.PutFile("robot", "HEAD", query.File{
+		Path:    "rr_navigation/src/filter.cpp",
+		Content: "void init() {\n  sub_ = nh.subscribe(\"scan\", 10, &Filter::cb);\n}\nvoid Filter::cb(const sensor_msgs::LaserScan::ConstPtr& m) {}\n",
+	})
+	m.PutFile("robot", "HEAD", query.File{
+		Path: "rr_bringup/launch/bringup.launch",
+		Content: `<launch>
+  <node pkg="rr_navigation" type="scan_filter" name="filter">
+    <remap from="scan" to="raw_scan_front"/>
+  </node>
+</launch>`,
+	})
+
+	res := query.CommGraph(m, "robot", "HEAD")
+	if res.LaunchFiles != 1 {
+		t.Fatalf("the launch file must be parsed, got LaunchFiles=%d", res.LaunchFiles)
+	}
+	if res.Remapped != 1 {
+		t.Fatalf("exactly the subscriber should be remapped, got Remapped=%d", res.Remapped)
+	}
+
+	var edge *query.CommGroup
+	for i := range res.Groups {
+		if res.Groups[i].Name == "raw_scan_front" {
+			edge = &res.Groups[i]
+		}
+		if res.Groups[i].Name == "scan" {
+			t.Errorf("no group should remain under the pre-remap name: %+v", res.Groups[i])
+		}
+	}
+	if edge == nil {
+		t.Fatalf("expected a group under the runtime name; got %+v", res.Groups)
+	}
+	if !edge.Connected() {
+		t.Fatalf("remapping makes this a real edge (1 pub, 1 sub): %+v", edge)
+	}
+	sub := edge.Consumers[0]
+	if sub.Name != "scan" || sub.Effective != "raw_scan_front" {
+		t.Errorf("the subscriber must keep its source name AND report the runtime one: %+v", sub)
+	}
+	if sub.NameResolution != "launch-remapped" || sub.RemapVia == "" {
+		t.Errorf("a remap must be labeled and cite its launch file: %+v", sub)
+	}
+	// The publisher was not remapped, so it reads as-written.
+	if pub := edge.Producers[0]; pub.NameResolution != "as-written" {
+		t.Errorf("an unremapped endpoint must read as-written: %+v", pub)
+	}
+	// The note must state that remapping was actually resolved.
+	if !strings.Contains(res.Note, "launch file(s) parsed") {
+		t.Errorf("the note must report the remap coverage: %q", res.Note)
+	}
+}
+
+// Asking by either spelling finds the topic: a reader knows the source name,
+// the graph is keyed on the runtime one.
+func TestTopicFindsRemappedByEitherName(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "rr_navigation/src/f.cpp",
+		Content: "void i() { sub_ = nh.subscribe(\"scan\", 1, &F::cb); }\n",
+	})
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "l/x.launch",
+		Content: `<launch><node pkg="rr_navigation" type="t" name="n"><remap from="scan" to="raw_scan"/></node></launch>`,
+	})
+	for _, ask := range []string{"raw_scan", "scan"} {
+		got := query.Topic(m, "r", "HEAD", ask)
+		if len(got.Groups) != 1 {
+			t.Fatalf("asking for %q must find the topic, got %d groups (note: %s)", ask, len(got.Groups), got.Note)
+		}
+	}
+}
+
+// With no launch files indexed, behavior is exactly as before — and the note
+// says names are taken as written rather than implying remaps were considered.
+func TestCommGraphWithoutLaunchFilesIsUnchanged(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "p/src/a.cpp",
+		Content: "void i() { pub_ = nh.advertise<T>(\"scan\", 1); }\n",
+	})
+	res := query.CommGraph(m, "r", "HEAD")
+	if res.LaunchFiles != 0 || res.Remapped != 0 {
+		t.Fatalf("no launch files means no remapping: %+v", res)
+	}
+	if len(res.Groups) != 1 || res.Groups[0].Name != "scan" {
+		t.Fatalf("the source name stands: %+v", res.Groups)
+	}
+	if !strings.Contains(res.Note, "No launch files are indexed") {
+		t.Errorf("the note must say names are taken as written: %q", res.Note)
+	}
+}
