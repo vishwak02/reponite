@@ -14,6 +14,22 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
 
 ### Fixed
 
+- **Test detection only worked for Go, so "covering tests" was silently empty
+  everywhere else.** `is_test` was a Go NAME heuristic (`Test*`/`Benchmark*`/…), so a C++
+  fixture in `test/`, a `test_x.py`, or a `foo.spec.ts` was not a test — and `brief`
+  reported **0 covering tests** for 8 of 10 languages while advertising the section, and
+  `search --tests` was meaningless. Test-ness is now captured at index time from the file
+  PATH (§9A.1 always specified this; the name heuristic was a stand-in), stored per symbol,
+  and used by `brief`, `blast-radius`, `context`, and `search`. The Go heuristic remains a
+  fallback so pre-migration indexes behave as before. ([#36])
+- **`investigate` ranked the same symbol twice.** The ranker scores one entry per symbol
+  *span*, so a C++ class declared in a header and defined in a `.cpp` produced two hits
+  that resolved to one qualified id — the dossier claimed more findings than it had.
+  Deduped by `(repo, qid)`, keeping the best score. ([#36])
+- **`investigate` reported no coverage, so it ranked noise confidently.** On a repo it can
+  barely read it would return "25 relevant symbols" with a vendored lidar driver at #2.
+  It now states how many symbols it ranked and the best similarity achieved, and adds a
+  caveat at the *top* of the dossier when the best match is weak. ([#36])
 - **The CI gate passed when it couldn't see the ref.** `ci-check --base <typo>` exited
   **0** with "no exported API breaks": an unindexed base produces an empty diff, which is
   indistinguishable from a clean one. A typo'd ref — or a CI job that forgot to index the
@@ -86,6 +102,14 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
   endpoint. ([#22])
 - **`--local`** on every fleet-wide command, to scope back to the current repository.
   ([#32])
+- **Index footprint reporting** — `index` now prints the file count, test-file count, and
+  the directories that contributed most. A repo vendoring third-party code under a
+  non-standard path was previously invisible: `rr_sootballs` turned out to be **3,600 of
+  4,774 files** from one vendored firmware tree, discoverable before only by accident.
+  ([#36])
+- **`context` now returns `caller_edges`** — callers as objects carrying `is_test`,
+  mirroring the existing `callee_edges` and matching how `brief` returns neighbors, so an
+  agent parsing both no longer meets two shapes for the same idea. ([#36])
 
 ### Changed
 
@@ -171,3 +195,4 @@ First release.
 [#32]: https://github.com/vishwak02/reponite/pull/32
 [#34]: https://github.com/vishwak02/reponite/pull/34
 [#35]: https://github.com/vishwak02/reponite/pull/35
+[#36]: https://github.com/vishwak02/reponite/pull/36

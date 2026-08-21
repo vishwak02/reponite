@@ -127,7 +127,7 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 	// 2. Callees (depth 1): preview + handle + edge provenance.
 	calleesDropped := false
 	for _, e := range ctx.CalleeEdges {
-		if IsTestName(baseName(e.Name)) {
+		if IsTestQID(s, repo, ref, e.Name) {
 			continue
 		}
 		n := neighbor(files, e.Name)
@@ -142,11 +142,13 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 		res.Omitted = append(res.Omitted, "callees(budget)")
 	}
 
-	// 3. Callers (blast radius) and 5. covering tests, split by IsTestName.
+	// 3. Callers (blast radius) and 5. covering tests, split by the index-time
+	// is_test flag (§9A.1) — a Go-only NAME heuristic reported zero covering
+	// tests for every other language while advertising the section.
 	var tests []string
 	callersDropped := false
 	for _, c := range ctx.Callers {
-		if IsTestName(baseName(c)) {
+		if IsTestQID(s, repo, ref, c) {
 			tests = append(tests, c)
 			continue
 		}

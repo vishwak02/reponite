@@ -58,3 +58,63 @@ func TestInvestigateNoMatch(t *testing.T) {
 		t.Fatal("dossier should still carry a guidance message on no match")
 	}
 }
+
+// The ranker scores one entry per symbol SPAN, so a symbol with two spans (a
+// C++ class in a header plus its definition) produced two hits that resolved to
+// the same qualified id — the dossier ranked the same symbol twice and claimed
+// it had found more than it had.
+func TestInvestigateDedupesSameSymbol(t *testing.T) {
+	m := storage.NewMem()
+	// Two spans, same symbol name, same file — exactly what a C++ header +
+	// in-file definition produces.
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "pgs.hpp",
+		Content: "class PickerGuidingSystem {\n  void assignPickerToRobot();\n};\n",
+		Symbols: []query.SymbolSpan{
+			{Name: "PickerGuidingSystem", StartLine: 1, EndLine: 3},
+			{Name: "PickerGuidingSystem", StartLine: 1, EndLine: 3},
+		},
+	})
+	m.Put("r", "HEAD", "PickerGuidingSystem", storage.SymbolRecord{SignatureHash: "s"})
+
+	res := query.Investigate(m, "r", "HEAD", "picker guiding system assign", 4000)
+	seen := map[string]int{}
+	for _, f := range res.Findings {
+		seen[f.Repo+"/"+f.Symbol]++
+	}
+	for k, n := range seen {
+		if n > 1 {
+			t.Fatalf("symbol %q ranked %d times; findings must be deduped by (repo, qid)", k, n)
+		}
+	}
+}
+
+// A weak ranking must SAY it is weak. investigate is the tool an agent calls
+// first on an unfamiliar repo, and it used to present incidental word overlap
+// with the same confidence as a real match.
+func TestInvestigateReportsWeakMatchAndCoverage(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "driver.cpp",
+		Content: "void run() { spin(); }\n",
+		Symbols: []query.SymbolSpan{{Name: "run", StartLine: 1, EndLine: 1}},
+	})
+	m.Put("r", "HEAD", "run", storage.SymbolRecord{SignatureHash: "s"})
+
+	res := query.Investigate(m, "r", "HEAD", "run", 4000)
+	if res.Considered != 1 {
+		t.Fatalf("Considered must report the corpus size actually ranked, got %d", res.Considered)
+	}
+	// The dossier states its coverage so a reader can judge the ranking.
+	if !strings.Contains(res.Dossier, "ranked from 1 indexed symbols") {
+		t.Fatalf("dossier must state how many symbols it ranked:\n%s", res.Dossier)
+	}
+	// And a genuinely weak query is flagged, at the top.
+	weak := query.Investigate(m, "r", "HEAD", "quantum cryptography billing ledger", 4000)
+	if len(weak.Findings) > 0 || len(weak.Meta.Warnings) > 0 {
+		if len(weak.Findings) > 0 && len(weak.Meta.Warnings) == 0 {
+			t.Fatalf("a low-scoring ranking must carry a caveat, got findings=%d warnings=%v",
+				len(weak.Findings), weak.Meta.Warnings)
+		}
+	}
+}

@@ -513,7 +513,13 @@ type investigateDTO struct {
 	Dossier  string                  `json:"dossier"`
 	Findings []investigateFindingDTO `json:"findings"`
 	Omitted  int                     `json:"omitted"`
-	Meta     metaDTO                 `json:"_meta"`
+	// considered = symbols ranked to produce these findings; top_score = the
+	// best similarity achieved. A reader judging whether a ranking means
+	// anything needs both — 22 findings out of 30 indexed symbols, or a top
+	// score near zero, is a shrug dressed as an answer.
+	Considered int     `json:"considered"`
+	TopScore   float64 `json:"top_score"`
+	Meta       metaDTO `json:"_meta"`
 }
 
 // InvestigateJSON renders the investigate dossier: a dense markdown synthesis
@@ -521,6 +527,7 @@ type investigateDTO struct {
 func InvestigateJSON(r query.InvestigateResult) (string, error) {
 	dto := investigateDTO{
 		Question: r.Question, Dossier: r.Dossier, Omitted: r.Omitted,
+		Considered: r.Considered, TopScore: r.TopScore,
 		Findings: make([]investigateFindingDTO, 0, len(r.Findings)),
 		Meta:     metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
 	}

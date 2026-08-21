@@ -42,8 +42,19 @@ type InvestigateResult struct {
 	Findings []InvestigateFinding
 	Dossier  string // rendered markdown — the primary agent-facing payload
 	Omitted  int    // relevant matches dropped for budget
-	Meta     Meta
+	// Considered is how many symbols were ranked to produce these findings, and
+	// TopScore the best similarity achieved. Together they let a reader judge
+	// whether a ranking means anything: 25 findings out of 30 indexed symbols,
+	// or a top score near zero, is a shrug dressed as an answer.
+	Considered int
+	TopScore   float64
+	Meta       Meta
 }
+
+// weakMatchScore is the similarity below which a ranking is reported as "no
+// strong match". Term-IDF cosine on a genuinely relevant symbol clears this
+// comfortably; scores under it are usually incidental word overlap.
+const weakMatchScore = 0.12
 
 // Investigate answers a natural-language question about the code: it ranks
 // symbols fleet-wide by semantic similarity (repo may be FleetRepo "*"), then
@@ -73,6 +84,19 @@ func InvestigateWith(s Store, repo, ref, question string, budget int, r Semantic
 		res.Meta.Warnings = append(res.Meta.Warnings, sem.Note)
 	}
 	hits := sem.Hits
+	res.Considered = sem.Considered
+	if len(hits) > 0 {
+		res.TopScore = hits[0].Score
+	}
+	// Say when the ranking is weak. Every other surface reports what it could
+	// not resolve; investigate used to rank incidental word overlap with the
+	// same confidence as a real hit, and it is the tool an agent reaches for
+	// FIRST on an unfamiliar repo.
+	if len(hits) > 0 && hits[0].Score < weakMatchScore {
+		res.Meta.Warnings = append(res.Meta.Warnings, fmt.Sprintf(
+			"no strong match: best similarity %.3f over %d indexed symbols — these findings may be incidental word overlap, and the answer may lie in files reponite does not index (check `reponite repos`)",
+			hits[0].Score, sem.Considered))
+	}
 	if len(hits) == 0 {
 		res.Dossier = "# Investigation: " + question + "\n\n_No symbols matched. Try different words, or `reponite_repos` to see what's indexed._"
 		return res
@@ -88,10 +112,21 @@ func InvestigateWith(s Store, repo, ref, question string, budget int, r Semantic
 		return f
 	}
 
+	// The ranker scores one entry per symbol SPAN, so a symbol with several
+	// spans (a C++ class declared in a header and defined in a .cpp, say)
+	// yields several hits that all resolve to the SAME qualified id. Ranking
+	// the same symbol twice made the dossier look like it had found more than
+	// it had; keep the best-scoring entry per (repo, qid).
+	seen := map[[2]string]bool{}
 	spent := 0
 	for _, h := range hits {
 		ctx := Context(s, h.Repo, ref, h.Symbol, false)
 		qid := ctx.Symbol
+		if key := [2]string{h.Repo, qid}; seen[key] {
+			continue
+		} else {
+			seen[key] = true
+		}
 		path, span, body, ok := symbolSource(files(h.Repo), qid)
 		if !ok {
 			path, span = h.Path, SymbolSpan{StartLine: h.Line}
@@ -111,7 +146,7 @@ func InvestigateWith(s Store, repo, ref, question string, budget int, r Semantic
 		spent += cost
 		res.Findings = append(res.Findings, f)
 	}
-	res.Dossier = renderDossier(question, res.Findings, res.Omitted)
+	res.Dossier = renderDossier(question, res.Findings, res.Omitted, res.Considered, res.TopScore, res.Meta.Warnings)
 	return res
 }
 
@@ -153,14 +188,20 @@ func estFinding(f InvestigateFinding) int {
 }
 
 // renderDossier produces the dense, cited markdown an agent reads directly.
-func renderDossier(question string, fs []InvestigateFinding, omitted int) string {
+func renderDossier(question string, fs []InvestigateFinding, omitted, considered int, topScore float64, warnings []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Investigation: %s\n\n", question)
 	repos := map[string]bool{}
 	for _, f := range fs {
 		repos[f.Repo] = true
 	}
-	fmt.Fprintf(&b, "%d relevant symbol(s) across %d repo(s), most relevant first.\n", len(fs), len(repos))
+	fmt.Fprintf(&b, "%d symbol(s) across %d repo(s), most relevant first — ranked from %d indexed symbols (best similarity %.3f).\n",
+		len(fs), len(repos), considered, topScore)
+	// Caveats belong at the TOP: a reader who stops after the first screen must
+	// still see that the ranking was weak or degraded.
+	for _, w := range warnings {
+		fmt.Fprintf(&b, "\n> **Caveat:** %s\n", w)
+	}
 	for i, f := range fs {
 		fmt.Fprintf(&b, "\n## %d. %s\n", i+1, f.Symbol)
 		fmt.Fprintf(&b, "`%s / %s:%d`\n", f.Repo, f.Path, f.Line)

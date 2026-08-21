@@ -144,6 +144,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE callees ADD COLUMN resolution_method TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE ref_history ADD COLUMN direct_conf REAL NOT NULL DEFAULT 1`,
 		`ALTER TABLE ref_history ADD COLUMN lang TEXT NOT NULL DEFAULT ''`,
+		// §9A.1: the defining file is test code. Feeds brief's covering-tests
+		// section and search's test filter for every language, not just Go.
+		`ALTER TABLE ref_history ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0`,
 		// §8B.3 per-caller signature skew: the target contract each caller was
 		// indexed against ('' = not captured -> skew unknown, never guessed).
 		`ALTER TABLE external_refs ADD COLUMN target_signature_hash TEXT NOT NULL DEFAULT ''`,
@@ -213,12 +216,13 @@ func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
 		return err
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf, lang)
-		 VALUES(?,?,?,1,?,?,?,?,?,?)
+		`INSERT INTO ref_history(repo, ref, name, present, symbol_hash, signature_hash, behavior_hash, behavior_conf, direct_conf, lang, is_test)
+		 VALUES(?,?,?,1,?,?,?,?,?,?,?)
 		 ON CONFLICT(repo, ref, name) DO UPDATE SET
 		   present=1, symbol_hash=excluded.symbol_hash, signature_hash=excluded.signature_hash,
-		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf, lang=excluded.lang`,
-		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf, rec.Lang); err != nil {
+		   behavior_hash=excluded.behavior_hash, behavior_conf=excluded.behavior_conf, direct_conf=excluded.direct_conf,
+		   lang=excluded.lang, is_test=excluded.is_test`,
+		repo, ref, name, string(rec.SymbolHash), string(rec.SignatureHash), string(rec.BehaviorHash), rec.BehaviorConf, rec.DirectConf, rec.Lang, rec.IsTest); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -446,15 +450,17 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 	var present int
 	var sig, beh, lang sql.NullString
 	var conf, dconf sql.NullFloat64
+	var isTest bool
 	err := s.db.QueryRow(
-		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang FROM ref_history WHERE repo=? AND ref=? AND name=?`,
-		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf, &lang)
+		`SELECT present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang, is_test FROM ref_history WHERE repo=? AND ref=? AND name=?`,
+		repo, ref, symbol).Scan(&present, &sig, &beh, &conf, &dconf, &lang, &isTest)
 	if err != nil {
 		return query.SymbolRef{Present: false}, false
 	}
 	return query.SymbolRef{
 		Present:       present == 1,
 		Lang:          lang.String,
+		IsTest:        isTest,
 		SignatureHash: content.Hash(sig.String),
 		BehaviorHash:  content.Hash(beh.String),
 		BehaviorConf:  conf.Float64,
@@ -465,7 +471,7 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	out := map[string]query.SymbolRef{}
 	rows, err := s.db.Query(
-		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang FROM ref_history WHERE repo=? AND ref=?`,
+		`SELECT name, present, signature_hash, behavior_hash, behavior_conf, direct_conf, lang, is_test FROM ref_history WHERE repo=? AND ref=?`,
 		repo, ref)
 	if err != nil {
 		return out
@@ -476,14 +482,15 @@ func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 		var present int
 		var sig, beh, lang sql.NullString
 		var conf, dconf sql.NullFloat64
-		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf, &lang) != nil {
+		var isTest bool
+		if rows.Scan(&name, &present, &sig, &beh, &conf, &dconf, &lang, &isTest) != nil {
 			continue
 		}
 		if present != 1 {
 			continue
 		}
 		out[name] = query.SymbolRef{
-			Present: true, Lang: lang.String, SignatureHash: content.Hash(sig.String),
+			Present: true, Lang: lang.String, IsTest: isTest, SignatureHash: content.Hash(sig.String),
 			BehaviorHash: content.Hash(beh.String), BehaviorConf: conf.Float64, DirectConf: dconf.Float64,
 		}
 	}

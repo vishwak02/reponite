@@ -58,7 +58,11 @@ under `make cli` and breaks `make sqlite`. Two real breaks were caught exactly t
    import-path match. An import path is the module path PLUS a package path, so exact
    equality silently demotes every multi-package repo to the name-based tier
    (`query.ModuleMatches`).
-8. Schema changes go in `migrate()`, never the base schema — including indexes over
+8. Per-language facts are captured at INDEX time from the path/AST, never inferred from a
+   symbol name at query time. `is_test` was a Go name heuristic for months, so `brief`
+   silently reported "0 covering tests" for 8 of 10 languages while advertising the
+   section (`processing.IsTestPath` → `SymbolRecord.IsTest`).
+9. Schema changes go in `migrate()`, never the base schema — including indexes over
    migrated columns. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a
    base-schema index over a new column breaks `Open` for every already-indexed repo.
 

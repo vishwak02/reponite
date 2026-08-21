@@ -44,6 +44,10 @@ type ParsedFile struct {
 	// Imports are the file's external import bindings (imports.go), used to
 	// resolve qualified calls to (module, name) external references (§8B).
 	Imports []ImportBinding
+	// IsTest marks this file as test code (§9A.1). Captured here because a
+	// symbol's stored id keeps the file's directory but not its basename, so
+	// `test_foo.py` cannot be recognized downstream.
+	IsTest bool
 	// SCIP is this file's contribution from a SCIP index, when the repo has
 	// one: each locally defined symbol's globally unique moniker, and its
 	// references to monikers defined elsewhere (§8B.4, Phase 6b). Zero value =
@@ -67,6 +71,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		sym        Symbol
 		pkg        string
 		lang       string
+		isTest     bool
 		symbolHash content.Hash
 		sigHash    content.Hash
 	}
@@ -96,7 +101,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				order = append(order, qid)
 				byBase[s.Name] = append(byBase[s.Name], qid)
 			}
-			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id)}
+			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id)}
 			if len(byLocal) > 0 {
 				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, byLocal)...)
 			}
@@ -147,6 +152,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 		if err := w.Put(repo, ref, qid, storage.SymbolRecord{
 			Lang:          c.lang,
+			IsTest:        c.isTest,
 			SymbolHash:    c.symbolHash,
 			SignatureHash: c.sigHash,
 			BehaviorHash:  beh.BehaviorHash[qid],

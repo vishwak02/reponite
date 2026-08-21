@@ -104,7 +104,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			return nil // no grammar bound for this extension; skip
 		}
 		files = append(files, ParsedFile{
-			Path: f.Name, Content: src, Lang: rules.Name,
+			Path: f.Name, Content: src, Lang: rules.Name, IsTest: IsTestPath(f.Name),
 			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
 		})
 		return nil

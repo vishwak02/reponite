@@ -27,6 +27,7 @@ const (
 type SymbolRef struct {
 	Present       bool
 	Lang          string // language name (lang.go); drives per-language "exported" rules
+	IsTest        bool   // the defining file is test code (§9A.1); "" for pre-migration indexes
 	SignatureHash content.Hash
 	BehaviorHash  content.Hash
 	BehaviorConf  float64 // transitive-subgraph minimum
