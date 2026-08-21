@@ -260,11 +260,11 @@ func reposFor(s Store, repo string) []string {
 func SearchName(s Store, repo, ref, substr string, includeTests bool) []SearchHit {
 	hits := []SearchHit{}
 	for _, rp := range reposFor(s, repo) {
-		for name := range s.SymbolsAt(rp, ref) {
+		for name, sym := range s.SymbolsAt(rp, ref) {
 			if !strings.Contains(name, substr) {
 				continue
 			}
-			test := IsTestName(baseName(name))
+			test := IsTestSymbol(sym, name)
 			if test && !includeTests {
 				continue
 			}
@@ -280,11 +280,33 @@ func SearchName(s Store, repo, ref, substr string, includeTests bool) []SearchHi
 	return hits
 }
 
+// IsTestSymbol reports whether a symbol is test code. It prefers the flag
+// captured at index time from the file's PATH (§9A.1), which is the only signal
+// that works for languages whose tests are named by convention on the file
+// rather than the symbol — a C++ fixture in `test/`, a `test_x.py`, a
+// `foo.spec.ts`. The Go name heuristic remains as a fallback so an index built
+// before is_test existed keeps behaving as it did rather than reporting "no
+// tests" for everything.
+func IsTestSymbol(ref SymbolRef, qid string) bool {
+	return ref.IsTest || IsTestName(baseName(qid))
+}
+
+// IsTestQID looks a symbol up and reports whether it is test code. Use this
+// where only the qualified id is in hand (brief/blast/context walk caller name
+// lists): the index-time path flag lives on the stored record, so a name alone
+// cannot answer for any language whose tests are named on the file.
+func IsTestQID(s Store, repo, ref, qid string) bool {
+	if sym, ok := s.SymbolAt(repo, qid, ref); ok {
+		return IsTestSymbol(sym, qid)
+	}
+	return IsTestName(baseName(qid))
+}
+
 // IsTestName reports whether name is a Go test entry point by the testing
 // package's convention: a Test/Benchmark/Example/Fuzz prefix not immediately
 // followed by a lowercase letter (so "TestMain" and "Test" qualify, "Testable"
-// does not). This is a name heuristic — it does not catch lowercase test helpers
-// (a limitation the package-qualified rework addresses).
+// does not). NAME-only, so it is blind to every non-Go convention — prefer
+// IsTestSymbol, which consults the index-time path flag first.
 func IsTestName(name string) bool {
 	for _, p := range []string{"Test", "Benchmark", "Example", "Fuzz"} {
 		if !strings.HasPrefix(name, p) {

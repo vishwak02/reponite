@@ -145,7 +145,7 @@ func cmdIndex(args []string) {
 	// per-caller skew. Without them the skew is honestly "unknown".
 	peers := openPeers(dir)
 	defer peers.Close()
-	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store}
+	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary}
 	if gitRev != "" {
 		commit, err := processing.IndexGitRefWith(st, repo, ref, dir, gitRev, version.NormVer, opt)
 		if err != nil {
@@ -163,6 +163,34 @@ func cmdIndex(args []string) {
 	}
 	registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
 	fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))
+}
+
+// printIndexSummary shows where the index came from. A repo that vendors
+// third-party code under a non-standard path (not vendor/ or third_party/) is
+// otherwise invisible: it inflates the index and outranks first-party code in
+// search. Seeing "775 files from internal/foo/internal" is what prompts a
+// .reponiteignore entry.
+func printIndexSummary(sum processing.IndexSummary) {
+	if sum.Files == 0 {
+		fmt.Fprintln(os.Stderr, "reponite: no supported source files found — nothing was indexed")
+		return
+	}
+	fmt.Printf("  %d files (%d test)", sum.Files, sum.TestFiles)
+	shown := 0
+	for _, d := range sum.TopDirs {
+		// Only call out directories big enough to matter, and at most three.
+		if shown >= 3 || d.Files*10 < sum.Files {
+			break
+		}
+		if shown == 0 {
+			fmt.Printf("; largest: ")
+		} else {
+			fmt.Printf(", ")
+		}
+		fmt.Printf("%s (%d)", d.Dir, d.Files)
+		shown++
+	}
+	fmt.Println()
 }
 
 func shortHash(h string) string {

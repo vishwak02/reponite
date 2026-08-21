@@ -93,7 +93,8 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		files = append(files, ParsedFile{
 			Path: rel, Content: string(src), Lang: rules.Name,
 			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
-			SCIP: scipFor(scipIdx, scipLocal, rel, spans),
+			IsTest: IsTestPath(rel),
+			SCIP:   scipFor(scipIdx, scipLocal, rel, spans),
 		})
 		return nil
 	})
@@ -109,6 +110,21 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	}
 	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers); err != nil {
 		return err
+	}
+	// Report where the index came from. A repo that vendors third-party code
+	// under a non-standard path (not vendor/ or third_party/) otherwise sits in
+	// the index unnoticed, inflating it and outranking first-party code in
+	// search — findable today only by accident.
+	if opt.Report != nil {
+		paths := make([]string, 0, len(files))
+		tests := 0
+		for _, f := range files {
+			paths = append(paths, f.Path)
+			if f.IsTest {
+				tests++
+			}
+		}
+		opt.Report(IndexSummary{Files: len(files), TestFiles: tests, TopDirs: DirFootprint(paths, 2)})
 	}
 	if mod, ok := DetectModulePath(manifests); ok {
 		return w.SetModulePath(repo, mod)

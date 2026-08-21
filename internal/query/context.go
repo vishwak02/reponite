@@ -21,12 +21,25 @@ type CalleeEdge struct {
 
 // ContextResult is the direct neighborhood of a symbol in the call graph.
 type ContextResult struct {
-	Symbol      string
-	Ref         string
+	Symbol string
+	Ref    string
+	// Callers/Callees are plain names for simple consumers; CallerEdges and
+	// CalleeEdges are the same neighbors with their provenance. Every tool that
+	// returns neighbors returns objects, so an agent parsing brief and context
+	// together no longer meets two shapes for the same idea.
 	Callers     []string
-	Callees     []string     // callee names, sorted (kept for simple consumers)
-	CalleeEdges []CalleeEdge // same edges with resolution_method + confidence
+	Callees     []string
+	CallerEdges []CallerEdge
+	CalleeEdges []CalleeEdge
 	Meta        Meta
+}
+
+// CallerEdge is one caller with the facts that decide how to treat it: whether
+// it is test code (§9A.1), which is what separates "3 callers" from
+// "1 caller and 2 tests".
+type CallerEdge struct {
+	Name   string
+	IsTest bool
 }
 
 // Context computes the direct callers and callees of symbol at a ref. Test entry
@@ -49,26 +62,32 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	callees := []string{}
 	edges := []CalleeEdge{}
 	for _, c := range snap.Callees[sym] {
-		if !includeTests && IsTestName(baseName(c.Name)) {
+		if !includeTests && IsTestQID(s, repo, ref, c.Name) {
 			continue
 		}
 		callees = append(callees, c.Name)
 		edges = append(edges, CalleeEdge{Name: c.Name, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
 	}
 	callers := []string{}
+	callerEdges := []CallerEdge{}
 	for name, cs := range snap.Callees {
-		if !includeTests && IsTestName(baseName(name)) {
+		isTest := IsTestQID(s, repo, ref, name)
+		if !includeTests && isTest {
 			continue
 		}
 		for _, c := range cs {
 			if c.Name == sym {
 				callers = append(callers, name)
+				callerEdges = append(callerEdges, CallerEdge{Name: name, IsTest: isTest})
 				break
 			}
 		}
 	}
 	sort.Strings(callers)
+	sort.Slice(callerEdges, func(i, j int) bool { return callerEdges[i].Name < callerEdges[j].Name })
 	sort.Strings(callees)
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
-	return ContextResult{Symbol: sym, Ref: ref, Callers: callers, Callees: callees, CalleeEdges: edges, Meta: Meta{Repo: repo, Ref: ref, Warnings: warns}}
+	return ContextResult{Symbol: sym, Ref: ref, Callers: callers, Callees: callees,
+		CallerEdges: callerEdges, CalleeEdges: edges,
+		Meta: Meta{Repo: repo, Ref: ref, Warnings: warns}}
 }

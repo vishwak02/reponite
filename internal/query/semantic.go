@@ -151,8 +151,12 @@ func (r TermIDFRanker) Rank(query string, docs []SemanticDoc, limit int) ([]Sema
 type SemanticResult struct {
 	Hits   []SemanticHit
 	Ranker string
-	Note   string
-	Meta   Meta
+	// Considered is how many symbols were ranked. A caller can see that a
+	// "top 10" came from a corpus of 30 rather than 30,000 — the difference
+	// between a ranking and a shrug.
+	Considered int
+	Note       string
+	Meta       Meta
 }
 
 // SemanticSearch ranks symbols by similarity of (name + body) to query,
@@ -180,7 +184,7 @@ func SemanticSearch(s Store, repo, ref, query string, limit int, r SemanticRanke
 			}
 		}
 	}
-	res := SemanticResult{Ranker: r.RankerName(), Meta: Meta{Repo: repo, Ref: ref}}
+	res := SemanticResult{Ranker: r.RankerName(), Considered: len(docs), Meta: Meta{Repo: repo, Ref: ref}}
 	hits, err := r.Rank(query, docs, limit)
 	if err != nil {
 		fallback := TermIDFRanker{}

@@ -17,6 +17,7 @@ var _ query.Store = (*Mem)(nil)
 // SymbolRecord is one symbol's stored facts at a ref.
 type SymbolRecord struct {
 	Lang          string // language name (lang.go)
+	IsTest        bool   // the defining file is test code (§9A.1)
 	SymbolHash    content.Hash
 	SignatureHash content.Hash
 	BehaviorHash  content.Hash
@@ -244,6 +245,7 @@ func asRef(rec SymbolRecord) query.SymbolRef {
 	return query.SymbolRef{
 		Present:       true,
 		Lang:          rec.Lang,
+		IsTest:        rec.IsTest,
 		SignatureHash: rec.SignatureHash,
 		BehaviorHash:  rec.BehaviorHash,
 		BehaviorConf:  rec.BehaviorConf,

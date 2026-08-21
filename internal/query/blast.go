@@ -45,10 +45,10 @@ func BlastRadius(s Store, repo, ref, symbol string) BlastRadiusResult {
 		res.Meta.Warnings = append(res.Meta.Warnings, fmt.Sprintf("ambiguous %q; used %s", symbol, qid))
 	}
 
-	// In-repo callers + covering tests (Context splits by the test-name heuristic).
+	// In-repo callers + covering tests, split by the index-time is_test flag.
 	ctx := Context(s, repo, ref, qid, true)
 	for _, c := range ctx.Callers {
-		if IsTestName(baseName(c)) {
+		if IsTestQID(s, repo, ref, c) {
 			res.CoveringTests = append(res.CoveringTests, c)
 		} else {
 			res.InRepoCallers = append(res.InRepoCallers, c)
