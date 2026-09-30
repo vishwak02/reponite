@@ -31,8 +31,17 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func openStore(baseDir string) *sqlite.Store {
+func openStore(baseDir string) *sqlite.Store { return openStoreAs(baseDir, "") }
+
+// openStoreAs opens the store for the repo at baseDir; name overrides the
+// directory-derived repo name (a submodule read from .git/modules/<name>).
+func openStoreAs(baseDir, name string) *sqlite.Store {
 	dbPath := dbPathFor(baseDir)
+	if name != "" {
+		if d := os.Getenv(storeDirEnv); d != "" {
+			dbPath = filepath.Join(d, name, "index.db")
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		fail(err)
 	}

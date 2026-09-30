@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/interfaces"
 	"github.com/vishwak02/reponite/internal/processing"
 	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage/sqlite"
 	"github.com/vishwak02/reponite/internal/version"
 )
 
@@ -125,17 +127,17 @@ func (e *excludeFlags) Set(v string) error {
 }
 
 func cmdIndex(args []string) {
-	var gitRev string
+	var gitRev, tagGlob string
 	var excludes excludeFlags
-	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>] [--exclude GLOB]...", args, func(fs *flag.FlagSet) {
-		fs.StringVar(&gitRev, "git", "", "index a git revision's tree (tag/branch/SHA/HEAD~3) instead of the working tree")
+	var submodules, force bool
+	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>[,<rev>...]] [--tags GLOB] [--submodules] [--force] [--exclude GLOB]...", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&gitRev, "git", "", "index git revisions' trees (tag/branch/SHA, comma-separated) instead of the working tree")
+		fs.StringVar(&tagGlob, "tags", "", "also index every tag matching this glob (e.g. '3.7.*'), each under its own name")
+		fs.BoolVar(&submodules, "submodules", false, "also index each submodule at the exact commit the revision pins, as ref <repo>@<label>")
+		fs.BoolVar(&force, "force", false, "re-index revisions whose commit is already indexed under this ruleset")
 		fs.Var(&excludes, "exclude", "exclude paths matching this gitignore-syntax pattern (repeatable, comma-separable); adds to the defaults (vendor/, third_party/, node_modules/, .git/, testdata/) and .reponiteignore")
 	})
 	dir := arg(pos, 0, ".")
-	ref := arg(pos, 1, "HEAD")
-	if len(pos) < 2 && gitRev != "" {
-		ref = gitRev // default the ref label to the revision
-	}
 	repo := repoName(dir)
 	st := openStore(dir)
 	defer st.Close()
@@ -146,29 +148,107 @@ func cmdIndex(args []string) {
 	peers := openPeers(dir)
 	defer peers.Close()
 	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary}
-	if gitRev != "" {
-		commit, err := processing.IndexGitRefWith(st, repo, ref, dir, gitRev, version.NormVer, opt)
-		if err != nil {
-			fail(err)
-		}
-		if err := st.AddRef(repo, ref, commit, ""); err != nil {
+	if gitRev == "" && tagGlob == "" {
+		ref := arg(pos, 1, "HEAD")
+		if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
 			fail(err)
 		}
 		if err := st.SetIndexVersion(repo, ref, version.IndexVer); err != nil {
 			fail(err)
 		}
 		registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
-		fmt.Printf("indexed %s@%s (git %s @ %s)%s — refs now: %v\n", repo, ref, gitRev, shortHash(commit), moduleNote(st, repo), st.Refs(repo))
+		fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))
 		return
 	}
-	if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
+	var revList []string
+	for _, r := range strings.Split(gitRev, ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			revList = append(revList, r)
+		}
+	}
+	revs, err := processing.ResolveGitRevs(dir, revList, tagGlob)
+	if err != nil {
 		fail(err)
 	}
-	if err := st.SetIndexVersion(repo, ref, version.IndexVer); err != nil {
-		fail(err)
+	if len(pos) >= 2 {
+		if len(revs) != 1 {
+			fail(fmt.Errorf("a ref label names ONE revision; %d were given — drop the label to store each under its own name", len(revs)))
+		}
+		revs[0].Label = pos[1]
+	}
+	if len(revs) == 0 {
+		fail(fmt.Errorf("no revision matched (--git %q, --tags %q)", gitRev, tagGlob))
+	}
+	for i, rv := range revs {
+		if len(revs) > 1 {
+			fmt.Printf("[%d/%d] ", i+1, len(revs))
+		}
+		indexOneRev(st, repo, dir, rv, opt, force)
+		if submodules {
+			indexSubmodules(repo, dir, rv, excludes, force)
+		}
 	}
 	registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
-	fmt.Printf("indexed %s@%s%s — refs now: %v\n", repo, ref, moduleNote(st, repo), st.Refs(repo))
+	fmt.Printf("refs now: %v\n", st.Refs(repo))
+}
+
+// indexOneRev indexes one revision, or reuses an index of the same commit
+// under the current ruleset (resume: an interrupted batch re-run skips what
+// is done; a second label for the same commit copies rows, not work).
+func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt processing.IndexOptions, force bool) {
+	if !force {
+		if have, ok := st.RefByCommit(repo, rv.Commit, version.IndexVer); ok {
+			if have == rv.Label {
+				fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))
+				return
+			}
+			if err := st.AliasRef(repo, have, rv.Label); err != nil {
+				fail(err)
+			}
+			fmt.Printf("%s@%s = %s@%s (same commit %s) — reused\n", repo, rv.Label, repo, have, shortHash(rv.Commit))
+			return
+		}
+	}
+	commit, err := processing.IndexGitRefWith(st, repo, rv.Label, dir, rv.Rev, version.NormVer, opt)
+	if err != nil {
+		fail(err)
+	}
+	if err := st.AddRef(repo, rv.Label, commit, ""); err != nil {
+		fail(err)
+	}
+	if err := st.SetIndexVersion(repo, rv.Label, version.IndexVer); err != nil {
+		fail(err)
+	}
+	fmt.Printf("indexed %s@%s (git %s @ %s)%s\n", repo, rv.Label, rv.Rev, shortHash(commit), moduleNote(st, repo))
+}
+
+// indexSubmodules indexes every submodule of parent@rv at its pinned commit,
+// as ref "<parent>@<label>" in the submodule's own store — the exact code that
+// version of the parent builds with. A submodule whose objects are not on
+// this machine is named, never skipped silently.
+func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeFlags, force bool) {
+	pins, err := processing.GitSubmodulePins(dir, rv.Rev)
+	if err != nil {
+		fail(err)
+	}
+	for _, p := range pins {
+		if p.RepoDir == "" {
+			fmt.Fprintf(os.Stderr, "reponite: submodule %s (%s) pinned at %s: commit not available locally (git submodule update --init %s) — not indexed\n",
+				p.Name, p.Path, shortHash(p.Commit), p.Path)
+			continue
+		}
+		sub := repoName(p.RepoDir)
+		if strings.HasSuffix(filepath.ToSlash(p.RepoDir), "/.git/modules/"+p.Name) {
+			sub = filepath.Base(p.Name)
+		}
+		sst := openStoreAs(p.RepoDir, sub)
+		label := parent + "@" + rv.Label
+		fmt.Printf("  submodule ")
+		indexOneRev(sst, sub, p.RepoDir, processing.GitRev{Label: label, Rev: p.Commit, Commit: p.Commit},
+			processing.IndexOptions{Excludes: excludes, Report: printIndexSummary}, force)
+		registerRepo(sub, p.RepoDir, sst.ModulePath(sub))
+		sst.Close()
+	}
 }
 
 // printIndexSummary shows where the index came from. A repo that vendors

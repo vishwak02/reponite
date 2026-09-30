@@ -458,3 +458,34 @@ INSERT INTO symbol_monikers VALUES('r','3.7.2','pkg.A','m-A');`)
 		t.Fatal("reopen must keep the migrated data")
 	}
 }
+
+// A second label for an already-indexed commit reuses its rows.
+func TestSQLiteAliasRefAndRefByCommit(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	st.Put("r", "3.7.2", "pkg.A", rec("a", "s", "b", 1, "pkg.B"))
+	st.PutFile("r", "3.7.2", query.File{Path: "a.cpp", Content: "x", Symbols: []query.SymbolSpan{{Name: "A", StartLine: 1, EndLine: 1}}})
+	st.AddRef("r", "3.7.2", "c0ffee", "")
+	st.SetIndexVersion("r", "3.7.2", 2)
+	if ref, ok := st.RefByCommit("r", "c0ffee", 2); !ok || ref != "3.7.2" {
+		t.Fatalf("RefByCommit: %q %v", ref, ok)
+	}
+	if _, ok := st.RefByCommit("r", "c0ffee", 3); ok {
+		t.Fatal("a different ruleset is not the same index")
+	}
+	if err := st.AliasRef("r", "3.7.2", "rr_io_amr@5.6.6"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.SymbolAt("r", "pkg.A", "rr_io_amr@5.6.6"); !ok {
+		t.Fatal("alias must read the same symbols")
+	}
+	if fs := st.Files("r", "rr_io_amr@5.6.6"); len(fs) != 1 || len(fs[0].Symbols) != 1 {
+		t.Fatalf("alias files: %+v", fs)
+	}
+	if m, _ := st.Manifest("r", "rr_io_amr@5.6.6"); m.Commit != "c0ffee" {
+		t.Fatalf("alias commit: %q", m.Commit)
+	}
+}

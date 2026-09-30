@@ -356,6 +356,53 @@ func (s *Store) IndexVersion(repo, ref string) (int, bool) {
 	return v, true
 }
 
+// RefByCommit finds a ref of repo already indexed at commit under ruleset
+// indexVer — the same code, so indexing it again would store nothing new.
+func (s *Store) RefByCommit(repo, commit string, indexVer int) (string, bool) {
+	if commit == "" {
+		return "", false
+	}
+	var ref string
+	if err := s.db.QueryRow(`SELECT ref FROM refs_v2 WHERE repo=? AND commit_hash=? AND index_ver=? ORDER BY id LIMIT 1`,
+		repo, commit, indexVer).Scan(&ref); err != nil {
+		return "", false
+	}
+	return ref, true
+}
+
+// AliasRef makes `to` another label for the already-indexed ref `from` (same
+// commit): its per-ref rows are copied — integers pointing at shared records —
+// so the new label costs a few kilobytes and no re-parse.
+func (s *Store) AliasRef(repo, from, to string) error {
+	src, ok := s.lookupRef(repo, from)
+	if !ok {
+		return fmt.Errorf("%s@%s is not indexed", repo, from)
+	}
+	if err := s.ClearRef(repo, to); err != nil {
+		return err
+	}
+	return s.withTx(func(tx *sql.Tx) error {
+		dst, err := s.refID(tx, repo, to)
+		if err != nil {
+			return err
+		}
+		for _, q := range []string{
+			`UPDATE refs_v2 SET commit_hash=(SELECT commit_hash FROM refs_v2 WHERE id=?1), manifest_hash=(SELECT manifest_hash FROM refs_v2 WHERE id=?1),
+			   index_ver=(SELECT index_ver FROM refs_v2 WHERE id=?1) WHERE id=?2`,
+			`INSERT OR REPLACE INTO ref_syms(ref_id, name_id, sym_id) SELECT ?2, name_id, sym_id FROM ref_syms WHERE ref_id=?1`,
+			`INSERT OR REPLACE INTO ref_files_v2(ref_id, path_id, blob_id, span_set) SELECT ?2, path_id, blob_id, span_set FROM ref_files_v2 WHERE ref_id=?1`,
+			`INSERT OR IGNORE INTO ref_ext_refs(ref_id, ext_id) SELECT ?2, ext_id FROM ref_ext_refs WHERE ref_id=?1`,
+			`INSERT OR REPLACE INTO ref_monikers(ref_id, name_id, moniker) SELECT ?2, name_id, moniker FROM ref_monikers WHERE ref_id=?1`,
+			`INSERT OR IGNORE INTO ref_manifest(ref_id, blob) SELECT ?2, blob FROM ref_manifest WHERE ref_id=?1`,
+		} {
+			if _, err := tx.Exec(q, src, dst); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // ClearRef drops a ref's symbols, files, external refs and monikers so a
 // reindex replaces rather than accumulates, then reclaims shared rows no ref
 // points at any more (content-addressed rows are kept while any ref uses them).

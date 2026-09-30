@@ -10,11 +10,14 @@ package processing
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
@@ -142,4 +145,134 @@ func alternatesHint(repoDir string) string {
 		}
 	}
 	return ""
+}
+
+// GitRev is one revision to index: the label it is stored under and the
+// commit it resolves to.
+type GitRev struct {
+	Label  string
+	Rev    string
+	Commit string
+}
+
+// ResolveGitRevs expands revisions and a tag glob (path.Match syntax, e.g.
+// "3.7.*") into commits, in the order given; tags come sorted by name.
+func ResolveGitRevs(repoDir string, revs []string, tagGlob string) ([]GitRev, error) {
+	r, err := git.PlainOpen(repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("open git repo %s: %w", repoDir, err)
+	}
+	var out []GitRev
+	for _, rev := range revs {
+		h, err := r.ResolveRevision(plumbing.Revision(rev))
+		if err != nil {
+			return nil, fmt.Errorf("resolve revision %q: %w%s", rev, err, alternatesHint(repoDir))
+		}
+		out = append(out, GitRev{Label: rev, Rev: rev, Commit: h.String()})
+	}
+	if tagGlob != "" {
+		iter, err := r.Tags()
+		if err != nil {
+			return nil, err
+		}
+		var tags []GitRev
+		_ = iter.ForEach(func(ref *plumbing.Reference) error {
+			name := ref.Name().Short()
+			if ok, _ := path.Match(tagGlob, name); !ok {
+				return nil
+			}
+			h, err := r.ResolveRevision(plumbing.Revision("refs/tags/" + name + "^{commit}"))
+			if err != nil {
+				return nil // a tag of a non-commit object: nothing to index
+			}
+			tags = append(tags, GitRev{Label: name, Rev: name, Commit: h.String()})
+			return nil
+		})
+		sort.Slice(tags, func(i, j int) bool { return tags[i].Label < tags[j].Label })
+		out = append(out, tags...)
+	}
+	return out, nil
+}
+
+// SubmodulePin is a submodule as a revision of its parent pins it.
+type SubmodulePin struct {
+	Name    string // .gitmodules name
+	Path    string // path inside the parent tree
+	Commit  string // the commit the parent's tree points at (gitlink)
+	RepoDir string // a directory git can open for the submodule's objects
+}
+
+// GitSubmodulePins lists the submodules the parent's revision rev pins, with
+// the exact commit of each. A deployed version is its whole pinned tree, and
+// the gitlink commit — not the submodule's HEAD — is what that version runs.
+// A submodule whose objects are not available locally is returned with an
+// empty RepoDir, so the caller can say so instead of silently skipping it.
+func GitSubmodulePins(repoDir, rev string) ([]SubmodulePin, error) {
+	r, err := git.PlainOpen(repoDir)
+	if err != nil {
+		return nil, fmt.Errorf("open git repo %s: %w", repoDir, err)
+	}
+	h, err := r.ResolveRevision(plumbing.Revision(rev))
+	if err != nil {
+		return nil, fmt.Errorf("resolve revision %q: %w", rev, err)
+	}
+	commit, err := r.CommitObject(*h)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]string{} // path -> name, from the revision's own .gitmodules
+	if f, ferr := tree.File(".gitmodules"); ferr == nil {
+		if s, cerr := f.Contents(); cerr == nil {
+			names = parseGitmodules(s)
+		}
+	}
+	var out []SubmodulePin
+	w := object.NewTreeWalker(tree, true, nil)
+	defer w.Close()
+	for {
+		name, entry, err := w.Next()
+		if err != nil {
+			break
+		}
+		if entry.Mode != filemode.Submodule {
+			continue
+		}
+		pin := SubmodulePin{Name: names[name], Path: name, Commit: entry.Hash.String()}
+		if pin.Name == "" {
+			pin.Name = filepath.Base(name)
+		}
+		for _, cand := range []string{filepath.Join(repoDir, name), filepath.Join(repoDir, ".git", "modules", pin.Name)} {
+			sr, oerr := git.PlainOpen(cand)
+			if oerr != nil {
+				continue
+			}
+			if _, cerr := sr.CommitObject(entry.Hash); cerr == nil {
+				pin.RepoDir = cand
+				break
+			}
+		}
+		out = append(out, pin)
+	}
+	return out, nil
+}
+
+// parseGitmodules maps each submodule path to its name.
+func parseGitmodules(s string) map[string]string {
+	out := map[string]string{}
+	name := ""
+	for _, ln := range strings.Split(s, "\n") {
+		ln = strings.TrimSpace(ln)
+		if strings.HasPrefix(ln, "[submodule") {
+			name = strings.Trim(strings.TrimPrefix(ln, "[submodule"), " \"]")
+			continue
+		}
+		if k, v, ok := strings.Cut(ln, "="); ok && strings.TrimSpace(k) == "path" && name != "" {
+			out[strings.TrimSpace(v)] = name
+		}
+	}
+	return out
 }
