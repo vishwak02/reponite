@@ -188,7 +188,7 @@ type siteIndex struct {
 
 // siteKindRank orders a name's call-site kinds when one function calls the same
 // name several ways: the most specific claim about the target wins.
-var siteKindRank = map[CallKind]int{CallSelf: 0, CallPlain: 1, CallScoped: 2, CallMember: 3}
+var siteKindRank = map[CallKind]int{CallSelf: 0, CallPlain: 1, CallScoped: 2, CallExternal: 3, CallMember: 4}
 
 // resolveSiteEdges resolves C/C++ call sites by their shape (callsite.go):
 //   - this->f() / f() inside a method of A: A's own f first (same class);
@@ -198,6 +198,10 @@ var siteKindRank = map[CallKind]int{CallSelf: 0, CallPlain: 1, CallScoped: 2, Ca
 //
 // Everything else falls back to the name rules of resolveEdges.
 func resolveSiteEdges(callerPkg, callerRecv string, sites []CallSite, x siteIndex) []query.Callee {
+	return resolveSiteEdgesLang(callerPkg, callerRecv, "cpp", sites, x)
+}
+
+func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, x siteIndex) []query.Callee {
 	best := map[string]CallSite{}
 	var order []string
 	for _, s := range sites {
@@ -231,7 +235,7 @@ func resolveSiteEdges(callerPkg, callerRecv string, sites []CallSite, x siteInde
 			if s.Kind == CallSelf {
 				// this->f() with no f on the caller's own class: inherited, so
 				// the target is a base class method — which one is unproven.
-				add(memberCallee(name, x))
+				add(memberCalleeLang(name, lang, x))
 				continue
 			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
@@ -245,22 +249,24 @@ func resolveSiteEdges(callerPkg, callerRecv string, sites []CallSite, x siteInde
 				continue
 			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
+		case CallExternal:
+			add(query.Callee{Name: s.Scope + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 		case CallMember:
-			add(memberCallee(name, x))
+			add(memberCalleeLang(name, lang, x))
 		}
 	}
 	return out
 }
 
-// memberCallee resolves obj.name() with the object's type unknown.
-func memberCallee(name string, x siteIndex) query.Callee {
+// memberCalleeLang resolves obj.name() with the object's type unknown.
+func memberCalleeLang(name, lang string, x siteIndex) query.Callee {
 	cands := x.methods[name]
 	switch {
 	case len(cands) == 0:
 		// Only a method can be a member call's target, and no repo class has one:
 		// a library type's member (or a function pointer field).
 		return query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
-	case stdMembers[name]:
+	case memberBuiltins[lang][name]:
 		// The repo defines it, but so does every standard container: which one
 		// this object is cannot be told without its type.
 		return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}

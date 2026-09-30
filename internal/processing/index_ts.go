@@ -281,6 +281,12 @@ func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 				if name := nameOf(w, r); name != "" {
 					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})
 				}
+			case containsStr(r.VarFuncDecl, t):
+				if name, fn := varFunction(w); fn != nil && name != "" {
+					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})
+				} else {
+					walk(ch)
+				}
 			case containsStr(r.TypeDecl, t) && isTypeReference(w, r):
 				walk(ch) // a use, not a definition — no span
 			case containsStr(r.TypeDecl, t):

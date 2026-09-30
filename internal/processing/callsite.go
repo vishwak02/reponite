@@ -228,3 +228,150 @@ var stdMembers = map[string]bool{
 	"what": true, "flush": true, "write": true, "read": true, "good": true, "fail": true,
 	"time_since_epoch": true,
 }
+
+// CallExternal: the target is decided at the call site to be outside the repo
+// (bound by an import of an external module, or a language global such as
+// console/Math/JSON). Scope carries the module or global.
+const CallExternal CallKind = "external"
+
+// sitesFromQualified derives call-site shapes for the languages whose calls
+// are extracted as (qualifier, name) pairs — JS/TS, Python, Java, Rust — using
+// the caller file's import bindings. Before this, a plain `put(...)` that
+// redux-saga's effects module bound, or `console.error(...)`, was matched to
+// whatever repo function happened to share the bare name.
+func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, lang string, inRepo func(module string) bool) []CallSite {
+	globals := langGlobals[lang]
+	seen := map[CallSite]bool{}
+	var out []CallSite
+	add := func(cs CallSite) {
+		if cs.Name != "" && !seen[cs] {
+			seen[cs] = true
+			out = append(out, cs)
+		}
+	}
+	for _, qc := range qcs {
+		switch {
+		case qc.Qualifier == "":
+			if b, ok := byLocal[qc.Name]; ok && !inRepo(b.Module) {
+				add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: b.Module})
+			} else {
+				add(CallSite{Name: qc.Name, Kind: CallPlain})
+			}
+		case globals[qc.Qualifier]:
+			add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: qc.Qualifier})
+		default:
+			if b, ok := byLocal[qc.Qualifier]; ok {
+				if inRepo(b.Module) {
+					add(CallSite{Name: qc.Name, Kind: CallPlain}) // a namespace import of repo code
+				} else {
+					add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: b.Module})
+				}
+				continue
+			}
+			add(CallSite{Name: qc.Name, Kind: CallMember})
+		}
+	}
+	return out
+}
+
+// langGlobals are receivers that always name the runtime, never repo code.
+var langGlobals = map[string]map[string]bool{
+	"javascript": jsGlobals, "typescript": jsGlobals,
+	"python": {"os": true, "sys": true, "json": true, "re": true, "math": true, "time": true, "logging": true,
+		"subprocess": true, "shutil": true, "itertools": true, "functools": true, "collections": true, "datetime": true,
+		"np": true, "pd": true, "rospy": true, "rclpy": true, "yaml": true, "pathlib": true, "random": true, "str": true,
+		"dict": true, "list": true, "set": true, "tuple": true, "int": true, "float": true},
+	"java": {"System": true, "Math": true, "String": true, "Integer": true, "Long": true, "Double": true, "Boolean": true,
+		"Arrays": true, "Collections": true, "Objects": true, "List": true, "Map": true, "Set": true, "Optional": true,
+		"Thread": true, "LocalDateTime": true, "Instant": true, "Duration": true, "UUID": true},
+}
+
+var jsGlobals = map[string]bool{
+	"console": true, "Math": true, "JSON": true, "Object": true, "Array": true, "Promise": true, "Number": true,
+	"String": true, "Boolean": true, "Date": true, "RegExp": true, "Symbol": true, "Reflect": true, "Intl": true,
+	"window": true, "document": true, "navigator": true, "localStorage": true, "sessionStorage": true,
+	"location": true, "history": true, "process": true, "Buffer": true, "globalThis": true, "performance": true,
+	"crypto": true, "URL": true, "URLSearchParams": true, "setTimeout": true, "setInterval": true, "fetch": true,
+	"module": true, "require": true, "exports": true, "jest": true, "expect": true, "cy": true,
+}
+
+// memberBuiltins are method names of each language's standard types (arrays,
+// maps, strings, promises, dicts, lists, streams). A member call with one of
+// these on an object of unknown type is not pinned on the repo's same-named
+// method — the object is at least as likely to be a builtin.
+var memberBuiltins = map[string]map[string]bool{
+	"cpp": stdMembers, "c": stdMembers,
+	"javascript": jsMembers, "typescript": jsMembers,
+	"python": {"append": true, "extend": true, "insert": true, "remove": true, "pop": true, "clear": true, "copy": true,
+		"count": true, "index": true, "sort": true, "reverse": true, "get": true, "items": true, "keys": true, "values": true,
+		"update": true, "setdefault": true, "add": true, "discard": true, "split": true, "join": true, "strip": true,
+		"lstrip": true, "rstrip": true, "replace": true, "startswith": true, "endswith": true, "format": true, "lower": true,
+		"upper": true, "encode": true, "decode": true, "find": true, "read": true, "write": true, "close": true,
+		"readlines": true, "exists": true, "open": true, "sleep": true, "info": true, "debug": true, "warning": true,
+		"error": true, "exception": true, "put": true, "wait": true, "start": true, "run": true},
+	"java": {"get": true, "put": true, "add": true, "remove": true, "contains": true, "size": true, "isEmpty": true,
+		"clear": true, "equals": true, "hashCode": true, "toString": true, "stream": true, "map": true, "filter": true,
+		"collect": true, "forEach": true, "orElse": true, "isPresent": true, "length": true, "append": true, "close": true,
+		"println": true, "format": true, "keySet": true, "values": true, "entrySet": true, "iterator": true, "next": true, "hasNext": true},
+}
+
+var jsMembers = map[string]bool{
+	"map": true, "filter": true, "forEach": true, "reduce": true, "push": true, "pop": true, "shift": true,
+	"unshift": true, "slice": true, "splice": true, "find": true, "findIndex": true, "includes": true,
+	"indexOf": true, "join": true, "split": true, "concat": true, "sort": true, "some": true, "every": true,
+	"flat": true, "flatMap": true, "fill": true, "keys": true, "values": true, "entries": true, "get": true,
+	"set": true, "has": true, "delete": true, "add": true, "clear": true, "then": true, "catch": true,
+	"finally": true, "toString": true, "trim": true, "replace": true, "replaceAll": true, "match": true,
+	"test": true, "startsWith": true, "endsWith": true, "toLowerCase": true, "toUpperCase": true,
+	"padStart": true, "padEnd": true, "toFixed": true, "on": true, "off": true, "emit": true, "once": true,
+	"addEventListener": true, "removeEventListener": true, "preventDefault": true, "stopPropagation": true,
+	"json": true, "text": true, "subscribe": true, "unsubscribe": true, "next": true, "error": true,
+	"complete": true, "pipe": true, "focus": true, "blur": true, "click": true, "querySelector": true,
+	"getItem": true, "setItem": true, "removeItem": true, "log": true, "warn": true, "info": true,
+	"debug": true, "call": true, "apply": true, "bind": true, "resolve": true, "reject": true, "all": true,
+	"put": true, "post": true, "patch": true, "request": true, "send": true, "close": true, "open": true,
+}
+
+// qualifiedSiteLangs resolve calls by shape + imports (sitesFromQualified).
+// Go keeps name rules refined by its type checker; C/C++ use clikeCallSites.
+var qualifiedSiteLangs = map[string]bool{"javascript": true, "typescript": true, "python": true, "java": true}
+
+// selfAsPlain turns self./this./cls. calls into unqualified ones, so they
+// resolve on the caller's own class first.
+func selfAsPlain(qcs []QualifiedCall) []QualifiedCall {
+	out := make([]QualifiedCall, 0, len(qcs))
+	for _, q := range qcs {
+		switch q.Qualifier {
+		case "self", "this", "cls", "super":
+			q.Qualifier = ""
+		}
+		out = append(out, q)
+	}
+	return out
+}
+
+// moduleInRepo says whether an import names the repo's own code: an absolute
+// Python import of one of its packages (mypkg.utils), or a JS/TS path alias
+// (@/utils, ~/store, src/api). Relative imports never reach here.
+func moduleInRepo(module string, dirs map[string]bool) bool {
+	m := module
+	for _, p := range []string{"@/", "~/", "#/", "./"} {
+		m = strings.TrimPrefix(m, p)
+	}
+	if !strings.Contains(m, "/") {
+		m = strings.ReplaceAll(m, ".", "/") // python dotted module
+	}
+	if m == "" {
+		return false
+	}
+	first := strings.SplitN(m, "/", 2)[0]
+	for d := range dirs {
+		if d == m || strings.HasSuffix(d, "/"+m) || strings.HasPrefix(d, m+"/") || strings.Contains(d, "/"+m+"/") {
+			return true
+		}
+		if d == first || strings.HasPrefix(d, first+"/") && first != "src" {
+			return true
+		}
+	}
+	return m != module && strings.HasPrefix(module, "@/") // an explicit repo alias with no matching dir yet
+}

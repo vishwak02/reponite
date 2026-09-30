@@ -22,7 +22,9 @@ const (
 	// indexed before stamping. Bump whenever resolution or extraction changes.
 	//   2: C/C++ call-site shapes (this->, obj., A::, std::) + out-of-class
 	//      definitions qualified by their class.
-	IndexVer = 2
+	//   3: JS/TS/Python/Java call shapes + import bindings (an imported
+	//      external name or a runtime global is never matched to repo code).
+	IndexVer = 3
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

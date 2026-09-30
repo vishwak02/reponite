@@ -74,6 +74,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		isTest     bool
 		symbolHash content.Hash
 		sigHash    content.Hash
+		imports    map[string]ImportBinding // the defining file's import bindings
 	}
 	var order []string              // qualified ids, first-seen order
 	byQID := map[string]computed{}  // qid -> facts
@@ -101,7 +102,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				order = append(order, qid)
 				byBase[s.Name] = append(byBase[s.Name], qid)
 			}
-			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id)}
+			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id), imports: byLocal}
 			if len(byLocal) > 0 {
 				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, byLocal)...)
 			}
@@ -133,6 +134,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 	}
 
+	dirs := map[string]bool{}
+	for _, c := range byQID {
+		dirs[c.pkg] = true
+	}
+	inRepo := func(module string) bool { return moduleInRepo(module, dirs) }
+
 	nodes := make([]Node, 0, len(order))
 	var edges []Edge
 	resolved := make(map[string][]query.Callee, len(order))
@@ -142,6 +149,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		var callees []query.Callee
 		if len(c.sym.CallSites) > 0 {
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
+		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
+			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo)
+			callees = resolveSiteEdgesLang(c.pkg, c.sym.Recv, c.lang, sites, x)
 		} else {
 			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, precise[qid])
 		}

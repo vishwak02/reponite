@@ -50,6 +50,11 @@ type LangRules struct {
 	// ScopedDefs qualifies an out-of-class definition by its declarator scope
 	// (C++ `void A::f()` -> receiver A).
 	ScopedDefs bool
+	// VarFuncDecl are declarators whose VALUE may be a function: JS/TS
+	// `const X = () => {}`, `const X = React.forwardRef((p, r) => ...)`, a class
+	// field `onClick = () => {}`. Modern React components are almost all this
+	// shape; without it they were not symbols at all.
+	VarFuncDecl []string
 }
 
 // languages is the registry consulted by RulesForExt.
@@ -113,24 +118,26 @@ var jsBuiltins = map[string]bool{"require": true, "Boolean": true, "Number": tru
 
 var JavaScriptRules = LangRules{
 	Name: "javascript", Exts: []string{".js", ".jsx", ".mjs", ".cjs"},
-	FuncDecl:   []string{"function_declaration", "generator_function_declaration"},
-	MethodDecl: []string{"method_definition"},
-	TypeDecl:   []string{"class_declaration"},
-	NameTypes:  []string{"identifier", "property_identifier"},
-	BodyTypes:  []string{"statement_block"},
-	CallTypes:  []string{"call_expression"},
-	Builtins:   jsBuiltins,
+	FuncDecl:    []string{"function_declaration", "generator_function_declaration"},
+	MethodDecl:  []string{"method_definition"},
+	TypeDecl:    []string{"class_declaration"},
+	NameTypes:   []string{"identifier", "property_identifier"},
+	BodyTypes:   []string{"statement_block"},
+	CallTypes:   []string{"call_expression"},
+	Builtins:    jsBuiltins,
+	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
 
 var TypeScriptRules = LangRules{
 	Name: "typescript", Exts: []string{".ts", ".tsx"},
-	FuncDecl:   []string{"function_declaration", "generator_function_declaration"},
-	MethodDecl: []string{"method_definition", "method_signature"},
-	TypeDecl:   []string{"class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
-	NameTypes:  []string{"identifier", "property_identifier", "type_identifier"},
-	BodyTypes:  []string{"statement_block"},
-	CallTypes:  []string{"call_expression"},
-	Builtins:   jsBuiltins,
+	FuncDecl:    []string{"function_declaration", "generator_function_declaration"},
+	MethodDecl:  []string{"method_definition", "method_signature"},
+	TypeDecl:    []string{"class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
+	NameTypes:   []string{"identifier", "property_identifier", "type_identifier"},
+	BodyTypes:   []string{"statement_block"},
+	CallTypes:   []string{"call_expression"},
+	Builtins:    jsBuiltins,
+	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
 
 var JavaRules = LangRules{

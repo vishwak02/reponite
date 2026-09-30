@@ -72,6 +72,12 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 				appendNamed(&out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing))
 			case containsStr(r.MethodDecl, t):
 				appendNamed(&out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing))
+			case containsStr(r.VarFuncDecl, t):
+				if s, ok := extractVarFunc(child, r, normVer, joinDoc(doc), enclosing); ok {
+					out = append(out, s)
+				} else {
+					walk(child, enclosing)
+				}
 			case containsStr(r.TypeDecl, t) && isTypeReference(child, r):
 				// A bare type reference (`struct Foo x;`, forward declaration) —
 				// not a definition; emit nothing, keep walking.
@@ -422,4 +428,74 @@ func withoutChildTypes(n content.AST, types []string) content.AST {
 		drop[t] = true
 	}
 	return filteredNode{AST: n, drop: drop}
+}
+
+var funcValueTypes = []string{"arrow_function", "function_expression", "function", "generator_function"}
+
+// varFunction returns the name bound by a declarator and the function it is
+// bound to, or a nil function when the value is not one. A call wrapping a
+// function (React.forwardRef(fn), memo(fn), styled(...)) binds that function.
+func varFunction(decl content.AST) (string, content.AST) {
+	name := ""
+	for _, c := range decl.Children() {
+		switch c.Type() {
+		case "identifier", "property_identifier", "private_property_identifier":
+			if name == "" {
+				name = c.Text()
+			}
+		}
+		if containsStr(funcValueTypes, c.Type()) {
+			return name, c
+		}
+		if c.Type() == "call_expression" {
+			for _, a := range c.Children() {
+				if a.Type() != "arguments" {
+					continue
+				}
+				for _, arg := range a.Children() {
+					if containsStr(funcValueTypes, arg.Type()) {
+						return name, arg
+					}
+				}
+			}
+		}
+	}
+	return name, nil
+}
+
+// extractVarFunc builds the symbol for `const X = () => ...` (see VarFuncDecl).
+// An expression-bodied arrow has no statement_block: the expression is its body.
+func extractVarFunc(decl content.AST, r LangRules, normVer int, doc []byte, enclosing string) (Symbol, bool) {
+	name, fn := varFunction(decl)
+	if fn == nil || name == "" {
+		return Symbol{}, false
+	}
+	body := firstChildAny(fn, r.BodyTypes)
+	if body == nil {
+		kids := fn.Children()
+		for i := len(kids) - 1; i >= 0; i-- {
+			if kids[i].IsNamed() && !strings.Contains(kids[i].Type(), "parameter") && kids[i].Type() != "type_annotation" {
+				body = kids[i]
+				break
+			}
+		}
+	}
+	s := Symbol{Name: name, Recv: enclosing, Kind: "function", Doc: doc}
+	if enclosing != "" {
+		s.Kind = "method"
+	}
+	drop := map[string]bool{}
+	for _, t := range r.BodyTypes {
+		drop[t] = true
+	}
+	if body != nil {
+		drop[body.Type()] = true
+		s.CanonBody = content.Canon(body, normVer)
+		// From the function node, not the body: an expression body that IS a
+		// call (`() => fetchMap()`) is not its own descendant.
+		s.Callees = calleesWithRules(fn, r)
+		s.QualifiedCalls = qualifiedCallsWithRules(fn, r)
+	}
+	s.Signature = name + "\x1f" + string(content.Canon(filteredNode{AST: fn, drop: drop}, normVer))
+	return s, true
 }
