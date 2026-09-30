@@ -463,18 +463,31 @@ func cmdVerifyEdit(args []string) {
 
 // cmdUsages lists every call site of a symbol (fleet-wide), each with its line
 // and whether it's a confirmed call-graph caller.
+// refFlags are the ref selectors shared by fleet-wide commands: one ref for
+// every repo (--ref), and per-repo pins for a deployed combination of versions
+// (--refs rr_sootballs=3.7.2,rr_gbc=ec4818b).
+type refFlags struct{ ref, pins string }
+
+func (r *refFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&r.ref, "ref", "HEAD", "ref to read in every repo")
+	fs.StringVar(&r.pins, "refs", "", "per-repo refs, repo=ref,... (overrides --ref for those repos)")
+}
+
 func cmdUsages(args []string) {
 	var local bool
-	pos := parseCmd("usages", "usages <symbol> [--local]", args, func(fs *flag.FlagSet) {
+	var rf refFlags
+	pos := parseCmd("usages", "usages <symbol> [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
+		rf.register(fs)
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite usages <symbol> [--local]"))
+		fail(fmt.Errorf("usage: reponite usages <symbol> [--ref R] [--refs repo=ref,...] [--local]"))
 	}
 	f := openFleet(local)
 	defer f.Close()
-	res := query.Usages(f, query.FleetRepo, "HEAD", pos[0])
-	res.Note = joinNote(res.Note, f.fleetNote())
+	s, cov := f.view(rf.ref, rf.pins)
+	res := query.Usages(s, query.FleetRepo, rf.ref, pos[0])
+	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.UsagesJSON(res))
 }
 
@@ -483,16 +496,19 @@ func cmdUsages(args []string) {
 // topic/service/action: who produces it and who consumes it.
 func cmdTopics(args []string) {
 	var local bool
-	pos := parseCmd("topics", "topics [name] [--local]", args, func(fs *flag.FlagSet) {
+	var rf refFlags
+	pos := parseCmd("topics", "topics [name] [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
+		rf.register(fs)
 	})
 	f := openFleet(local)
 	defer f.Close()
-	res := query.CommGraph(f, query.FleetRepo, "HEAD")
+	s, cov := f.view(rf.ref, rf.pins)
+	res := query.CommGraph(s, query.FleetRepo, rf.ref)
 	if len(pos) >= 1 {
-		res = query.Topic(f, query.FleetRepo, "HEAD", pos[0])
+		res = query.Topic(s, query.FleetRepo, rf.ref, pos[0])
 	}
-	res.Note = joinNote(res.Note, f.fleetNote())
+	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.TopicsJSON(res))
 }
 

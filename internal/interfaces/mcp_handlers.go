@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/storage"
 )
 
 // ToolServer answers reponite tool calls against a Store, scoped to one repo.
@@ -33,6 +34,29 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	ref := args["ref"]
 	if ref == "" {
 		ref = "HEAD"
+	}
+	// refs pins each repo to its own ref — the combination of versions a
+	// deployed system actually runs (storage.Pinned). Applied to this call only.
+	if p := args["refs"]; p != "" {
+		pins, err := storage.ParsePins(p)
+		if err != nil {
+			return "", err
+		}
+		cp := *t
+		cp.Store = &storage.Pinned{Inner: t.Store, Pins: pins}
+		t = &cp
+	}
+	// coverage names what a fleet-wide answer actually read, so "0 usages"
+	// can never stand in for "not indexed at that ref".
+	coverage := func() string {
+		read, missing := storage.Coverage(t.Store, ref)
+		switch {
+		case len(read) == 0:
+			return fmt.Sprintf("NOTHING READ: no repo is indexed at the requested ref (%v); pass ref or refs=repo=ref,...", missing)
+		case len(missing) > 0:
+			return fmt.Sprintf("read %v; not indexed at the requested ref, so not searched: %v", read, missing)
+		}
+		return fmt.Sprintf("read %v", read)
 	}
 	repo := args["repo"]
 	if repo == "" {
@@ -105,12 +129,22 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	case "reponite_ximpact":
 		return XImpactJSON(query.XImpact(t.Store, args["symbol"], args["ref"]))
 	case "reponite_usages":
-		return UsagesJSON(query.Usages(t.Store, discoverRepo, ref, args["symbol"]))
-	case "reponite_topics":
-		if topic := args["topic"]; topic != "" {
-			return TopicsJSON(query.Topic(t.Store, discoverRepo, ref, topic))
+		res := query.Usages(t.Store, discoverRepo, ref, args["symbol"])
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
 		}
-		return TopicsJSON(query.CommGraph(t.Store, discoverRepo, ref))
+		return UsagesJSON(res)
+	case "reponite_topics":
+		var res query.CommGraphResult
+		if topic := args["topic"]; topic != "" {
+			res = query.Topic(t.Store, discoverRepo, ref, topic)
+		} else {
+			res = query.CommGraph(t.Store, discoverRepo, ref)
+		}
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		return TopicsJSON(res)
 	case "reponite_verify_edit":
 		if t.ParseSymbols == nil {
 			return "", fmt.Errorf("verify_edit needs the tree-sitter build (make cli)")

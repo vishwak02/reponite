@@ -160,6 +160,46 @@ func (f *fleetStore) repoFor(symbol, ref string) string {
 	return ""
 }
 
+// view is the fleet read at ref, with any repo=ref pins applied, plus a note
+// naming what was actually read. A repo not indexed at its ref contributes
+// nothing to the answer; the note says so, so an empty result is never taken
+// for "no usages" when it means "not indexed".
+func (f *fleetStore) view(ref, pins string) (query.Store, string) {
+	var s query.Store = f.Store
+	if pins != "" {
+		p, err := storage.ParsePins(pins)
+		if err != nil {
+			fail(err)
+		}
+		for repo := range p {
+			if !containsName(f.Names, repo) {
+				fail(fmt.Errorf("--refs names %q, which is not in the fleet (%v)", repo, f.Names))
+			}
+		}
+		s = &storage.Pinned{Inner: f.Store, Pins: p}
+	}
+	read, missing := storage.Coverage(s, ref)
+	note := ""
+	switch {
+	case len(read) == 0:
+		note = fmt.Sprintf("NOTHING READ: no repo is indexed at the requested ref (%v) — index it (reponite index <dir> <ref> --git <rev>) or pass --ref / --refs repo=ref", missing)
+	case len(missing) > 0:
+		note = fmt.Sprintf("read %v; not indexed at the requested ref, so not searched: %v", read, missing)
+	default:
+		note = fmt.Sprintf("read %v", read)
+	}
+	return s, note
+}
+
+func containsName(names []string, n string) bool {
+	for _, x := range names {
+		if x == n {
+			return true
+		}
+	}
+	return false
+}
+
 // fleetNote describes the scope a fleet-wide command actually searched, so a
 // result is never mistaken for a narrower or wider one than it is.
 func (f *fleetStore) fleetNote() string {
