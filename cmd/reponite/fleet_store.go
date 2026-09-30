@@ -79,8 +79,21 @@ func openFleet(local bool) *fleetStore {
 	} else {
 		f.Store = storage.NewMultiStore(stores...)
 	}
+	// REPONITE_REFS pins repos to refs for every fleet-backed command (context,
+	// brief, blast-radius, search, grep, usages, topics, ...), so a caller that
+	// knows which versions a deployed system runs sets it once.
+	if pins := os.Getenv(refsEnv); pins != "" {
+		p, err := storage.ParsePins(pins)
+		if err != nil {
+			fail(fmt.Errorf("%s: %w", refsEnv, err))
+		}
+		f.Store = &storage.Pinned{Inner: f.Store, Pins: p}
+	}
 	return f
 }
+
+// refsEnv pins repos to refs fleet-wide: "repoA=ref1,repoB=ref2".
+const refsEnv = "REPONITE_REFS"
 
 // openPeers opens every registered repo EXCEPT the one at dir, as a read-only
 // view for index-time cross-repo lookups (§8B.3 contract capture). Returns an
