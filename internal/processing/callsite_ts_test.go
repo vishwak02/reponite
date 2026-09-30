@@ -9,7 +9,7 @@ import (
 	"github.com/vishwak02/reponite/internal/storage"
 )
 
-// A C++ repo shaped like the real regression: SootballsWorkSplitter::forgetWork
+// A C++ repo shaped like the real regression: a plugin's Splitter::forgetWork
 // called `it->second.erase(pos)` on a std::map value, and name-only resolution
 // pinned it on the only `erase` the repo defines — an unrelated class's method —
 // at name-resolved confidence. Call-site shape now decides.

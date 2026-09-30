@@ -476,16 +476,16 @@ func TestSQLiteAliasRefAndRefByCommit(t *testing.T) {
 	if _, ok := st.RefByCommit("r", "c0ffee", 3); ok {
 		t.Fatal("a different ruleset is not the same index")
 	}
-	if err := st.AliasRef("r", "3.7.2", "rr_io_amr@5.6.6"); err != nil {
+	if err := st.AliasRef("r", "3.7.2", "platform@5.6.6"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := st.SymbolAt("r", "pkg.A", "rr_io_amr@5.6.6"); !ok {
+	if _, ok := st.SymbolAt("r", "pkg.A", "platform@5.6.6"); !ok {
 		t.Fatal("alias must read the same symbols")
 	}
-	if fs := st.Files("r", "rr_io_amr@5.6.6"); len(fs) != 1 || len(fs[0].Symbols) != 1 {
+	if fs := st.Files("r", "platform@5.6.6"); len(fs) != 1 || len(fs[0].Symbols) != 1 {
 		t.Fatalf("alias files: %+v", fs)
 	}
-	if m, _ := st.Manifest("r", "rr_io_amr@5.6.6"); m.Commit != "c0ffee" {
+	if m, _ := st.Manifest("r", "platform@5.6.6"); m.Commit != "c0ffee" {
 		t.Fatalf("alias commit: %q", m.Commit)
 	}
 }

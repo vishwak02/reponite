@@ -10,7 +10,7 @@ import (
 )
 
 // Real misattributions from a React/redux-saga UI: `yield put(...)` (bound by
-// an import from redux-saga/effects) resolved to the repo's EtcdHelper.put, and
+// an import from redux-saga/effects) resolved to the repo's KVHelper.put, and
 // `console.error(...)` to a script's `error` function.
 func TestTSCallSiteResolution(t *testing.T) {
 	files := map[string]string{
@@ -23,7 +23,7 @@ export function* watchAgent() {
   items.map((x) => x);
   helper.onlyHere(1);
 }`,
-		"src/utils/etcd.ts": `export class EtcdHelper {
+		"src/utils/kv.ts": `export class KVHelper {
   put(k: string) { return this.get(k); }
   get(k: string) { return k; }
   map(k: string) { return k; }
@@ -39,17 +39,17 @@ export class Helper { onlyHere(n: number) { return n; } }`,
 	}
 	for name, c := range s {
 		switch {
-		case name == "src/utils.EtcdHelper.put" || name == "scripts.error":
+		case name == "src/utils.KVHelper.put" || name == "scripts.error":
 			t.Errorf("imported/global call pinned on repo code: %s %+v", name, c)
 		}
 	}
 	wantMethod(t, s, "redux-saga/effects::put", MethodExternal)
 	wantMethod(t, s, "console::error", MethodExternal)
 	wantMethod(t, s, "src/api.fetchMap", MethodResolved) // '@/api' is the repo's own alias
-	wantMethod(t, s, "map", MethodAmbiguous)             // builtin array member vs EtcdHelper.map
+	wantMethod(t, s, "map", MethodAmbiguous)             // builtin array member vs KVHelper.map
 	wantMethod(t, s, "src/utils.Helper.onlyHere", MethodMember)
 	// this.get() inside a class method: its own class.
-	wantMethod(t, edges["src/utils.EtcdHelper.put"], "src/utils.EtcdHelper.get", MethodResolved)
+	wantMethod(t, edges["src/utils.KVHelper.put"], "src/utils.KVHelper.get", MethodResolved)
 }
 
 func TestPythonCallSiteResolution(t *testing.T) {

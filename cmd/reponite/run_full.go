@@ -545,7 +545,7 @@ func cmdVerifyEdit(args []string) {
 // and whether it's a confirmed call-graph caller.
 // refFlags are the ref selectors shared by fleet-wide commands: one ref for
 // every repo (--ref), and per-repo pins for a deployed combination of versions
-// (--refs rr_sootballs=3.7.2,rr_gbc=ec4818b).
+// (--refs app=3.7.2,lib=ec4818b).
 type refFlags struct{ ref, pins string }
 
 func (r *refFlags) register(fs *flag.FlagSet) {

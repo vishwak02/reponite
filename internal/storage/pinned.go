@@ -1,6 +1,6 @@
 // pinned.go gives a fleet query one ref PER REPO. A deployed system is never
-// "every repo at HEAD": a site runs rr_sootballs at one tag, which pins
-// rr_io_amr at another, whose submodules sit at exact commits. A fleet-wide
+// "every repo at HEAD": an application runs at one tag, which pins its base
+// platform at another, whose submodules sit at exact commits. A fleet-wide
 // question (who calls this? who publishes that topic?) is only answered for
 // that system when each repo is read at its own ref. Pinned wraps any
 // query.Store and rewrites the ref of every per-repo call for pinned repos,

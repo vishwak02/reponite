@@ -5,14 +5,14 @@ package processing
 import "testing"
 
 func TestParseGitmodules(t *testing.T) {
-	got := parseGitmodules(`[submodule "rr_gbc"]
-	path = rr_gbc
-	url = git@github.com:org/rr_gbc.git
+	got := parseGitmodules(`[submodule "lib_core"]
+	path = lib_core
+	url = git@github.com:org/lib_core.git
 [submodule "deploy/manifests"]
-	path = deployment/rr_manifests
+	path = deployment/manifests
 	branch = main
 `)
-	if got["rr_gbc"] != "rr_gbc" || got["deployment/rr_manifests"] != "deploy/manifests" || len(got) != 2 {
+	if got["lib_core"] != "lib_core" || got["deployment/manifests"] != "deploy/manifests" || len(got) != 2 {
 		t.Fatalf("got %v", got)
 	}
 }
