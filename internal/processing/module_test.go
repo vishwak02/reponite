@@ -89,3 +89,26 @@ func TestPomArtifactOnly(t *testing.T) {
 		t.Fatalf("artifact-only pom must yield artifactId; got %q,%v", got, ok)
 	}
 }
+
+// A catkin workspace (many ROS packages side by side, none at the root) has no
+// single module: claiming one sibling's package name as the whole repo's
+// identity was wrong, and — chosen from a map — different on every run.
+func TestDetectModulePathMultiPackageWorkspace(t *testing.T) {
+	pkg := func(n string) []byte {
+		return []byte("<package format=\"2\"><name>" + n + "</name></package>")
+	}
+	files := map[string][]byte{
+		"alpha/package.xml": pkg("alpha"),
+		"beta/package.xml":  pkg("beta"),
+		"gamma/package.xml": pkg("gamma"),
+	}
+	for i := 0; i < 20; i++ {
+		if mod, ok := DetectModulePath(files); ok {
+			t.Fatalf("multi-package workspace claimed module %q", mod)
+		}
+	}
+	files["package.xml"] = pkg("root_pkg") // a root manifest does name the repo
+	if mod, ok := DetectModulePath(files); !ok || mod != "root_pkg" {
+		t.Fatalf("root manifest: got %q %v", mod, ok)
+	}
+}

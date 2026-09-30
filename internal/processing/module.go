@@ -34,19 +34,29 @@ func DetectModulePath(files map[string][]byte) (string, bool) {
 }
 
 // rootMost returns the content of the shallowest file whose base name is base.
+// Several copies at that same depth mean a multi-package workspace (a catkin
+// src/ of ROS packages, a pnpm packages/ dir): no single manifest names the
+// repo, so none is chosen. Picking one would claim a sibling package's name as
+// the whole repo's identity — and, taken from a map, a different one each run.
 func rootMost(files map[string][]byte, base string) ([]byte, bool) {
 	var bestContent []byte
-	bestDepth := -1
+	bestDepth, atBest := -1, 0
 	for path, content := range files {
 		if filepath.Base(path) != base {
 			continue
 		}
 		depth := strings.Count(filepath.ToSlash(path), "/")
-		if bestDepth == -1 || depth < bestDepth {
-			bestContent, bestDepth = content, depth
+		switch {
+		case bestDepth == -1 || depth < bestDepth:
+			bestContent, bestDepth, atBest = content, depth, 1
+		case depth == bestDepth:
+			atBest++
 		}
 	}
-	return bestContent, bestDepth != -1
+	if atBest != 1 {
+		return nil, false
+	}
+	return bestContent, true
 }
 
 func parseModule(base string, content []byte) (string, bool) {

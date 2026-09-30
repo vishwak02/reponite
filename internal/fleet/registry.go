@@ -147,8 +147,14 @@ func (r Registry) Remove(dirOrRepo string) (Registry, bool) {
 // entries that are stale (directory or index gone). Callers mount `live` and
 // must surface `stale` — a vanished repo is reported, never silently dropped.
 func (r Registry) Live(indexRelPath string) (live, stale []Entry) {
+	return r.LiveAt(func(dir string) string { return filepath.Join(dir, indexRelPath) })
+}
+
+// LiveAt is Live with the index location computed per repo directory — for an
+// index kept outside the repo (REPONITE_STORE_DIR).
+func (r Registry) LiveAt(indexPath func(dir string) string) (live, stale []Entry) {
 	for _, e := range r.Repos {
-		if _, err := os.Stat(filepath.Join(e.Dir, indexRelPath)); err == nil {
+		if _, err := os.Stat(indexPath(e.Dir)); err == nil {
 			live = append(live, e)
 		} else {
 			stale = append(stale, e)

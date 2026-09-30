@@ -60,7 +60,7 @@ func cmdFleet(args []string) {
 		if err != nil {
 			fail(err)
 		}
-		live, stale := reg.Live(dbRel)
+		live, stale := reg.LiveAt(dbPathFor)
 		if len(live) == 0 && len(stale) == 0 {
 			fmt.Printf("no repos registered (registry: %s)\nRun `reponite index <dir>` — indexing registers the repo automatically.\n", path)
 			return

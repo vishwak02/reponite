@@ -46,7 +46,7 @@ func fleetDirs() (dirs []string, stale []fleet.Entry, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	live, stale := reg.Live(dbRel)
+	live, stale := reg.LiveAt(dbPathFor)
 	return fleet.Dirs(live), stale, nil
 }
 

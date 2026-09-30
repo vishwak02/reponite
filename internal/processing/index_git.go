@@ -9,6 +9,7 @@ package processing
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -33,7 +34,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	}
 	h, err := r.ResolveRevision(plumbing.Revision(rev))
 	if err != nil {
-		return "", fmt.Errorf("resolve revision %q: %w", rev, err)
+		return "", fmt.Errorf("resolve revision %q: %w%s", rev, err, alternatesHint(repoDir))
 	}
 	commit, err := r.CommitObject(*h)
 	if err != nil {
@@ -118,7 +119,9 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	if err != nil {
 		return "", err
 	}
-	if err := IndexFiles(w, repo, ref, normVer, files); err != nil {
+	// Peers let index time capture each cross-repo reference's target contract
+	// (§8B.3 skew) — the same as a working-tree index, not silently "unknown".
+	if err := indexFiles(w, repo, ref, normVer, files, nil, opt.Peers); err != nil {
 		return "", err
 	}
 	if mod, ok := DetectModulePath(manifests); ok {
@@ -127,4 +130,16 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 		}
 	}
 	return h.String(), nil
+}
+
+// alternatesHint explains the one resolution failure that is not the user's
+// revision: a clone made with --shared/--reference keeps its objects in
+// another repository (objects/info/alternates), which go-git does not follow.
+func alternatesHint(repoDir string) string {
+	for _, p := range []string{filepath.Join(repoDir, ".git", "objects", "info", "alternates"), filepath.Join(repoDir, "objects", "info", "alternates")} {
+		if _, err := os.Stat(p); err == nil {
+			return " — this clone borrows its objects from another repository (" + p + "), which the git reader cannot follow; index that repository instead, or run `git repack -a -d` here"
+		}
+	}
+	return ""
 }
