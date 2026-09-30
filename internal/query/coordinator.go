@@ -86,13 +86,18 @@ func CompatSymbol(s Store, origin RepoRef, symbol string, targets []RepoRef) (Co
 // whose bare name matches, sorted. Lets a caller pass `Put` or
 // `internal/storage.Put`, and surfaces ambiguity rather than guessing silently.
 func ResolveSymbol(s Store, repo, ref, q string) []string {
-	syms := s.SymbolsAt(repo, ref)
+	return resolveIn(s.SymbolsAt(repo, ref), q)
+}
+
+func resolveIn(syms map[string]SymbolRef, q string) []string {
 	if _, ok := syms[q]; ok {
 		return []string{q}
 	}
+	// A partly qualified name (Class.method, dir.Class.method) matches every id
+	// ending in it on a "." boundary; a bare name matches by base name.
 	var out []string
 	for k := range syms {
-		if baseName(k) == q {
+		if baseName(k) == q || strings.HasSuffix(k, "."+q) {
 			out = append(out, k)
 		}
 	}
