@@ -9,6 +9,58 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Resolution, storage and multi-version indexing (devel)
+
+Driven by a benchmark of questions with known answers on real C++/ROS and
+TypeScript repos: who calls a method across repos, at the versions a
+deployment actually runs, and which tags carry a bug.
+
+#### Changed
+
+- **Call resolution uses the call's shape, not just its name.** C/C++:
+  `this->f()`/`f()` resolve on the caller's own class, `A::f()` on A,
+  `std::`/`boost::`/`ros::`… are external, and a member call on an object of
+  unknown type only targets a method — a standard-library member name
+  (`erase`, `insert`, `begin`…) stays *ambiguous* rather than being pinned on
+  the repo's same-named method at 0.9. A unique method match with an unproven
+  receiver is the new `member-name-resolved` (0.7). JS/TS/Python/Java also use
+  import bindings: a name imported from an external package, or a call on a
+  runtime global (`console`, `Math`, `JSON`, `os`, `System`…), is external;
+  imports of the repo's own code (absolute Python packages, `@/` aliases) still
+  resolve in-repo.
+- **Out-of-class C++ definitions (`void A::f()`) are qualified by their class**
+  — two classes' same-named methods in one directory no longer collapse.
+- **React components are symbols:** `const X = () => …`, `forwardRef`/`memo`
+  wrapped functions and class-field arrows (grep spans included).
+- **Storage format v2** (migrated in place on open): names interned, symbol
+  records, edge sets, span sets and external refs content-addressed and shared
+  across refs, file content deflated. On a mid-size C++ repo: 4 refs 46 MB →
+  11 MB; each further patch tag 0.4–1.7 MB (was ~10 MB); indexing ~20% faster.
+- A multi-package workspace (several manifests at the shallowest depth) no
+  longer claims one package's name as the repo's module identity.
+- Each ref records the extraction/resolution ruleset it was indexed under
+  (`IndexVer`); compat/diff/rootcause warn when compared refs disagree.
+
+#### Added
+
+- `--refs repo=ref,...` (CLI usages/topics; MCP usages, topics, grep, search,
+  ximpact, blast_radius, investigate, semsearch) and `REPONITE_REFS` for every
+  fleet command: read each repo at its own ref — the combination of versions a
+  deployed system runs. Fleet answers now say which repos were read and which
+  were not indexed at the requested ref, instead of returning a silent zero.
+- `index --git a,b,c`, `--tags GLOB`, `--submodules` (each submodule indexed at
+  the commit the revision pins, as `<parent>@<label>`), and resume: a commit
+  already indexed under the current ruleset is skipped, or aliased for a new
+  label (`AliasRef`) at a few KB.
+- `REPONITE_STORE_DIR` keeps indexes outside the repos, so `--git` indexing
+  only reads a clone.
+- Partly qualified symbols (`Class.method`) resolve on a `.` boundary.
+
+#### Fixed
+
+- `--git` indexing dropped the peer stores (cross-repo contract skew was always
+  "unknown"); a `--shared` clone failed with a bare "reference not found".
+
 A correctness pass over the whole tool, driven by dogfooding it against a real
 multi-repository robotics fleet, followed by the last of the deferred roadmap.
 
