@@ -139,11 +139,11 @@ func TestSQLiteDBStats(t *testing.T) {
 	if path != ":memory:" {
 		t.Fatalf("DBStats path = %q, want :memory:", path)
 	}
-	if tables["ref_history"] != 2 {
-		t.Fatalf("ref_history rows = %d, want 2 (%v)", tables["ref_history"], tables)
+	if tables["ref_syms"] != 2 {
+		t.Fatalf("ref_syms rows = %d, want 2 (%v)", tables["ref_syms"], tables)
 	}
-	if _, ok := tables["external_refs"]; !ok {
-		t.Fatal("DBStats must report every index table, including external_refs")
+	if _, ok := tables["ext_refs"]; !ok {
+		t.Fatal("DBStats must report every index table, including ext_refs")
 	}
 }
 
@@ -326,7 +326,7 @@ func TestSQLiteFileContentAddressedDedup(t *testing.T) {
 	}
 
 	var blobs int
-	if err := st.db.QueryRow(`SELECT COUNT(*) FROM file_blobs`).Scan(&blobs); err != nil {
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM blobs`).Scan(&blobs); err != nil {
 		t.Fatal(err)
 	}
 	if blobs != 2 {
@@ -338,5 +338,123 @@ func TestSQLiteFileContentAddressedDedup(t *testing.T) {
 	}
 	if fs := st.Files("r", "v3"); len(fs) != 1 || fs[0].Content != diff {
 		t.Fatalf("v3 files: %+v", fs)
+	}
+}
+
+// v2's point: a symbol unchanged between two refs is ONE stored record and
+// one edge set, however many refs list it; a changed one adds exactly one.
+func TestSQLiteSymbolRecordsDedupAcrossRefs(t *testing.T) {
+	st, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, ref := range []string{"v1", "v2", "v3"} {
+		st.Put("r", ref, "pkg.A", rec("a", "s", "b", 1, "pkg.B"))
+		st.Put("r", ref, "pkg.B", rec("b", "s", "b2", 1))
+	}
+	st.Put("r", "v3", "pkg.A", rec("a2", "s", "b3", 1, "pkg.B")) // A changed at v3
+	count := func(tbl string) (n int) {
+		st.db.QueryRow(`SELECT COUNT(*) FROM ` + tbl).Scan(&n)
+		return
+	}
+	if n := count("syms"); n != 3 {
+		t.Fatalf("syms = %d, want 3 (A, B, A@v3)", n)
+	}
+	if n := count("edge_sets"); n != 1 {
+		t.Fatalf("edge_sets = %d, want 1 (A's callee set is the same in every ref)", n)
+	}
+	if n := count("ref_syms"); n != 6 {
+		t.Fatalf("ref_syms = %d, want 6", n)
+	}
+	if got := st.Snapshot("r", "v3").Callees["pkg.A"]; len(got) != 1 || got[0].Name != "pkg.B" {
+		t.Fatalf("v3 callees: %+v", got)
+	}
+	// Reindexing a ref drops what only it referenced, and nothing shared.
+	if err := st.ClearRef("r", "v3"); err != nil {
+		t.Fatal(err)
+	}
+	if n := count("syms"); n != 2 {
+		t.Fatalf("after ClearRef v3: syms = %d, want 2 (A@v3 reclaimed, shared rows kept)", n)
+	}
+	if _, ok := st.SymbolAt("r", "pkg.A", "v1"); !ok {
+		t.Fatal("clearing v3 must not touch v1")
+	}
+}
+
+// A full v1 index (symbols, callees, files with spans, external refs,
+// monikers, ref commit + ruleset) reads back identically after migration.
+func TestSQLiteMigratesFullV1Index(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v1.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`
+CREATE TABLE refs (repo TEXT NOT NULL, ref TEXT NOT NULL, commit_hash TEXT, manifest_hash TEXT, index_ver INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (repo, ref));
+CREATE TABLE ref_history (repo TEXT NOT NULL, ref TEXT NOT NULL, name TEXT NOT NULL, present INTEGER NOT NULL DEFAULT 1,
+  symbol_hash TEXT, signature_hash TEXT, behavior_hash TEXT, behavior_conf REAL, direct_conf REAL NOT NULL DEFAULT 1,
+  lang TEXT NOT NULL DEFAULT '', is_test INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (repo, ref, name));
+CREATE TABLE callees (repo TEXT NOT NULL, ref TEXT NOT NULL, name TEXT NOT NULL, callee TEXT NOT NULL,
+  resolution_method TEXT NOT NULL DEFAULT '', confidence REAL NOT NULL DEFAULT 1, PRIMARY KEY (repo, ref, name, callee));
+CREATE TABLE file_blobs (hash TEXT PRIMARY KEY, content TEXT NOT NULL);
+CREATE TABLE ref_files (repo TEXT NOT NULL, ref TEXT NOT NULL, path TEXT NOT NULL, blob_hash TEXT NOT NULL, PRIMARY KEY (repo, ref, path));
+CREATE TABLE file_symbols (repo TEXT NOT NULL, ref TEXT NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL, start_line INTEGER, end_line INTEGER);
+CREATE TABLE symbol_monikers (repo TEXT NOT NULL, ref TEXT NOT NULL, symbol TEXT NOT NULL, moniker TEXT NOT NULL, PRIMARY KEY (repo, ref, symbol));
+INSERT INTO refs VALUES('r','3.7.2','abc123','',2);
+INSERT INTO ref_history VALUES('r','3.7.2','pkg.A',1,'sh','sig','bh',0.9,0.9,'cpp',0);
+INSERT INTO ref_history VALUES('r','3.7.2','pkg.B',1,'sh2','sig2','bh2',1,1,'cpp',1);
+INSERT INTO callees VALUES('r','3.7.2','pkg.A','pkg.B','name-resolved',0.9);
+INSERT INTO callees VALUES('r','3.7.2','pkg.A','std::sort','unresolved-external',0.6);
+INSERT INTO file_blobs VALUES('h1','void A() {}');
+INSERT INTO ref_files VALUES('r','3.7.2','pkg/a.cpp','h1');
+INSERT INTO file_symbols VALUES('r','3.7.2','pkg/a.cpp','A',1,1);
+INSERT INTO symbol_monikers VALUES('r','3.7.2','pkg.A','m-A');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.Close()
+
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if st.tableExists("ref_history") {
+		t.Fatal("v1 tables must be dropped after migration")
+	}
+	a, ok := st.SymbolAt("r", "pkg.A", "3.7.2")
+	if !ok || a.BehaviorHash != "bh" || a.Lang != "cpp" || a.BehaviorConf != 0.9 {
+		t.Fatalf("pkg.A: %+v %v", a, ok)
+	}
+	if b, _ := st.SymbolAt("r", "pkg.B", "3.7.2"); !b.IsTest {
+		t.Fatal("is_test must survive")
+	}
+	cs := st.Snapshot("r", "3.7.2").Callees["pkg.A"]
+	if len(cs) != 2 {
+		t.Fatalf("callees: %+v", cs)
+	}
+	fs := st.Files("r", "3.7.2")
+	if len(fs) != 1 || fs[0].Content != "void A() {}" || len(fs[0].Symbols) != 1 || fs[0].Symbols[0].Name != "A" {
+		t.Fatalf("files: %+v", fs)
+	}
+	if st.MonikersAt("r", "3.7.2")["pkg.A"] != "m-A" {
+		t.Fatal("monikers must survive")
+	}
+	if man, ok := st.Manifest("r", "3.7.2"); !ok || man.Commit != "abc123" {
+		t.Fatalf("commit: %+v", man)
+	}
+	if v, ok := st.IndexVersion("r", "3.7.2"); !ok || v != 2 {
+		t.Fatalf("index_ver: %d %v", v, ok)
+	}
+	// Reopening a migrated store is a no-op.
+	st.Close()
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	if len(st2.SymbolsAt("r", "3.7.2")) != 2 {
+		t.Fatal("reopen must keep the migrated data")
 	}
 }
