@@ -165,3 +165,128 @@ func resolveImportedCall(qc QualifiedCall, byLocal map[string]ImportBinding) (mo
 	}
 	return "", "", false
 }
+
+// MethodMember: a member call (obj.f(), p->f()) on an object whose type is not
+// known here, matched to the one class in the repo defining a method f. Likely
+// but unproven — the object's type was never checked — so it sits below
+// name-resolved and above an opaque external leaf.
+const (
+	MethodMember = "member-name-resolved"
+	ConfMember   = 0.7
+)
+
+// siteIndex is what call-site resolution needs about a ref's symbols.
+type siteIndex struct {
+	nodeSet   map[string]bool
+	byBase    map[string][]string // bare name -> qids
+	byRecv    map[string][]string // "Recv.name" -> qids (methods and scoped definitions)
+	methods   map[string][]string // bare name -> qids that are methods (have a receiver)
+	pkgOfQID  map[string]string   // qid -> package (directory)
+	precise   map[string]string   // base -> type-proven qid (Go only; nil here)
+	callerPkg string
+}
+
+// siteKindRank orders a name's call-site kinds when one function calls the same
+// name several ways: the most specific claim about the target wins.
+var siteKindRank = map[CallKind]int{CallSelf: 0, CallPlain: 1, CallScoped: 2, CallMember: 3}
+
+// resolveSiteEdges resolves C/C++ call sites by their shape (callsite.go):
+//   - this->f() / f() inside a method of A: A's own f first (same class);
+//   - A::f(): the definition scoped to A; std::/boost::/ros::… are external;
+//   - obj.f(): only a METHOD can be the target, and a standard-library member
+//     name on an object of unknown type is never pinned on the repo's method.
+//
+// Everything else falls back to the name rules of resolveEdges.
+func resolveSiteEdges(callerPkg, callerRecv string, sites []CallSite, x siteIndex) []query.Callee {
+	best := map[string]CallSite{}
+	var order []string
+	for _, s := range sites {
+		cur, ok := best[s.Name]
+		if !ok {
+			order = append(order, s.Name)
+		}
+		if !ok || siteKindRank[s.Kind] < siteKindRank[cur.Kind] {
+			best[s.Name] = s
+		}
+	}
+	x.callerPkg = callerPkg
+	out := make([]query.Callee, 0, len(order))
+	seen := map[string]bool{}
+	add := func(c query.Callee) {
+		if !seen[c.Name] {
+			seen[c.Name] = true
+			out = append(out, c)
+		}
+	}
+	for _, name := range order {
+		s := best[name]
+		switch s.Kind {
+		case CallSelf, CallPlain:
+			if callerRecv != "" {
+				if q, ok := pickOne(x.byRecv[callerRecv+"."+name], x); ok {
+					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+					continue
+				}
+			}
+			if s.Kind == CallSelf {
+				// this->f() with no f on the caller's own class: inherited, so
+				// the target is a base class method — which one is unproven.
+				add(memberCallee(name, x))
+				continue
+			}
+			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
+		case CallScoped:
+			if externalScopes[s.Root] {
+				add(query.Callee{Name: s.Root + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+				continue
+			}
+			if q, ok := pickOne(x.byRecv[s.Scope+"."+name], x); ok {
+				add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				continue
+			}
+			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
+		case CallMember:
+			add(memberCallee(name, x))
+		}
+	}
+	return out
+}
+
+// memberCallee resolves obj.name() with the object's type unknown.
+func memberCallee(name string, x siteIndex) query.Callee {
+	cands := x.methods[name]
+	switch {
+	case len(cands) == 0:
+		// Only a method can be a member call's target, and no repo class has one:
+		// a library type's member (or a function pointer field).
+		return query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
+	case stdMembers[name]:
+		// The repo defines it, but so does every standard container: which one
+		// this object is cannot be told without its type.
+		return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
+	case len(cands) == 1:
+		return query.Callee{Name: cands[0], ResolutionMethod: MethodMember, Confidence: ConfMember}
+	}
+	return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
+}
+
+// pickOne chooses among a (Recv, name)'s definitions: the only one, else the
+// one in the caller's own package; several elsewhere stay unresolved.
+func pickOne(cands []string, x siteIndex) (string, bool) {
+	switch len(cands) {
+	case 0:
+		return "", false
+	case 1:
+		return cands[0], true
+	}
+	var local []string
+	for _, q := range cands {
+		if x.pkgOfQID[q] == x.callerPkg {
+			local = append(local, q)
+		}
+	}
+	if len(local) == 1 {
+		return local[0], true
+	}
+	return "", false
+}

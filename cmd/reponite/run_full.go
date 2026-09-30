@@ -154,11 +154,17 @@ func cmdIndex(args []string) {
 		if err := st.AddRef(repo, ref, commit, ""); err != nil {
 			fail(err)
 		}
+		if err := st.SetIndexVersion(repo, ref, version.IndexVer); err != nil {
+			fail(err)
+		}
 		registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
 		fmt.Printf("indexed %s@%s (git %s @ %s)%s — refs now: %v\n", repo, ref, gitRev, shortHash(commit), moduleNote(st, repo), st.Refs(repo))
 		return
 	}
 	if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
+		fail(err)
+	}
+	if err := st.SetIndexVersion(repo, ref, version.IndexVer); err != nil {
 		fail(err)
 	}
 	registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)

@@ -53,6 +53,14 @@ func (m *MultiStore) Repos() []string {
 	return out
 }
 
+// IndexVersion routes to the owning store when it records index rulesets.
+func (m *MultiStore) IndexVersion(repo, ref string) (int, bool) {
+	if iv, ok := m.owner[repo].(query.IndexVersioner); ok {
+		return iv.IndexVersion(repo, ref)
+	}
+	return 0, false
+}
+
 func (m *MultiStore) Refs(repo string) []string {
 	if s := m.owner[repo]; s != nil {
 		return s.Refs(repo)

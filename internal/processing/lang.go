@@ -44,6 +44,12 @@ type LangRules struct {
 	ScopeDecl    []string // node types that scope nested methods by their own name without
 	// emitting a symbol themselves (e.g. a Rust `impl T { ... }` block qualifies its fns by T).
 	Builtins map[string]bool
+	// CallSiteKinds keeps each call site's shape (plain / this-> / obj. / A::)
+	// for resolution (callsite.go) instead of the bare name alone.
+	CallSiteKinds bool
+	// ScopedDefs qualifies an out-of-class definition by its declarator scope
+	// (C++ `void A::f()` -> receiver A).
+	ScopedDefs bool
 }
 
 // languages is the registry consulted by RulesForExt.
@@ -163,6 +169,7 @@ var CRules = LangRules{
 	TypeDeclNeedsBody: []string{"struct_specifier", "union_specifier", "enum_specifier"},
 	TypeDeclBody:      []string{"field_declaration_list", "enumerator_list"},
 	Builtins:          cBuiltins,
+	CallSiteKinds:     true,
 }
 
 // CppRules extends C with classes and namespaced/qualified definitions. The same
@@ -187,6 +194,8 @@ var CppRules = LangRules{
 	TypeDeclNeedsBody: []string{"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"},
 	TypeDeclBody:      []string{"field_declaration_list", "enumerator_list"},
 	Builtins:          cBuiltins,
+	CallSiteKinds:     true,
+	ScopedDefs:        true,
 }
 
 // RustRules extracts functions, structs/enums/unions/traits/type-aliases, and

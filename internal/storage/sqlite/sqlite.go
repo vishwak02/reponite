@@ -154,6 +154,9 @@ func (s *Store) migrate() error {
 		`ALTER TABLE external_refs ADD COLUMN target_symbol TEXT NOT NULL DEFAULT ''`,
 		`CREATE TABLE IF NOT EXISTS symbol_monikers (repo TEXT NOT NULL, ref TEXT NOT NULL, symbol TEXT NOT NULL, moniker TEXT NOT NULL, PRIMARY KEY (repo, ref, symbol))`,
 		`CREATE INDEX IF NOT EXISTS idx_extref_symbol ON external_refs(target_symbol)`,
+		// The extraction/resolution ruleset a ref was indexed under (0 = before
+		// stamping), so comparisons across rulesets are flagged, not trusted.
+		`ALTER TABLE refs ADD COLUMN index_ver INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return err
@@ -180,6 +183,23 @@ func (s *Store) AddRef(repo, ref, commit, manifestHash string) error {
 		 ON CONFLICT(repo, ref) DO UPDATE SET commit_hash=excluded.commit_hash, manifest_hash=excluded.manifest_hash`,
 		repo, ref, commit, manifestHash)
 	return err
+}
+
+// SetIndexVersion stamps the ruleset a ref was indexed under.
+func (s *Store) SetIndexVersion(repo, ref string, v int) error {
+	_, err := s.db.Exec(
+		`INSERT INTO refs(repo, ref, index_ver) VALUES(?,?,?)
+		 ON CONFLICT(repo, ref) DO UPDATE SET index_ver=excluded.index_ver`, repo, ref, v)
+	return err
+}
+
+// IndexVersion reports the ruleset a ref was indexed under (query.IndexVersioner).
+func (s *Store) IndexVersion(repo, ref string) (int, bool) {
+	var v int
+	if err := s.db.QueryRow(`SELECT index_ver FROM refs WHERE repo=? AND ref=?`, repo, ref).Scan(&v); err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // ClearRef drops a ref's symbols, callee edges, and file references so a reindex

@@ -120,8 +120,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	}
 
 	nodeSet := make(map[string]bool, len(order))
+	x := siteIndex{nodeSet: nodeSet, byBase: byBase, byRecv: map[string][]string{},
+		methods: map[string][]string{}, pkgOfQID: map[string]string{}}
 	for _, qid := range order {
 		nodeSet[qid] = true
+		c := byQID[qid]
+		x.pkgOfQID[qid] = c.pkg
+		if c.sym.Recv != "" && c.sym.Kind != "type" {
+			key := c.sym.Recv + "." + c.sym.Name
+			x.byRecv[key] = append(x.byRecv[key], qid)
+			x.methods[c.sym.Name] = append(x.methods[c.sym.Name], qid)
+		}
 	}
 
 	nodes := make([]Node, 0, len(order))
@@ -130,7 +139,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	for _, qid := range order {
 		c := byQID[qid]
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
-		callees := resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, precise[qid])
+		var callees []query.Callee
+		if len(c.sym.CallSites) > 0 {
+			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
+		} else {
+			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, precise[qid])
+		}
 		resolved[qid] = callees
 		for _, ce := range callees {
 			edges = append(edges, Edge{From: qid, To: ce.Name, Confidence: ce.Confidence})

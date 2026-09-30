@@ -27,6 +27,9 @@ type Symbol struct {
 	// cross-repo dependencies against import bindings (external_refs, §8B); the
 	// behavior graph still keys off Callees, so this never perturbs any hash.
 	QualifiedCalls []QualifiedCall
+	// CallSites keeps each call's shape for languages with CallSiteKinds
+	// (C/C++): resolution uses it instead of the bare names (callsite.go).
+	CallSites []CallSite
 }
 
 // QualifiedCall is one call site reduced to the two identifiers that matter for
@@ -116,10 +119,14 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	var canonBody []byte
 	var callees []string
 	var qcalls []QualifiedCall
+	var sites []CallSite
 	if body := firstChildAny(fn, r.BodyTypes); body != nil {
 		canonBody = content.Canon(body, normVer)
 		callees = calleesWithRules(body, r)
 		qcalls = qualifiedCallsWithRules(body, r)
+		if r.CallSiteKinds {
+			sites = clikeCallSites(body, r)
+		}
 	}
 	recv := ""
 	if kind == "method" {
@@ -127,6 +134,9 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	}
 	if recv == "" {
 		recv = enclosing // class-based languages: qualify by the enclosing class
+	}
+	if recv == "" && r.ScopedDefs {
+		recv = declScope(fn, r) // out-of-class C++ definition: void A::f()
 	}
 	return Symbol{
 		Name:           nameOf(fn, r),
@@ -137,6 +147,7 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		Doc:            doc,
 		Callees:        callees,
 		QualifiedCalls: qcalls,
+		CallSites:      sites,
 	}
 }
 

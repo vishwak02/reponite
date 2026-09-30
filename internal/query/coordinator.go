@@ -52,6 +52,9 @@ func CompatSymbol(s Store, origin RepoRef, symbol string, targets []RepoRef) (Co
 		if !found && !refIndexed(s, t.Repo, t.Ref) {
 			warns = append(warns, fmt.Sprintf("%s@%s not indexed", t.Repo, t.Ref))
 		}
+		if w := indexVerWarning(s, origin, t); w != "" {
+			warns = append(warns, w)
+		}
 		ts = append(ts, Target{Repo: t.Repo, Ref: t.Ref, Snapshot: snap})
 	}
 	verdicts := CompatAcross(o, ts)
@@ -124,6 +127,9 @@ func DiffRefsBy(s Store, repo, from, to string, opt DiffOptions) DiffReport {
 	if !refIndexed(s, repo, to) {
 		warns = append(warns, to+" not indexed")
 	}
+	if w := indexVerWarning(s, RepoRef{Repo: repo, Ref: from}, RepoRef{Repo: repo, Ref: to}); w != "" {
+		warns = append(warns, w)
+	}
 	return DiffReport{
 		Repo: repo, From: from, To: to,
 		Changes: FilterChanges(DiffRefs(s.SymbolsAt(repo, from), s.SymbolsAt(repo, to)), opt),
@@ -142,6 +148,9 @@ func RootCauseBy(s Store, repo, target, from, to string) RootCauseResult {
 	res := RootCause(name, s.Snapshot(repo, from), s.Snapshot(repo, to))
 	if len(names) > 1 {
 		res.Note = strings.TrimSpace(res.Note + " (ambiguous target; used " + name + ")")
+	}
+	if w := indexVerWarning(s, RepoRef{Repo: repo, Ref: from}, RepoRef{Repo: repo, Ref: to}); w != "" {
+		res.Note = strings.TrimSpace(res.Note + " " + w)
 	}
 	return res
 }
@@ -339,6 +348,28 @@ func UnindexedRefs(s Store, repo string, refs ...string) []string {
 // unindexed ref yields an empty comparison, which reads exactly like "nothing
 // changed" and is the most dangerous way for this tool to be wrong.
 func RefIndexed(s Store, repo, ref string) bool { return refIndexed(s, repo, ref) }
+
+// IndexVersioner is implemented by stores that record the ruleset each ref
+// was indexed under (version.IndexVer).
+type IndexVersioner interface {
+	IndexVersion(repo, ref string) (int, bool)
+}
+
+// indexVerWarning explains a comparison across rulesets: identical code can
+// hash differently because the edges were resolved by different rules.
+func indexVerWarning(s Store, a, b RepoRef) string {
+	iv, ok := s.(IndexVersioner)
+	if !ok {
+		return ""
+	}
+	va, oka := iv.IndexVersion(a.Repo, a.Ref)
+	vb, okb := iv.IndexVersion(b.Repo, b.Ref)
+	if !oka || !okb || va == vb {
+		return ""
+	}
+	return fmt.Sprintf("%s@%s was indexed with ruleset v%d and %s@%s with v%d — edges were resolved by different rules, so a behavior difference may be the indexer, not the code; reindex both with the same reponite",
+		a.Repo, a.Ref, va, b.Repo, b.Ref, vb)
+}
 
 func refIndexed(s Store, repo, ref string) bool {
 	for _, r := range s.Refs(repo) {

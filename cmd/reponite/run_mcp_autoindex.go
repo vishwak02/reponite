@@ -39,6 +39,7 @@ func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
 		if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
 			fmt.Fprintln(os.Stderr, "reponite: auto-index failed:", err)
 		}
+		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
 		return
 	}
 	go func() {
@@ -46,6 +47,7 @@ func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
 			fmt.Fprintln(os.Stderr, "reponite: background refresh failed:", err)
 			return
 		}
+		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
 		fmt.Fprintf(os.Stderr, "reponite: refreshed %s@HEAD on mount\n", repo)
 	}()
 }

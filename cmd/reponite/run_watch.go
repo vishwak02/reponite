@@ -37,6 +37,7 @@ func watchCommand(args []string) {
 			fmt.Fprintln(os.Stderr, "reindex error:", err)
 			return
 		}
+		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
 		fmt.Printf("reindexed %s@HEAD\n", repo)
 	}
 	reindex() // initial
