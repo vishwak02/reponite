@@ -17,6 +17,7 @@ type CalleeEdge struct {
 	Name             string
 	ResolutionMethod string
 	Confidence       float64
+	Repo             string // set when the target is in another repo (cross-repo dispatch)
 }
 
 // ContextResult is the direct neighborhood of a symbol in the call graph.
@@ -40,6 +41,8 @@ type ContextResult struct {
 type CallerEdge struct {
 	Name   string
 	IsTest bool
+	Repo   string // set when the caller is in another repo
+	Via    string // the base-class method it calls (cross-repo dispatch)
 }
 
 // Context computes the direct callers and callees of symbol at a ref. Test entry

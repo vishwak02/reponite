@@ -46,6 +46,105 @@ var (
 	cppExts   = map[string]bool{".h": true, ".hh": true, ".hpp": true, ".hxx": true, ".cc": true, ".cpp": true, ".cxx": true}
 )
 
+// classGraph is the fleet's C++ class heads at a ref.
+type classGraph struct {
+	derived map[string][]classDecl // base name -> classes naming it directly
+	byName  map[string][]classDecl // class name -> its declarations (with bases)
+	plugins map[string]bool        // classes registered as plugins
+	syms    map[string]map[string]SymbolRef
+}
+
+func scanClasses(s Store, repos []string, ref string) *classGraph {
+	g := &classGraph{derived: map[string][]classDecl{}, byName: map[string][]classDecl{}, plugins: map[string]bool{},
+		syms: map[string]map[string]SymbolRef{}}
+	for _, rp := range repos {
+		for _, f := range s.Files(rp, ref) {
+			if !cppExts[strings.ToLower(filepath.Ext(f.Path))] || !strings.Contains(f.Content, ":") {
+				continue
+			}
+			src := stripCppComments(f.Content)
+			for _, m := range classHead.FindAllStringSubmatchIndex(src, -1) {
+				d := classDecl{repo: rp, path: f.Path, line: 1 + strings.Count(src[:m[0]], "\n"), name: src[m[2]:m[3]]}
+				d.bases = splitBases(src[m[4]:m[5]])
+				g.byName[d.name] = append(g.byName[d.name], d)
+				for _, b := range d.bases {
+					g.derived[b] = append(g.derived[b], d)
+				}
+			}
+			for _, m := range pluginReg.FindAllStringSubmatch(src, -1) {
+				g.plugins[lastSeg(m[1])] = true
+			}
+		}
+	}
+	return g
+}
+
+// descendants are the classes deriving (transitively) from base.
+func (g *classGraph) descendants(base string) []classDecl {
+	var out []classDecl
+	seen := map[string]bool{base: true}
+	queue := []string{base}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, d := range g.derived[cur] {
+			key := d.repo + "\x00" + d.name
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			out = append(out, d)
+			if !seen[d.name] {
+				seen[d.name] = true
+				queue = append(queue, d.name)
+			}
+		}
+	}
+	return out
+}
+
+// ancestors are every base class of cls, transitively, nearest first.
+func (g *classGraph) ancestors(cls string) []string {
+	var out []string
+	seen := map[string]bool{cls: true}
+	queue := []string{cls}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, d := range g.byName[cur] {
+			for _, b := range d.bases {
+				if !seen[b] {
+					seen[b] = true
+					out = append(out, b)
+					queue = append(queue, b)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// defOf is class's own definition of method in repo (a symbol id), or "".
+func (g *classGraph) defOf(s Store, ref, repo, class, method string) string {
+	m, ok := g.syms[repo]
+	if !ok {
+		m = s.SymbolsAt(repo, ref)
+		g.syms[repo] = m
+	}
+	suffix := "." + class + "." + method
+	var hits []string
+	for id := range m {
+		if strings.HasSuffix(id, suffix) || id == class+"."+method {
+			hits = append(hits, id)
+		}
+	}
+	sort.Strings(hits)
+	if len(hits) == 0 {
+		return ""
+	}
+	return hits[0]
+}
+
 type classDecl struct {
 	repo, path string
 	line       int
@@ -65,52 +164,14 @@ func Impls(s Store, repo, ref, target string, limit int) ImplsResult {
 		res.Note = "no class named"
 		return res
 	}
-	derived := map[string][]classDecl{} // base name -> classes naming it directly
-	plugins := map[string]bool{}        // class names registered as plugins
 	repos := reposFor(s, repo)
-	for _, rp := range repos {
-		for _, f := range s.Files(rp, ref) {
-			if !cppExts[strings.ToLower(filepath.Ext(f.Path))] {
-				continue
-			}
-			src := stripCppComments(f.Content)
-			for _, m := range classHead.FindAllStringSubmatchIndex(src, -1) {
-				d := classDecl{repo: rp, path: f.Path, line: 1 + strings.Count(src[:m[0]], "\n"), name: src[m[2]:m[3]]}
-				d.bases = splitBases(src[m[4]:m[5]])
-				for _, b := range d.bases {
-					derived[b] = append(derived[b], d)
-				}
-			}
-			for _, m := range pluginReg.FindAllStringSubmatch(src, -1) {
-				plugins[lastSeg(m[1])] = true
-			}
-		}
-	}
-	syms := map[string]map[string]SymbolRef{}
-	symsOf := func(rp string) map[string]SymbolRef {
-		if m, ok := syms[rp]; ok {
-			return m
-		}
-		m := s.SymbolsAt(rp, ref)
-		syms[rp] = m
-		return m
-	}
+	g := scanClasses(s, repos, ref)
+	derived, plugins := g.derived, g.plugins
 	defOf := func(rp, class string) string {
 		if method == "" {
 			return ""
 		}
-		suffix := "." + class + "." + method
-		var hits []string
-		for id := range symsOf(rp) {
-			if strings.HasSuffix(id, suffix) || id == class+"."+method {
-				hits = append(hits, id)
-			}
-		}
-		sort.Strings(hits)
-		if len(hits) == 0 {
-			return ""
-		}
-		return hits[0]
+		return g.defOf(s, ref, rp, class, method)
 	}
 	if method != "" {
 		for _, rp := range repos {

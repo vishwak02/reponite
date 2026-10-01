@@ -143,6 +143,8 @@ func ServeStdio(ts *ToolServer) error {
 	add(mcp.NewTool("reponite_routes",
 		mcp.WithDescription("HTTP edges the call graph CAN'T see: which frontend/client call reaches which backend route, across repos. Reads server routes (Django path/re_path/url composed through include() prefixes and DRF routers, FastAPI/Flask decorators with router prefixes, Express, Go net/http, gin/echo/chi) and client calls (fetch, axios or any client object's get/post/…, requests, httpx), resolving URLs built from literals, template strings, f-strings, concatenation and named URL constants, then pairs them by path and method. With `path`: only that endpoint's routes and callers. Use to go from a UI action to the view that serves it, or from a view to every UI that calls it. Medium confidence (base URLs, proxies and gateway rewrites are not resolved; stated in the result)."),
 		mcp.WithString("path", mcp.Description("focus on routes/calls whose path contains this (default: the whole map)")),
+		mcp.WithString("gateway", mcp.Description("reverse-proxy gateway config file(s), Caddy JSON, comma-separated — requests are followed through each mount to the repo behind it")),
+		mcp.WithString("upstream", mcp.Description("which repo serves a gateway upstream, host:port=repo,... (default: matched by name)")),
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
 		mcp.WithString("ref", mcp.Description("default HEAD")),

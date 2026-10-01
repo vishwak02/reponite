@@ -111,7 +111,7 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		if len(query.ResolveSymbol(t.Store, repo, ref, args["symbol"])) == 0 {
 			return notFound("symbol", args["symbol"])
 		}
-		return ContextJSON(query.Context(t.Store, repo, ref, args["symbol"], includeTests))
+		return ContextJSON(query.WithCrossRepoDispatch(t.Store, repo, ref, query.Context(t.Store, repo, ref, args["symbol"], includeTests), includeTests))
 	case "reponite_diff":
 		min, _ := strconv.ParseFloat(args["confidence_min"], 64)
 		opt := query.DiffOptions{ChangedOnly: args["changed_only"] == "true", Package: args["package"], MinConfidence: min}
@@ -150,7 +150,11 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return ImplsJSON(res)
 	case "reponite_routes":
 		limit, _ := strconv.Atoi(args["limit"])
-		res := query.Routes(t.Store, discoverRepo, ref, args["path"], limit)
+		opt, err := LoadGateways(args["gateway"], args["upstream"])
+		if err != nil {
+			return "", err
+		}
+		res := query.RoutesWith(t.Store, discoverRepo, ref, args["path"], limit, opt)
 		if discoverRepo == query.FleetRepo {
 			res.Note = res.Note + " — " + coverage()
 		}

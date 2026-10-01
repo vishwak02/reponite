@@ -6,11 +6,14 @@ type calleeEdgeDTO struct {
 	Name             string  `json:"name"`
 	ResolutionMethod string  `json:"resolution_method"`
 	Confidence       float64 `json:"confidence"`
+	Repo             string  `json:"repo,omitempty"`
 }
 
 type callerEdgeDTO struct {
 	Name   string `json:"name"`
 	IsTest bool   `json:"is_test"`
+	Repo   string `json:"repo,omitempty"`
+	Via    string `json:"via,omitempty"`
 }
 
 type contextDTO struct {
@@ -31,11 +34,11 @@ type contextDTO struct {
 func ContextJSON(r query.ContextResult) (string, error) {
 	edges := make([]calleeEdgeDTO, 0, len(r.CalleeEdges))
 	for _, e := range r.CalleeEdges {
-		edges = append(edges, calleeEdgeDTO{Name: e.Name, ResolutionMethod: e.ResolutionMethod, Confidence: e.Confidence})
+		edges = append(edges, calleeEdgeDTO{Name: e.Name, ResolutionMethod: e.ResolutionMethod, Confidence: e.Confidence, Repo: e.Repo})
 	}
 	callerEdges := make([]callerEdgeDTO, 0, len(r.CallerEdges))
 	for _, c := range r.CallerEdges {
-		callerEdges = append(callerEdges, callerEdgeDTO{Name: c.Name, IsTest: c.IsTest})
+		callerEdges = append(callerEdges, callerEdgeDTO{Name: c.Name, IsTest: c.IsTest, Repo: c.Repo, Via: c.Via})
 	}
 	return marshal(contextDTO{
 		Symbol: r.Symbol, Ref: r.Ref, Callers: r.Callers, Callees: r.Callees,

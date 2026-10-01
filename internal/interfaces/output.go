@@ -5,8 +5,11 @@ package interfaces
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/vishwak02/reponite/internal/query"
 )
@@ -779,6 +782,7 @@ type clientCallDTO struct {
 	In     string `json:"in,omitempty"`
 	Method string `json:"method"`
 	URL    string `json:"url"`
+	Via    string `json:"via_gateway,omitempty"`
 	Text   string `json:"text"`
 	Warn   string `json:"warning,omitempty"`
 }
@@ -788,8 +792,15 @@ type routeLinkDTO struct {
 	Clients []clientCallDTO `json:"clients"`
 }
 
+type gatewayDTO struct {
+	Prefix string   `json:"prefix"`
+	Dial   string   `json:"upstream"`
+	Repos  []string `json:"repos,omitempty"`
+}
+
 type routesDTO struct {
 	Filter    string          `json:"filter,omitempty"`
+	Gateway   []gatewayDTO    `json:"gateway,omitempty"`
 	Routes    int             `json:"routes_found"`
 	Clients   int             `json:"client_calls_found"`
 	Links     []routeLinkDTO  `json:"links"`
@@ -799,7 +810,7 @@ type routesDTO struct {
 }
 
 func clientDTO(c query.ClientCall) clientCallDTO {
-	return clientCallDTO{Repo: c.Repo, Path: c.Path, Line: c.Line, In: c.In, Method: c.Method, URL: c.URL, Text: c.Text, Warn: c.Warning}
+	return clientCallDTO{Repo: c.Repo, Path: c.Path, Line: c.Line, In: c.In, Method: c.Method, URL: c.URL, Via: c.Via, Text: c.Text, Warn: c.Warning}
 }
 
 // RoutesJSON renders the HTTP client↔route map.
@@ -817,5 +828,37 @@ func RoutesJSON(r query.RoutesResult) (string, error) {
 	for _, c := range r.Unmatched {
 		dto.Unmatched = append(dto.Unmatched, clientDTO(c))
 	}
+	for _, g := range r.Gateway {
+		dto.Gateway = append(dto.Gateway, gatewayDTO{Prefix: g.Prefix, Dial: g.Dial, Repos: g.Repos})
+	}
 	return marshal(dto)
+}
+
+// LoadGateways reads Caddy JSON gateway configs (comma-separated paths) and an
+// upstream=repo mapping into routes options.
+func LoadGateways(paths, upstreams string) (query.RoutesOptions, error) {
+	var opt query.RoutesOptions
+	for _, p := range strings.Split(paths, ",") {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return opt, err
+		}
+		m, err := query.ParseCaddyJSON(b, p)
+		if err != nil {
+			return opt, fmt.Errorf("gateway %s: %w (Caddy JSON expected; `caddy adapt` converts a Caddyfile/YAML)", p, err)
+		}
+		opt.Gateways = append(opt.Gateways, m...)
+	}
+	for _, kv := range strings.Split(upstreams, ",") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(kv), "="); ok && k != "" && v != "" {
+			if opt.Upstreams == nil {
+				opt.Upstreams = map[string]string{}
+			}
+			opt.Upstreams[k] = v
+		}
+	}
+	return opt, nil
 }

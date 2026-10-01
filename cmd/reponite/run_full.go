@@ -625,12 +625,19 @@ func cmdImpls(args []string) {
 func cmdRoutes(args []string) {
 	var local bool
 	var limit int
+	var gateways, upstreams string
 	var rf refFlags
-	pos := parseCmd("routes", "routes [path substring] [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+	pos := parseCmd("routes", "routes [path substring] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 50, "max routes")
+		fs.StringVar(&gateways, "gateway", "", "reverse-proxy gateway config(s) in Caddy JSON, comma-separated: follow each request through its mount")
+		fs.StringVar(&upstreams, "upstream", "", "which repo serves a gateway upstream, host:port=repo,... (default: matched by name)")
 		rf.register(fs)
 	})
+	opt, err := interfaces.LoadGateways(gateways, upstreams)
+	if err != nil {
+		fail(err)
+	}
 	filter := ""
 	if len(pos) > 0 {
 		filter = pos[0]
@@ -638,7 +645,7 @@ func cmdRoutes(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.Routes(s, query.FleetRepo, rf.ref, filter, limit)
+	res := query.RoutesWith(s, query.FleetRepo, rf.ref, filter, limit, opt)
 	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.RoutesJSON(res))
 }
@@ -727,7 +734,9 @@ func cmdContext(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	ref := arg(pos, 1, "HEAD")
-	printJSON(interfaces.ContextJSON(query.Context(f, f.repoFor(pos[0], ref), ref, pos[0], tests)))
+	repo := f.repoFor(pos[0], ref)
+	res := query.Context(f, repo, ref, pos[0], tests)
+	printJSON(interfaces.ContextJSON(query.WithCrossRepoDispatch(f, repo, ref, res, tests)))
 }
 
 func cmdRefs(args []string) {

@@ -38,6 +38,22 @@ which frontend call reaches which backend view.
   URL constants. A client URL malformed as written (a stray brace from a
   template-literal typo) is flagged.
 
+- **Cross-repo virtual dispatch in `context`**: a call through a base class
+  also lists each override in another repo (`xrepo-override`, 0.6), and an
+  override lists the callers in other repos that reach it through one of its
+  bases (`xrepo-base-call`, with `via` naming the base method). Each repo is
+  indexed alone, so these hops — a platform calling a plugin interface whose
+  implementation another repo loads at runtime — were invisible from both
+  sides. Mocks are excluded unless `--tests`.
+- **`routes --gateway <caddy.json>`** follows each request through a reverse
+  proxy: a mount (`/svc*` → `localhost:8003`) is bound to the indexed repo
+  whose name carries the mount's words (or `--upstream host:port=repo`), a
+  client is matched by the mount its path, the upstream it dials, or its
+  client object goes through, and only against the routes of the repo behind
+  it (`via_gateway` in the output). Hosted upstreams bind no repo; on a tie
+  without a gateway hop, a client's own service wins. Minified bundles are
+  skipped as clients.
+
 #### Changed
 
 - **C++ member calls are resolved by the receiver's declared type**

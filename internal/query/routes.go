@@ -36,6 +36,9 @@ type ClientCall struct {
 	In         string
 	Method     string
 	URL        string // as resolved, placeholders as {}
+	Raw        string // as resolved before normalization (scheme/host kept)
+	Recv       string // the client object (ims, this.http, requests)
+	Via        string // the gateway mount it goes through ("/ims → localhost:8002 (sootballs_ims)")
 	Text       string
 	// Warning: the URL is malformed as written (a stray brace from a
 	// template-literal typo is sent literally: "/operations/}42/errors/").
@@ -52,9 +55,10 @@ type RouteLink struct {
 type RoutesResult struct {
 	Filter    string
 	Links     []RouteLink
-	Unmatched []ClientCall // client calls (matching the filter) no indexed route serves
-	Routes    int          // total routes found
-	Clients   int          // total client calls found
+	Unmatched []ClientCall   // client calls (matching the filter) no indexed route serves
+	Gateway   []GatewayMount // the gateway mounts used, with the repos bound to them
+	Routes    int            // total routes found
+	Clients   int            // total client calls found
 	Note      string
 	Meta      Meta
 }
@@ -80,9 +84,22 @@ var (
 	placeholder  = regexp.MustCompile(`\$\{[^}]*\}|\{[^}]*\}|<[^>]*>|\(\?P<[^>]*>[^)]*\)|\([^)]*\)|\[[^\]]*\][+*]?|\\[dw][+*]?|\.[+*]`)
 )
 
+// RoutesOptions are the gateway hops between clients and servers.
+type RoutesOptions struct {
+	Gateways  []GatewayMount    // from ParseCaddyJSON
+	Upstreams map[string]string // explicit upstream dial -> repo ("localhost:8003=wms")
+}
+
 // Routes maps HTTP clients to routes fleet-wide at ref. filter (optional)
 // keeps routes and calls whose path contains it; limit 0 = 50 links.
 func Routes(s Store, repo, ref, filter string, limit int) RoutesResult {
+	return RoutesWith(s, repo, ref, filter, limit, RoutesOptions{})
+}
+
+// RoutesWith is Routes through a gateway: a client whose URL (or client
+// object) goes through a gateway mount is matched only against the routes of
+// the repo behind that mount, with the mount's prefix removed.
+func RoutesWith(s Store, repo, ref, filter string, limit int, opt RoutesOptions) RoutesResult {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -107,6 +124,8 @@ func Routes(s Store, repo, ref, filter string, limit int) RoutesResult {
 		}
 	}
 	res.Routes, res.Clients = len(routes), len(clients)
+	mounts := bindMounts(append([]GatewayMount(nil), opt.Gateways...), reposFor(s, repo), opt.Upstreams)
+	res.Gateway = mounts
 	norm := strings.Trim(normURL(filter), "/")
 	keep := func(p string) bool { return norm == "" || strings.Contains(strings.Trim(normURL(p), "/"), norm) }
 
@@ -117,7 +136,22 @@ func Routes(s Store, repo, ref, filter string, limit int) RoutesResult {
 	for _, c := range clients {
 		best, idx := 0, []int(nil)
 		cs := segments(c.URL)
+		var only map[string]bool
+		if m, path, ok := viaGateway(mounts, c.Raw, c.Recv); ok {
+			c.Via = m.Prefix + " → " + m.Dial
+			if len(m.Repos) > 0 {
+				c.Via += " (" + strings.Join(m.Repos, ", ") + ")"
+				only = map[string]bool{}
+				for _, r := range m.Repos {
+					only[r] = true
+				}
+				cs = segments(path)
+			}
+		}
 		for i, r := range routes {
+			if only != nil && !only[r.Repo] {
+				continue
+			}
 			if c.Method != "" && r.Method != "*" && r.Method != "" && !strings.EqualFold(c.Method, r.Method) && !strings.EqualFold(c.Method, "request") {
 				continue
 			}
@@ -127,6 +161,20 @@ func Routes(s Store, repo, ref, filter string, limit int) RoutesResult {
 				best, idx = sc, []int{i}
 			case sc == best && sc > 0:
 				idx = append(idx, i)
+			}
+		}
+		if len(idx) > 1 && only == nil {
+			// A tie across services with no gateway hop to decide it: a client
+			// calling its own service's route (a test client, a self-call) means
+			// that one.
+			var own []int
+			for _, i := range idx {
+				if routes[i].Repo == c.Repo {
+					own = append(own, i)
+				}
+			}
+			if len(own) > 0 {
+				idx = own
 			}
 		}
 		if best == 0 {
@@ -727,6 +775,9 @@ func urlConstants(files []File) map[string]string {
 	out := map[string]string{}
 	bad := map[string]bool{}
 	put := func(k, v string) {
+		if len(k) < 3 {
+			return // minified code's one-letter bindings are not URL constants
+		}
 		if old, ok := out[k]; ok && old != v {
 			bad[k] = true
 		}
@@ -735,6 +786,9 @@ func urlConstants(files []File) map[string]string {
 	for _, f := range files {
 		switch codeExts[strings.ToLower(filepath.Ext(f.Path))] {
 		case "js":
+			if minified(f) {
+				continue
+			}
 			// A key inside `const API_URLS = { … }` is also known as
 			// API_URLS.KEY, which tells two same-named keys apart.
 			obj := ""
@@ -769,7 +823,20 @@ var nonClientRecv = map[string]bool{"Map": true, "map": true, "dict": true, "os.
 	"request.POST": true, "self.request.GET": true, "params": true, "headers": true, "searchParams": true, "cache": true,
 	"localStorage": true, "sessionStorage": true, "config": true, "settings": true}
 
+// minified: bundled/minified JavaScript — one-letter names and kilobyte
+// lines whose `x.get(s)` calls are not HTTP.
+func minified(f File) bool {
+	if strings.Contains(f.Path, ".min.") {
+		return true
+	}
+	lines := strings.Count(f.Content, "\n") + 1
+	return len(f.Content)/lines > 200
+}
+
 func clientCalls(repo string, f File, lang string, consts map[string]string) []ClientCall {
+	if lang == "js" && minified(f) {
+		return nil
+	}
 	var out []ClientCall
 	lines := strings.Split(f.Content, "\n")
 	for i, ln := range lines {
@@ -780,7 +847,7 @@ func clientCalls(repo string, f File, lang string, consts map[string]string) []C
 		if lang == "js" && expressRoute.MatchString(ln) && strings.Contains(ln, "req") {
 			continue
 		}
-		method, arg := "", ""
+		method, arg, recv := "", "", ""
 		if lang == "js" {
 			if m := jsFetch.FindStringSubmatch(ln); m != nil {
 				method, arg = "GET", m[1]
@@ -800,13 +867,14 @@ func clientCalls(repo string, f File, lang string, consts map[string]string) []C
 			if m == nil || nonClientRecv[m[1]] || strings.HasSuffix(m[1], "Map") {
 				continue
 			}
-			method, arg = strings.ToUpper(m[2]), m[3]
+			method, arg, recv = strings.ToUpper(m[2]), m[3], m[1]
 		}
-		u := resolveURL(firstArg(arg), lang, consts)
-		if u == "" {
+		raw := resolveURL(firstArg(arg), lang, consts)
+		if raw == "" {
 			continue
 		}
-		c := ClientCall{Repo: repo, Path: f.Path, Line: i + 1, In: enclosing(f.Symbols, i+1), Method: method, URL: u, Text: t}
+		u := normURL(raw)
+		c := ClientCall{Repo: repo, Path: f.Path, Line: i + 1, In: enclosing(f.Symbols, i+1), Method: method, URL: u, Raw: raw, Recv: recv, Text: t}
 		if strings.ContainsAny(strings.ReplaceAll(u, "{}", ""), "{}") {
 			c.Warning = "stray brace in the URL as written — it is sent literally, so the request path is not the one intended"
 		}
@@ -849,8 +917,9 @@ func firstArg(s string) string {
 }
 
 // resolveURL evaluates a URL expression made of literals, template literals,
-// f-strings, `+` concatenation and named constants; "" unless the result is
-// path-like (holds a '/' and a literal segment).
+// f-strings, `+` concatenation and named constants, placeholders as {} and
+// scheme/host kept; "" unless the result is path-like (holds a '/' and a
+// literal segment).
 func resolveURL(expr, lang string, consts map[string]string) string {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
@@ -887,7 +956,7 @@ func resolveURL(expr, lang string, consts map[string]string) string {
 	}
 	for _, s := range segments(u) {
 		if !wild(s) {
-			return normURL(u)
+			return placeholder.ReplaceAllString(u, "{}")
 		}
 	}
 	return ""
