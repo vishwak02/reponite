@@ -177,18 +177,36 @@ const (
 
 // siteIndex is what call-site resolution needs about a ref's symbols.
 type siteIndex struct {
-	nodeSet   map[string]bool
-	byBase    map[string][]string // bare name -> qids
-	byRecv    map[string][]string // "Recv.name" -> qids (methods and scoped definitions)
-	methods   map[string][]string // bare name -> qids that are methods (have a receiver)
-	pkgOfQID  map[string]string   // qid -> package (directory)
-	precise   map[string]string   // base -> type-proven qid (Go only; nil here)
-	callerPkg string
+	nodeSet    map[string]bool
+	byBase     map[string][]string // bare name -> qids
+	byRecv     map[string][]string // "Recv.name" -> qids (methods and scoped definitions)
+	methods    map[string][]string // bare name -> qids that are methods (have a receiver)
+	pkgOfQID   map[string]string   // qid -> package (directory)
+	isTest     map[string]bool     // qid -> defined in test code
+	precise    map[string]string   // base -> type-proven qid (Go only; nil here)
+	types      *typeTable          // C++ classes/fields/bases (nil: none in the ref)
+	callerPkg  string
+	callerTest bool
 }
+
+// MethodTyped: a member call resolved on the receiver's DECLARED type (its
+// parameter, local or member-field declaration), following base classes. The
+// class is read from a declaration, not proven by a compiler — overloads,
+// templates and macros are not modeled — so it sits below go-types and
+// name-resolved-in-own-class, above a member-name guess.
+// MethodOverride: a subclass's override of the method a call reaches through
+// a base-class receiver — a possible runtime target (virtual dispatch), one
+// edge per override.
+const (
+	MethodTyped    = "receiver-typed"
+	ConfTyped      = 0.85
+	MethodOverride = "virtual-override"
+	ConfOverride   = 0.6
+)
 
 // siteKindRank orders a name's call-site kinds when one function calls the same
 // name several ways: the most specific claim about the target wins.
-var siteKindRank = map[CallKind]int{CallSelf: 0, CallPlain: 1, CallScoped: 2, CallExternal: 3, CallMember: 4}
+var siteKindRank = map[CallKind]int{CallTyped: 0, CallSelf: 0, CallPlain: 1, CallScoped: 2, CallExternal: 3, CallMember: 4}
 
 // resolveSiteEdges resolves C/C++ call sites by their shape (callsite.go):
 //   - this->f() / f() inside a method of A: A's own f first (same class);
@@ -205,31 +223,57 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	best := map[string]CallSite{}
 	var order []string
 	for _, s := range sites {
-		cur, ok := best[s.Name]
+		s = typeSite(s, callerRecv, x)
+		key := s.Name
+		if s.Kind == CallTyped {
+			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
+		}
+		cur, ok := best[key]
 		if !ok {
-			order = append(order, s.Name)
+			order = append(order, key)
 		}
 		if !ok || siteKindRank[s.Kind] < siteKindRank[cur.Kind] {
-			best[s.Name] = s
+			best[key] = s
 		}
 	}
 	x.callerPkg = callerPkg
 	out := make([]query.Callee, 0, len(order))
-	seen := map[string]bool{}
+	seen := map[string]int{} // callee -> index in out
 	add := func(c query.Callee) {
-		if !seen[c.Name] {
-			seen[c.Name] = true
+		i, ok := seen[c.Name]
+		if !ok {
+			seen[c.Name] = len(out)
 			out = append(out, c)
+			return
+		}
+		if c.Confidence > out[i].Confidence {
+			out[i] = c // one call typed, another not: the typed claim stands
 		}
 	}
-	for _, name := range order {
-		s := best[name]
+	for _, key := range order {
+		s := best[key]
+		name := s.Name
 		switch s.Kind {
+		case CallTyped:
+			for _, c := range typedCallees(s.Scope, name, lang, x) {
+				add(c)
+			}
 		case CallSelf, CallPlain:
 			if callerRecv != "" {
 				if q, ok := pickOne(x.byRecv[callerRecv+"."+name], x); ok {
 					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+					for _, o := range overrides(callerRecv, name, x) {
+						add(o) // this->f() in a base: a subclass's f may run instead
+					}
 					continue
+				}
+				if x.types != nil && x.types.classes[callerRecv] != nil {
+					if cs := typedCallees(callerRecv, name, lang, x); len(cs) > 0 && cs[0].ResolutionMethod != MethodExternal {
+						for _, c := range cs {
+							add(c) // inherited from a repo base class
+						}
+						continue
+					}
 				}
 			}
 			if s.Kind == CallSelf {
@@ -258,6 +302,63 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	return out
 }
 
+// typeSite turns an untyped member site into a typed one when its receiver's
+// class is known: a parameter/local's declared type, or a field declared on
+// the caller's class or one of its bases.
+func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
+	if s.Kind != CallMember || x.types == nil {
+		return s
+	}
+	t := x.types.eval(s.Recv, callerRecv)
+	if t == "" {
+		return s
+	}
+	if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "pair[") {
+		t = "std::container" // a container's own member: size, insert, push_back, …
+	}
+	if strings.Contains(t, "::") || x.types.classes[t] != nil {
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t}
+	}
+	return s // a type the ref does not define (template parameter, using-imported library type)
+}
+
+// typedCallees resolves cls.name(): the definition on cls or its nearest base
+// that has one, plus every subclass override. A class in an external
+// namespace, or a repo class whose lineage defines no such method (a library
+// base's member), is an external leaf named cls::name.
+func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
+	if strings.Contains(cls, "::") {
+		return []query.Callee{{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}}
+	}
+	var out []query.Callee
+	for _, c := range x.types.lineage(cls) {
+		if q, ok := pickOne(x.byRecv[c+"."+name], x); ok {
+			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
+			break
+		}
+	}
+	out = append(out, overrides(cls, name, x)...)
+	if len(out) == 0 {
+		out = append(out, query.Callee{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+	}
+	return out
+}
+
+// overrides are the definitions of name on classes deriving from cls.
+func overrides(cls, name string, x siteIndex) []query.Callee {
+	if x.types == nil {
+		return nil
+	}
+	var out []query.Callee
+	for _, d := range x.types.descendants(cls) {
+		if q, ok := pickOne(x.byRecv[d+"."+name], x); ok && (x.callerTest || !x.isTest[q]) {
+			// A mock's override is a target only for test code.
+			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
+		}
+	}
+	return out
+}
+
 // memberCalleeLang resolves obj.name() with the object's type unknown.
 func memberCalleeLang(name, lang string, x siteIndex) query.Callee {
 	cands := x.methods[name]
@@ -270,10 +371,34 @@ func memberCalleeLang(name, lang string, x siteIndex) query.Callee {
 		// The repo defines it, but so does every standard container: which one
 		// this object is cannot be told without its type.
 		return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
+	case len(cands) == 1 && x.isTest[cands[0]] && !x.callerTest:
+		// Production code never calls into a test file; the one same-named
+		// method there (a mock's toJson) says nothing about this object.
+		return query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
 	case len(cands) == 1:
 		return query.Callee{Name: cands[0], ResolutionMethod: MethodMember, Confidence: ConfMember}
 	}
 	return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
+}
+
+// testish: test code, test-support packages (a directory named *test*,
+// e.g. test_commons) and mock/fake/stub classes — what production code never
+// calls, for member-name guessing.
+func testish(isTest bool, pkg, recv string) bool {
+	if isTest {
+		return true
+	}
+	for _, seg := range strings.Split(pkg, "/") {
+		if strings.Contains(strings.ToLower(seg), "test") {
+			return true
+		}
+	}
+	for _, p := range []string{"Mock", "Fake", "Stub"} {
+		if strings.HasPrefix(recv, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // pickOne chooses among a (Recv, name)'s definitions: the only one, else the

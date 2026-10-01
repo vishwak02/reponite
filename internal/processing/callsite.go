@@ -27,12 +27,21 @@ const (
 type CallSite struct {
 	Name  string
 	Kind  CallKind
-	Scope string // CallScoped: the immediate scope (A in ns::A::f)
+	Scope string // CallScoped: the immediate scope (A in ns::A::f); CallTyped: the receiver's class
 	Root  string // CallScoped: the outermost scope (ns in ns::A::f) — std, boost, ros, ...
+	// Recv is a CallMember receiver's expression (cpptypes.go recvExpr),
+	// typed at index time once every file's class facts are known.
+	Recv string
 }
 
-// clikeCallSites returns the deduped call sites in a C/C++ body.
-func clikeCallSites(body content.AST, r LangRules) []CallSite {
+// CallTyped: a member call whose receiver's declared type is known (a
+// parameter, local, or member field) — resolved on that class, its bases, and
+// the overrides of its subclasses.
+const CallTyped CallKind = "typed"
+
+// clikeCallSites returns the deduped call sites in a C/C++ body; vars (may be
+// nil) are the function's parameter and local types.
+func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []CallSite {
 	seen := map[CallSite]bool{}
 	var out []CallSite
 	for _, call := range descendantsAny(body, r.CallTypes) {
@@ -41,6 +50,11 @@ func clikeCallSites(body content.AST, r LangRules) []CallSite {
 			continue
 		}
 		cs, ok := classifyCallee(kids[0], r)
+		if ok && cs.Kind == CallMember && r.Name == "cpp" {
+			if k := kids[0].Children(); len(k) > 0 {
+				cs.Recv = recvExpr(k[0], vars)
+			}
+		}
 		if !ok || cs.Name == "" || r.Builtins[cs.Name] || seen[cs] {
 			continue
 		}
@@ -156,7 +170,7 @@ func scopeName(n content.AST) string {
 // "Cls". Without it every out-of-class method lost its class, so two classes'
 // `init()` in one directory collapsed onto one id.
 func declScope(fn content.AST, r LangRules) string {
-	d := firstChildAny(fn, r.DeclNameIn)
+	d := declaratorOf(fn, r)
 	if d == nil {
 		return ""
 	}

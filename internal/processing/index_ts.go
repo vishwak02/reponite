@@ -101,8 +101,8 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		files = append(files, ParsedFile{
 			Path: rel, Content: string(src), Lang: rules.Name,
 			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
-			IsTest: IsTestPath(rel),
-			SCIP:   scipFor(scipIdx, scipLocal, rel, spans),
+			IsTest: IsTestPath(rel), Types: CppTypeFacts(root, rules),
+			SCIP: scipFor(scipIdx, scipLocal, rel, spans),
 		})
 		return nil
 	})
@@ -147,12 +147,13 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 // (.yaml, .tf) still costs nothing. ok=false means "skip this file".
 func readSource(path string) (src []byte, rules LangRules, ext string, ok bool) {
 	ext = filepath.Ext(path)
-	if rules, ok = RulesForExt(ext); ok {
+	if _, ok = RulesForExt(ext); ok {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return nil, rules, ext, false
 		}
-		return b, rules, ext, true
+		rules, ext, ok = RulesForSource(ext, b)
+		return b, rules, ext, ok
 	}
 	if ext != "" {
 		return nil, rules, ext, false // an unsupported extension, not a script
@@ -229,11 +230,11 @@ func loadIgnore(dir string, excludes []string) *Ignore {
 // an old-vs-new parse of the same file yields comparable signature hashes.
 // Returns nil for an unsupported/unparseable extension.
 func ParseEditedSymbols(path, src string, normVer int) []query.EditedSymbol {
-	rules, ok := RulesForExt(filepath.Ext(path))
+	rules, ext, ok := RulesForSource(filepath.Ext(path), []byte(src))
 	if !ok {
 		return nil
 	}
-	root, _, err := parseFileRules([]byte(src), filepath.Ext(path), rules)
+	root, _, err := parseFileRules([]byte(src), ext, rules)
 	if err != nil || root == nil {
 		return nil
 	}

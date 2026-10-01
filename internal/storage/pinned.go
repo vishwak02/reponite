@@ -41,6 +41,9 @@ func ParsePins(s string) (map[string]string, error) {
 	return out, nil
 }
 
+// RefFor is the ref repo is read at when a query names ref (query.RefPinner).
+func (p *Pinned) RefFor(repo, ref string) string { return p.at(repo, ref) }
+
 func (p *Pinned) at(repo, ref string) string {
 	if r, ok := p.Pins[repo]; ok {
 		return r

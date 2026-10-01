@@ -87,11 +87,14 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			return nil
 		}
 		ext := filepath.Ext(f.Name)
-		rules, ok := RulesForExt(ext)
+		if _, known := RulesForExt(ext); !known && ext != "" {
+			return nil // an unsupported extension: never read its blob
+		}
 		src, err := f.Contents()
 		if err != nil {
 			return err
 		}
+		rules, ext, ok := RulesForSource(ext, []byte(src))
 		if !ok {
 			// Extension-less files fall back to their shebang (CLI entry points).
 			if ext != "" {
@@ -116,6 +119,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 		files = append(files, ParsedFile{
 			Path: f.Name, Content: src, Lang: rules.Name, IsTest: IsTestPath(f.Name),
 			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
+			Types: CppTypeFacts(root, rules),
 		})
 		return nil
 	})

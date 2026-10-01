@@ -698,3 +698,124 @@ func SearchJSON(hits []query.SearchHit) (string, error) {
 	}
 	return marshal(out)
 }
+
+type logSiteDTO struct {
+	Repo    string `json:"repo,omitempty"`
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	In      string `json:"in,omitempty"`
+	Call    string `json:"call,omitempty"`
+	Format  string `json:"format"`
+	Text    string `json:"text"`
+	Fixed   int    `json:"fixed_chars_matched"`
+	Logging bool   `json:"logging_call"`
+	InPkg   bool   `json:"in_logger_package,omitempty"`
+}
+
+type logSitesDTO struct {
+	Line  string       `json:"line"`
+	Sites []logSiteDTO `json:"sites"`
+	Note  string       `json:"note,omitempty"`
+	Meta  metaDTO      `json:"_meta"`
+}
+
+// LogSitesJSON renders the code locations that print a log line.
+func LogSitesJSON(r query.LogSitesResult) (string, error) {
+	dto := logSitesDTO{Line: r.Line, Note: r.Note, Sites: make([]logSiteDTO, 0, len(r.Sites)),
+		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings}}
+	for _, x := range r.Sites {
+		dto.Sites = append(dto.Sites, logSiteDTO{Repo: x.Repo, Path: x.Path, Line: x.Line, In: x.In, Call: x.Call,
+			Format: x.Format, Text: x.Text, Fixed: x.Fixed, Logging: x.Logging, InPkg: x.InPackage})
+	}
+	return marshal(dto)
+}
+
+type implDTO struct {
+	Repo   string   `json:"repo,omitempty"`
+	Path   string   `json:"path"`
+	Line   int      `json:"line"`
+	Class  string   `json:"class"`
+	Bases  []string `json:"bases"`
+	Depth  int      `json:"depth"`
+	Plugin bool     `json:"plugin,omitempty"`
+	Method string   `json:"method_def,omitempty"`
+	Test   bool     `json:"test,omitempty"`
+}
+
+type implsDTO struct {
+	Base     string    `json:"base"`
+	Method   string    `json:"method,omitempty"`
+	BaseDefs []string  `json:"base_defs,omitempty"`
+	Impls    []implDTO `json:"impls"`
+	Note     string    `json:"note,omitempty"`
+	Meta     metaDTO   `json:"_meta"`
+}
+
+// ImplsJSON renders a base class's implementations.
+func ImplsJSON(r query.ImplsResult) (string, error) {
+	dto := implsDTO{Base: r.Base, Method: r.Method, BaseDefs: r.BaseDefs, Note: r.Note, Impls: make([]implDTO, 0, len(r.Impls)),
+		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings}}
+	for _, x := range r.Impls {
+		dto.Impls = append(dto.Impls, implDTO{Repo: x.Repo, Path: x.Path, Line: x.Line, Class: x.Class, Bases: x.Bases,
+			Depth: x.Depth, Plugin: x.Plugin, Method: x.Method, Test: x.Test})
+	}
+	return marshal(dto)
+}
+
+type routeDTO struct {
+	Repo      string `json:"repo,omitempty"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+	Method    string `json:"method"`
+	Pattern   string `json:"pattern"`
+	Handler   string `json:"handler,omitempty"`
+	Framework string `json:"framework"`
+}
+
+type clientCallDTO struct {
+	Repo   string `json:"repo,omitempty"`
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	In     string `json:"in,omitempty"`
+	Method string `json:"method"`
+	URL    string `json:"url"`
+	Text   string `json:"text"`
+	Warn   string `json:"warning,omitempty"`
+}
+
+type routeLinkDTO struct {
+	Route   routeDTO        `json:"route"`
+	Clients []clientCallDTO `json:"clients"`
+}
+
+type routesDTO struct {
+	Filter    string          `json:"filter,omitempty"`
+	Routes    int             `json:"routes_found"`
+	Clients   int             `json:"client_calls_found"`
+	Links     []routeLinkDTO  `json:"links"`
+	Unmatched []clientCallDTO `json:"unmatched_clients,omitempty"`
+	Note      string          `json:"note,omitempty"`
+	Meta      metaDTO         `json:"_meta"`
+}
+
+func clientDTO(c query.ClientCall) clientCallDTO {
+	return clientCallDTO{Repo: c.Repo, Path: c.Path, Line: c.Line, In: c.In, Method: c.Method, URL: c.URL, Text: c.Text, Warn: c.Warning}
+}
+
+// RoutesJSON renders the HTTP client↔route map.
+func RoutesJSON(r query.RoutesResult) (string, error) {
+	dto := routesDTO{Filter: r.Filter, Routes: r.Routes, Clients: r.Clients, Note: r.Note, Links: make([]routeLinkDTO, 0, len(r.Links)),
+		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings}}
+	for _, l := range r.Links {
+		x := routeLinkDTO{Route: routeDTO{Repo: l.Route.Repo, Path: l.Route.Path, Line: l.Route.Line, Method: l.Route.Method,
+			Pattern: l.Route.Pattern, Handler: l.Route.Handler, Framework: l.Route.Framework}, Clients: make([]clientCallDTO, 0, len(l.Clients))}
+		for _, c := range l.Clients {
+			x.Clients = append(x.Clients, clientDTO(c))
+		}
+		dto.Links = append(dto.Links, x)
+	}
+	for _, c := range r.Unmatched {
+		dto.Unmatched = append(dto.Unmatched, clientDTO(c))
+	}
+	return marshal(dto)
+}

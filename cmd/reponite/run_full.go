@@ -43,6 +43,12 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdUsages(args)
 	case "topics":
 		cmdTopics(args)
+	case "logsite":
+		cmdLogSite(args)
+	case "impls":
+		cmdImpls(args)
+	case "routes":
+		cmdRoutes(args)
 	case "verify-edit":
 		cmdVerifyEdit(args)
 	case "repos":
@@ -569,6 +575,72 @@ func cmdUsages(args []string) {
 	res := query.Usages(s, query.FleetRepo, rf.ref, pos[0])
 	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.UsagesJSON(res))
+}
+
+// cmdLogSite maps a line from a real log to the code that prints it.
+func cmdLogSite(args []string) {
+	var local bool
+	var limit int
+	var rf refFlags
+	pos := parseCmd("logsite", "logsite \"<log line>\" [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
+		fs.IntVar(&limit, "limit", 10, "max sites")
+		rf.register(fs)
+	})
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite logsite \"<log line>\""))
+	}
+	f := openFleet(local)
+	defer f.Close()
+	s, cov := f.view(rf.ref, rf.pins)
+	res := query.LogSites(s, query.FleetRepo, rf.ref, strings.Join(pos, " "), limit)
+	res.Note = joinNote(res.Note, cov)
+	printJSON(interfaces.LogSitesJSON(res))
+}
+
+// cmdImpls lists the classes deriving from a base fleet-wide (plugins and
+// subclasses in other repos included) and each one's own override of method.
+func cmdImpls(args []string) {
+	var local bool
+	var limit int
+	var rf refFlags
+	pos := parseCmd("impls", "impls <Base | Base::method | Base.method> [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
+		fs.IntVar(&limit, "limit", 50, "max classes")
+		rf.register(fs)
+	})
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite impls <Base[::method]>"))
+	}
+	f := openFleet(local)
+	defer f.Close()
+	s, cov := f.view(rf.ref, rf.pins)
+	res := query.Impls(s, query.FleetRepo, rf.ref, pos[0], limit)
+	res.Note = joinNote(res.Note, cov)
+	printJSON(interfaces.ImplsJSON(res))
+}
+
+// cmdRoutes links HTTP client calls to the server routes they reach,
+// fleet-wide; with a path argument, only that endpoint's slice.
+func cmdRoutes(args []string) {
+	var local bool
+	var limit int
+	var rf refFlags
+	pos := parseCmd("routes", "routes [path substring] [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
+		fs.IntVar(&limit, "limit", 50, "max routes")
+		rf.register(fs)
+	})
+	filter := ""
+	if len(pos) > 0 {
+		filter = pos[0]
+	}
+	f := openFleet(local)
+	defer f.Close()
+	s, cov := f.view(rf.ref, rf.pins)
+	res := query.Routes(s, query.FleetRepo, rf.ref, filter, limit)
+	res.Note = joinNote(res.Note, cov)
+	printJSON(interfaces.RoutesJSON(res))
 }
 
 // cmdTopics renders the ROS communication graph fleet-wide (pub/sub/service/

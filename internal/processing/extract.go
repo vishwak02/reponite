@@ -131,7 +131,11 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		callees = calleesWithRules(body, r)
 		qcalls = qualifiedCallsWithRules(body, r)
 		if r.CallSiteKinds {
-			sites = clikeCallSites(body, r)
+			var vars map[string]string
+			if r.Name == "cpp" {
+				vars = cppVarTypes(fn, r)
+			}
+			sites = clikeCallSites(body, r, vars)
 		}
 	}
 	recv := ""
@@ -316,11 +320,31 @@ func nameOf(n content.AST, r LangRules) string {
 	// callable is anonymous — never invent one from a parameter type or body
 	// identifier (that misattributed C++ endpoints to names like NodeHandle).
 	if len(r.DeclNameIn) > 0 {
-		if d := firstChildAny(n, r.DeclNameIn); d != nil {
+		if d := declaratorOf(n, r); d != nil {
 			return declaratorName(d, r)
 		}
 	}
 	return nameOfNode(n, r.NameTypes, r.NameByDesc)
+}
+
+// declaratorOf finds a definition's DeclNameIn declarator, looking through the
+// pointer/reference declarators a C/C++ return type wraps it in: `T& f()` is
+// function_definition > reference_declarator > function_declarator. Missing
+// that wrapper named every function returning a pointer or reference after its
+// return type (`std::ostream& operator<<` was "ostream").
+func declaratorOf(n content.AST, r LangRules) content.AST {
+	if d := firstChildAny(n, r.DeclNameIn); d != nil {
+		return d
+	}
+	for _, c := range n.Children() {
+		switch c.Type() {
+		case "pointer_declarator", "reference_declarator":
+			if d := declaratorOf(c, r); d != nil {
+				return d
+			}
+		}
+	}
+	return nil
 }
 
 // declaratorName returns the last DeclNameTypes (default NameTypes) leaf inside

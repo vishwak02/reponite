@@ -126,6 +126,27 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("repo that defines the symbol (defaults to current)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
 		mcp.WithString("ref", mcp.Description("default HEAD"))))
+	add(mcp.NewTool("reponite_logsite",
+		mcp.WithDescription("Which code printed this log line? Paste a line from a real log (placeholders filled in: ids, counts, names) and get the code locations whose format string produces it — file:line, enclosing function, the logging call (ROS_WARN, logger.info, console.error, throw …) and the format as written — ranked by how much fixed text matched. Understands printf %d/%s, fmt/spdlog/Python {} and {name}, %(name)s, JS ${…}, and stream/concatenated literals. Use it to go from a log to the branch of code that emitted it, then read that function with brief/context."),
+		mcp.WithString("line", mcp.Required(), mcp.Description("the log line as it appears in the log")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("limit", mcp.Description("max sites (default 10)"))))
+	add(mcp.NewTool("reponite_impls",
+		mcp.WithDescription("What actually runs when code calls an interface? Given a C++ base class (optionally with a method: Base::method), lists every class deriving from it fleet-wide — including plugins and subclasses in OTHER repos that the call graph cannot reach, since they are loaded at runtime — with file:line, derivation depth, whether it is registered with PLUGINLIB_EXPORT_CLASS, and each class's own definition of the method (empty when inherited). Read with per-repo refs to answer for the exact versions a system runs. Then open the override with brief/context."),
+		mcp.WithString("base", mcp.Required(), mcp.Description("base class, or Base::method / Base.method")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("limit", mcp.Description("max classes (default 50)"))))
+	add(mcp.NewTool("reponite_routes",
+		mcp.WithDescription("HTTP edges the call graph CAN'T see: which frontend/client call reaches which backend route, across repos. Reads server routes (Django path/re_path/url composed through include() prefixes and DRF routers, FastAPI/Flask decorators with router prefixes, Express, Go net/http, gin/echo/chi) and client calls (fetch, axios or any client object's get/post/…, requests, httpx), resolving URLs built from literals, template strings, f-strings, concatenation and named URL constants, then pairs them by path and method. With `path`: only that endpoint's routes and callers. Use to go from a UI action to the view that serves it, or from a view to every UI that calls it. Medium confidence (base URLs, proxies and gateway rewrites are not resolved; stated in the result)."),
+		mcp.WithString("path", mcp.Description("focus on routes/calls whose path contains this (default: the whole map)")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("limit", mcp.Description("max routes (default 50)"))))
 	add(mcp.NewTool("reponite_topics",
 		mcp.WithDescription("ROS communication graph — the runtime edges the call graph CAN'T see. A publisher and a subscriber live in different processes and are joined only by a topic name at runtime, so no source call graph links them; this does, fleet-wide, by scanning roscpp/rospy/rclcpp/rclpy pub/sub/service/action idioms and pairing producers with consumers by name. With no `topic`: the whole comms map (connected edges first). With `topic`: who publishes and who subscribes to that one name. Use to answer \"who reacts when I publish X?\" or \"where does this subscriber's data come from?\". Name-string linkage is medium-confidence; namespace/launch remapping is not resolved (stated in the result)."),
 		mcp.WithString("topic", mcp.Description("focus on one topic/service/action name (default: whole comms graph)")),

@@ -24,7 +24,10 @@ const (
 	//      definitions qualified by their class.
 	//   3: JS/TS/Python/Java call shapes + import bindings (an imported
 	//      external name or a runtime global is never matched to repo code).
-	IndexVer = 3
+	//   4: C++ receiver typing (parameter/local/field declared types, base
+	//      classes, virtual overrides), C++ .h headers parsed as C++, and
+	//      functions returning a pointer/reference named after themselves.
+	IndexVer = 4
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

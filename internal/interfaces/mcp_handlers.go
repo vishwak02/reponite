@@ -134,6 +134,27 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 			res.Note = res.Note + " — " + coverage()
 		}
 		return UsagesJSON(res)
+	case "reponite_logsite":
+		limit, _ := strconv.Atoi(args["limit"])
+		res := query.LogSites(t.Store, discoverRepo, ref, args["line"], limit)
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		return LogSitesJSON(res)
+	case "reponite_impls":
+		limit, _ := strconv.Atoi(args["limit"])
+		res := query.Impls(t.Store, discoverRepo, ref, args["base"], limit)
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		return ImplsJSON(res)
+	case "reponite_routes":
+		limit, _ := strconv.Atoi(args["limit"])
+		res := query.Routes(t.Store, discoverRepo, ref, args["path"], limit)
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		return RoutesJSON(res)
 	case "reponite_topics":
 		var res query.CommGraphResult
 		if topic := args["topic"]; topic != "" {

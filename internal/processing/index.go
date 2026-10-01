@@ -53,6 +53,9 @@ type ParsedFile struct {
 	// references to monikers defined elsewhere (§8B.4, Phase 6b). Zero value =
 	// no SCIP index, and every downstream tier behaves exactly as before.
 	SCIP scip.FileMonikers
+	// Types are the file's C++ class/field/base/alias facts (cpptypes.go), for
+	// resolving member calls by the receiver's declared type. nil elsewhere.
+	Types *TypeFacts
 }
 
 // IndexFiles indexes all files of one repo ref with name-based edge resolution.
@@ -122,11 +125,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	nodeSet := make(map[string]bool, len(order))
 	x := siteIndex{nodeSet: nodeSet, byBase: byBase, byRecv: map[string][]string{},
-		methods: map[string][]string{}, pkgOfQID: map[string]string{}}
+		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, types: newTypeTable(files)}
 	for _, qid := range order {
 		nodeSet[qid] = true
 		c := byQID[qid]
 		x.pkgOfQID[qid] = c.pkg
+		x.isTest[qid] = testish(c.isTest, c.pkg, c.sym.Recv)
 		if c.sym.Recv != "" && c.sym.Kind != "type" {
 			key := c.sym.Recv + "." + c.sym.Name
 			x.byRecv[key] = append(x.byRecv[key], qid)
@@ -147,6 +151,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		c := byQID[qid]
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
 		var callees []query.Callee
+		x.callerTest = x.isTest[qid]
 		if len(c.sym.CallSites) > 0 {
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {

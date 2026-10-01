@@ -9,6 +9,62 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Cross-boundary questions (devel)
+
+The questions a call graph alone cannot answer: which code printed this log
+line, what runs behind a call through a base class or plugin interface, and
+which frontend call reaches which backend view.
+
+#### Added
+
+- **`logsite "<log line>"`** (MCP `reponite_logsite`): paste a line from a
+  real log and get the code locations whose format string produces it —
+  printf `%d/%s/%.2f`, fmt/spdlog/Python `{}`/`{name}`, `%(name)s`, JS
+  `${…}`, stream (`<<`) and concatenated literals — with the enclosing
+  function and the logging call. The ROS logger name in the line
+  (`[ros.<package>.<name>]`) ranks sites in that package first, and a logging
+  call outranks a helper (`operator<<`, `toString`) that printed part of it.
+- **`impls <Base[::method]>`** (MCP `reponite_impls`): every class deriving
+  from a C++ base fleet-wide — including implementations in other repos loaded
+  at runtime — with derivation depth, `PLUGINLIB_EXPORT_CLASS` registration
+  and each class's own definition of the method; test mocks listed last.
+- **`routes [path]`** (MCP `reponite_routes`): HTTP client calls linked to the
+  server routes they reach, across repos. Server: Django `path`/`re_path`/`url`
+  composed through `include()` prefixes, DRF routers (nested routers,
+  `@action`), FastAPI/Flask decorators with router prefixes, Express, Go
+  net/http and gin/echo/chi. Client: `fetch`, axios or any client object's
+  `get/post/…` (TS generics included), requests/httpx/sessions, with URLs
+  resolved from literals, template strings, f-strings, concatenation and named
+  URL constants. A client URL malformed as written (a stray brace from a
+  template-literal typo) is flagged.
+
+#### Changed
+
+- **C++ member calls are resolved by the receiver's declared type**
+  (`receiver-typed`, 0.85): parameters, locals (`auto` from `new`,
+  `make_shared<T>`, or another typed expression), member fields of the
+  caller's class and its bases, container elements and iterators
+  (`v[i]`, `for (auto& x : v)`, `m.find(k)->second`, structured bindings),
+  smart pointers, `Foo::Ptr` and typedef/using aliases, method return types,
+  lambda parameters and `if (auto x = …)` declarations. A call on a type in an
+  external namespace (`ros::Publisher::publish`) or on a container is an
+  external leaf, never the repo's same-named method.
+- **Virtual dispatch edges** (`virtual-override`, 0.6): a call through a base
+  class (including `this->f()` in the base, and pure virtuals) also reaches
+  each subclass's override in the repo; mock/fake/stub overrides are targets
+  only for test code. A member-name guess never targets test-support code from
+  production code.
+- **C++ headers named `.h` are parsed as C++** when their content is C++
+  (classes, namespaces, templates) — previously their classes and inline
+  methods were lost to the C grammar.
+- **A function returning a pointer or reference is named after itself**
+  (`std::ostream& operator<<` was named `ostream`).
+- When one function calls the same target both typed and untyped, the edge
+  keeps the stronger resolution.
+- Fleet notes are pin-aware: a repo read at its pinned ref is no longer
+  reported as "not indexed" at the query's default ref.
+- `IndexVer` 4: refs indexed under 3 are re-indexed on the next `index --git`.
+
 ### Resolution, storage and multi-version indexing (devel)
 
 Driven by a benchmark of questions with known answers on real C++/ROS and

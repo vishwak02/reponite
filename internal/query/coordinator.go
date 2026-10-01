@@ -253,6 +253,13 @@ type SearchHit struct {
 	IsTest bool
 }
 
+// RefPinner is a Store that reads some repos at their own ref whatever ref a
+// query names (storage.Pinned). Coverage checks ask it which ref a repo is
+// really read at, so a pinned repo is not reported as "not indexed".
+type RefPinner interface {
+	RefFor(repo, ref string) string
+}
+
 // FleetRepo is the wildcard repo selector: passing it (or "") to a search-style
 // coordinator scans every repo in the store — the "boundary-less" default an
 // agent wants when it doesn't yet know where a feature lives (§ fleet awareness).
@@ -377,6 +384,9 @@ func indexVerWarning(s Store, a, b RepoRef) string {
 }
 
 func refIndexed(s Store, repo, ref string) bool {
+	if p, ok := s.(RefPinner); ok {
+		ref = p.RefFor(repo, ref)
+	}
 	for _, r := range s.Refs(repo) {
 		if r == ref {
 			return true
