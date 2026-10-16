@@ -9,6 +9,52 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Production answers (devel)
+
+#### Added
+
+- **`topics` resolves names read from parameters.** A publisher/subscriber/service
+  whose name is a variable, a config-struct member or an inline param read is traced
+  to the parameter (`get_ros_param`, `param()`, `getParam`, `declare_parameter`,
+  `get_parameter`, rospy `get_param`; same file, then same package) and the parameter
+  to its value: launch `<param>`/`<rosparam>` for the node's package (with `$(arg)`,
+  `$(find pkg)` and `$(eval find(...))` file references followed), any launch file in
+  the repo, the call's default, then a package YAML. Labeled
+  `param:<name>=<value> (<file:line>)` with `name_confidence` below a literal's;
+  disagreeing sources are listed per candidate as `ambiguous`; unresolvable ones are
+  reported under `unresolved_endpoints` instead of disappearing. Test launch files
+  never supply a production value.
+- **`--no-tests` / `REPONITE_NO_TESTS=1`** on usages, context, impls, topics, routes,
+  compat, rootcause, grep, search and semsearch: a store view that hides test symbols,
+  test files and test callers by the indexer's own classification.
+- **C++ symbol spellings** (`Class::method`, `ns::Class::method`) in context, brief,
+  compat, rootcause and blast-radius; `--repo` to pick among fleet candidates.
+- **semsearch term-index cache** next to each repo's index, keyed by commit, manifest,
+  ruleset and tokenizer version: a warm fleet query drops from ~40 s to well under a
+  second (cold ~3x faster: one line split per file, an allocation-free tokenizer).
+
+#### Changed
+
+- **Index ruleset 5**: YAML parameter files (≤ 256 KB) are stored, so existing refs
+  re-index on the next `index --git` of the same commit.
+- `compat` and `rootcause` answer for the fleet repo that defines the symbol, like
+  `context`, instead of only the working directory.
+- A symbol miss now says which miss it is — no ref matched (with each repo's indexed
+  refs), or not defined in any searched repo — with near matches and their repos;
+  several defining repos print the candidates instead of failing.
+- semsearch says plainly that the default ranking is keyword (term-idf), not semantic,
+  and why no neural ranker ran.
+
+#### Fixed
+
+- Under `REPONITE_REFS`, answers reported `ref: "HEAD"`; they now report the pinned
+  label actually read (`_meta.ref`, and `_meta.refs` per repo fleet-wide), and hits
+  carry their repo's ref.
+- Fleet coverage notes ignored pins ("nothing was searched" over a result with
+  matches): the fleet store did not expose the pinning view to coverage checks.
+- Pins no longer override an explicitly requested ref, so brief/blast-radius/compat
+  compare against a repo's other refs instead of the pin against itself.
+
 ### Cross-boundary questions (devel)
 
 The questions a call graph alone cannot answer: which code printed this log

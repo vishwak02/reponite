@@ -254,7 +254,9 @@ reponite grep "TODO|FIXME" --offset 50     # page through a big result
 # 2. Symbol names.
 reponite search Charge
 
-# 3. Meaning — "where is the thing that does X". No model or network required.
+# 3. "Where is the thing that does X" — KEYWORD ranking (term-idf over identifiers and
+#    bodies), not semantic, unless an embeddings endpoint is configured (neural build).
+#    Per-repo term indexes are cached, so a warm fleet answers in well under a second.
 reponite semsearch "where we charge a card"
 
 # 4. Compatibility (the sections above).
@@ -461,8 +463,30 @@ Still honest about what it cannot know, in the output itself: a remap target tha
 unexpanded substitution (`$(find …)`, `$(env …)`, an `$(arg …)` with no default) is **reported,
 not applied** — grouping endpoints under the literal `$(arg scan_topic)` would be worse than not
 remapping. `<include>` directives are not expanded, a name remapped inconsistently within one
-package reads `launch-ambiguous` rather than being guessed, and dynamic (non-literal) topic names
-are *counted as unresolved*.
+package reads `launch-ambiguous` rather than being guessed, and names built by expressions
+(concatenation, calls) are *counted as unresolved*.
+
+**Names read from parameters are resolved.** Production nodes rarely hard-code a topic: they
+read it into a variable or a config-struct member and pass that to `advertise`/`subscribe`.
+reponite traces the variable to the parameter read into it (`get_ros_param`, `param()`,
+`getParam`, rclcpp `declare_parameter`/`get_parameter`, rospy `get_param` — in the same file, or
+the same package, where a params struct's loader lives), then the parameter to its value: a
+launch `<param>`/`<rosparam>` for a node of that package (YAML files are indexed for this, and
+`$(find pkg)`/`$(arg …)` are followed), then any launch file in the repo, then the default
+written in the call, then a package YAML no launch file is seen loading. Test launch files never
+supply a production value.
+
+```jsonc
+{ "path": "planner/src/planner.cpp", "raw": "params.status_topic", "param": "status_topic",
+  "name_resolution": "param:status_topic=/robot_status (planner/config/topics.yaml:3 via planner/launch/planner.launch:4)",
+  "name_confidence": 0.7 }
+```
+
+Every such name carries `name_confidence` below a literal's, and a group's `confidence` never
+exceeds its best-supported producer/consumer name. Sources that disagree are listed under each
+candidate, labeled `ambiguous`; a variable or parameter with no resolvable value is still
+reported under `unresolved_endpoints` (`param:status_topic (unresolved)`), and a focused
+`topics /status` shows the ones named like the topic.
 
 </details>
 
@@ -497,7 +521,7 @@ Then the agent has 17 tools:
 |---|---|
 | `reponite_investigate` | One cited dossier answering “how does X work?” |
 | `reponite_search` | Symbols by name, fleet-wide |
-| `reponite_semsearch` | Symbols by meaning |
+| `reponite_semsearch` | Symbols by keyword ranking (semantic with an embeddings endpoint) |
 | `reponite_grep` | Regex, with each hit's enclosing symbol |
 | `reponite_usages` | Every call site, graph-confirmed |
 | `reponite_context` | Direct callers and callees |
@@ -666,7 +690,7 @@ reponite <command> [arguments] [flags]
 |---|---|
 | `investigate <question…>` | One cited dossier answering a plain-language question |
 | `search <substring>` | Find symbols by name |
-| `semsearch <query>` | Find symbols by meaning |
+| `semsearch <query>` | Rank symbols by keyword similarity (semantic only with an embeddings endpoint) |
 | `grep <pattern> [ref]` | Regex/literal search, fused with the enclosing symbol |
 | `context <symbol> [ref]` | Direct callers and callees |
 | `brief <symbol> [ref]` | Token-budgeted bundle for editing a symbol |
@@ -695,6 +719,20 @@ reponite <command> [arguments] [flags]
 | `setup [dir]` | Register reponite in your agent's config file |
 
 Every command accepts `--help`. Fleet-wide commands accept `--local`.
+
+- **`--no-tests`** (or `REPONITE_NO_TESTS=1`) on `usages`, `context`, `impls`, `topics`, `routes`,
+  `compat`, `rootcause`, `grep`, `search` and `semsearch` drops everything classified as test
+  code — the same rule the indexer stamps (`test/` dirs, `*_test.*`, `test_*.py`, `mock_*` …) — so
+  a test publisher or mock never answers a production question. Off by default; `brief` and
+  `blast-radius`, whose answers include covering tests, ignore the env.
+- **Symbols** may be given as reponite ids (`dir.Class.method`), partly qualified
+  (`Class.method`), or in C++ spelling (`Class::method`, `ns::Class::method`). A symbol not in
+  the current repo is looked up across the fleet; when several repos define it the candidates
+  are printed (with `--repo R` to choose), and a miss says whether the ref was not indexed or
+  the symbol is in no searched repo, with near matches and their repos.
+- **`REPONITE_REFS=repo=ref,…`** pins repos to the refs a deployed system runs (standing in
+  for the default `HEAD`; an explicit ref is read as asked). Answers report the ref actually
+  read — the pin's label in `_meta.ref`, and per repo in `_meta.refs` for fleet-wide answers.
 
 ### Languages
 
