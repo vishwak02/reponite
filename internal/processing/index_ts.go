@@ -48,15 +48,28 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 				// Dot-dirs (.git, .reponite, …) are always skipped; the ignore
 				// set adds vendor/third_party/node_modules/… + .reponiteignore
 				// + --exclude.
-				// .github/workflows is the one dot-dir read, for CI
-				// definitions (project files).
-				if strings.HasPrefix(info.Name(), ".") && !query.IsProjectDir(rel) || ig.Excluded(rel, true) {
+				// .github/workflows (CI definitions) and .circleci are the dot-dirs read
+				if strings.HasPrefix(info.Name(), ".") && !query.IsProjectDir(rel) && !IsDataDotDir(rel) || ig.Excluded(rel, true) {
 					return filepath.SkipDir
 				}
 			}
 			return nil
 		}
 		if ig.Excluded(rel, false) {
+			return nil
+		}
+		// Inside a walked dot-directory (.github) only its data files count.
+		if underDotDir(filepath.ToSlash(rel)) && !IsDataDotPath(filepath.ToSlash(rel)) {
+			return nil
+		}
+		// Schema and configuration files (.sql/.proto/.prisma, .env*,
+		// Dockerfile, .properties): stored for `models` and `config`.
+		if IsDataFile(rel) {
+			if b, readErr := os.ReadFile(path); readErr == nil {
+				if pf, ok := dataFile(filepath.ToSlash(rel), string(b)); ok {
+					files = append(files, pf)
+				}
+			}
 			return nil
 		}
 		// Module manifests carry the repo's identity, not symbols; collect for

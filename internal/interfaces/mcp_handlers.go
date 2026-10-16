@@ -214,6 +214,8 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 	case "reponite_investigate":
 		budget, _ := strconv.Atoi(args["budget"])
 		return InvestigateJSON(query.InvestigateWith(t.Store, discoverRepo, ref, args["question"], budget, t.Ranker))
+	case "reponite_models", "reponite_config":
+		return t.callData(tool, discoverRepo, ref, args, coverage)
 	case "reponite_refs":
 		return RefsJSON(repo, t.Store.Refs(repo))
 	case "reponite_why":
@@ -333,4 +335,28 @@ func (t *ToolServer) mapExplain(tool string, args map[string]string, ref string)
 		return ExplainText(r), nil
 	}
 	return ExplainJSON(r)
+}
+
+// callData answers reponite_models / reponite_config (data_output.go).
+func (t *ToolServer) callData(tool, repo, ref string, args map[string]string, coverage func() string) (string, error) {
+	budget, _ := strconv.Atoi(args["budget"])
+	text := args["format"] == "text"
+	if tool == "reponite_models" {
+		res := query.Models(t.Store, repo, ref, args["model"], query.ModelsOptions{Budget: budget, Kind: args["kind"]})
+		if repo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		if text {
+			return ModelsText(res), nil
+		}
+		return ModelsJSON(res)
+	}
+	res := query.Config(t.Store, repo, ref, args["key"], query.ConfigOptions{Budget: budget, Kind: args["kind"]})
+	if repo == query.FleetRepo {
+		res.Note = res.Note + " — " + coverage()
+	}
+	if text {
+		return ConfigText(res), nil
+	}
+	return ConfigJSON(res)
 }

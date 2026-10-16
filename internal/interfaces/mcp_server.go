@@ -182,6 +182,24 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
 		mcp.WithString("ref", mcp.Description("default HEAD")),
 		mcp.WithString("tests", mcp.Description(`"true" to walk into test code (default excluded)`))))
+	add(mcp.NewTool("reponite_models",
+		mcp.WithDescription("The data layer: which entities the code persists or exchanges and who touches them. With no `model`: an ER summary — every model with its table, field count and relations (Django, DRF serializers, SQLAlchemy/SQLModel, Pydantic/dataclass schemas, TypeORM/MikroORM/sequelize-typescript, Prisma, GORM, SQL CREATE/ALTER TABLE across migrations, protobuf messages as wire schemas), tables first. With `model` (class or table name): its fields (type, null/default/unique/index/pk), relations both ways, serializers, the API routes whose handler touches it, and the code that WRITES and READS it (ORM query/save/update/delete/bulk call sites, related managers, raw SQL naming its table fleet-wide), each with file:line and a handle for brief/context. Use before changing a schema, to find who writes a table, or to learn a backend's domain fast."),
+		mcp.WithString("model", mcp.Description("a model class or table name (default: the ER summary); repo:Name to pick a repo")),
+		mcp.WithString("kind", mcp.Description("keep one kind: table, view, abstract, schema, wire")),
+		mcp.WithString("budget", mcp.Description("token budget (default 4000); a cut result says truncated + next")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse rendering (default JSON)`)),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD"))))
+	add(mcp.NewTool("reponite_config",
+		mcp.WithDescription("The configuration surface: every environment variable, CLI flag, settings key, feature flag and ROS parameter the code reads — where, and with what default — joined to where the repo SETS it (.env files, docker-compose environment, Kubernetes/Helm env, Dockerfile ENV/ARG, CI workflow env, launch <env>/<param>/<rosparam>, settings modules, .properties, shell exports, flags passed in scripts). Flags keys read but never set and set but never read. With `key`: every read and set of that key. Use for \"why didn't my config change take effect?\", \"what does this service need to run?\", or before renaming a variable."),
+		mcp.WithString("key", mcp.Description("one key (env name case-insensitive, --flag or flag_name, settings key, ROS param); default: the whole surface")),
+		mcp.WithString("kind", mcp.Description("keep one kind: env, flag, setting, feature, rosparam")),
+		mcp.WithString("budget", mcp.Description("token budget (default 4000); a cut result says truncated + next")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse rendering (default JSON)`)),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD"))))
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("When: you need which refs (tags/branches) of a repo are indexed. List indexed refs for the repo."),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))
