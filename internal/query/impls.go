@@ -159,7 +159,7 @@ func Impls(s Store, repo, ref, target string, limit int) ImplsResult {
 		limit = 50
 	}
 	base, method := splitTarget(target)
-	res := ImplsResult{Base: base, Method: method, Meta: Meta{Repo: repo, Ref: ref}}
+	res := ImplsResult{Base: base, Method: method, Meta: NewMeta(s, repo, ref)}
 	if base == "" {
 		res.Note = "no class named"
 		return res

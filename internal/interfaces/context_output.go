@@ -43,7 +43,7 @@ func ContextJSON(r query.ContextResult) (string, error) {
 	return marshal(contextDTO{
 		Symbol: r.Symbol, Ref: r.Ref, Callers: r.Callers, Callees: r.Callees,
 		CallerEdges: callerEdges, CalleeEdges: edges,
-		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta: metaOf(r.Meta),
 	})
 }
 

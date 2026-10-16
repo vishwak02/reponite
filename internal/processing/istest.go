@@ -14,56 +14,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/vishwak02/reponite/internal/query"
 )
 
-// testDirs are path segments that mark a test tree in essentially every
-// ecosystem. Matched as whole segments, so `latest/` or `contest/` never count.
-var testDirs = map[string]bool{
-	"test": true, "tests": true, "spec": true, "specs": true,
-	"__tests__": true, "testing": true, "it": false, // "it" is too ambiguous
-}
-
-// IsTestPath reports whether a repo-relative path is test code, by directory
-// convention (any `test`/`tests`/`spec`/`__tests__` segment) or by the
-// language's filename convention. Conservative in the direction that matters:
-// a false negative merely omits a covering test, while a false positive would
-// hide production code from search, so only well-established markers count.
-func IsTestPath(path string) bool {
-	path = filepath.ToSlash(path)
-	segs := strings.Split(path, "/")
-	for _, s := range segs[:max(0, len(segs)-1)] { // directories only
-		if testDirs[strings.ToLower(s)] {
-			return true
-		}
-	}
-	base := strings.ToLower(filepath.Base(path))
-	ext := filepath.Ext(base)
-	stem := strings.TrimSuffix(base, ext)
-
-	switch ext {
-	case ".go":
-		return strings.HasSuffix(stem, "_test")
-	case ".py":
-		// pytest/unittest discovery: test_*.py and *_test.py.
-		return strings.HasPrefix(stem, "test_") || strings.HasSuffix(stem, "_test")
-	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx":
-		return strings.HasPrefix(stem, "test_") || strings.HasSuffix(stem, "_test") ||
-			strings.HasSuffix(stem, "_tests") || strings.HasPrefix(stem, "mock_") ||
-			strings.HasSuffix(stem, "_mock")
-	case ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx":
-		// jest/mocha/vitest: foo.test.ts, foo.spec.ts.
-		return strings.HasSuffix(stem, ".test") || strings.HasSuffix(stem, ".spec")
-	case ".java":
-		return strings.HasSuffix(stem, "test") || strings.HasSuffix(stem, "tests") ||
-			strings.HasPrefix(stem, "test")
-	case ".rs":
-		return strings.HasSuffix(stem, "_test") || strings.HasSuffix(stem, "_tests")
-	case ".sh", ".bash", ".zsh", ".ksh":
-		return strings.HasPrefix(stem, "test_") || strings.HasSuffix(stem, "_test") ||
-			strings.HasPrefix(stem, "bats_") || strings.HasSuffix(stem, ".bats")
-	}
-	return false
-}
+// IsTestPath reports whether a repo-relative path is test code. The rule
+// lives in query (query.IsTestPath) so query-time filters (--no-tests) apply
+// exactly the classification captured here at index time.
+func IsTestPath(path string) bool { return query.IsTestPath(path) }
 
 // DirFootprint counts indexed files per top-level-ish directory prefix, so the
 // indexer can report where its symbols actually came from. A repo that vendors

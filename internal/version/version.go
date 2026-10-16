@@ -27,7 +27,10 @@ const (
 	//   4: C++ receiver typing (parameter/local/field declared types, base
 	//      classes, virtual overrides), C++ .h headers parsed as C++, and
 	//      functions returning a pointer/reference named after themselves.
-	IndexVer = 4
+	//   5: YAML parameter files (.yaml/.yml up to 256 KB) are stored, so
+	//      `topics` can resolve a topic name read from a parameter through the
+	//      <rosparam> file a launch file loads.
+	IndexVer = 5
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/roslaunch"
@@ -66,6 +67,16 @@ type CommEndpoint struct {
 	RemapVia string
 	In       string // enclosing symbol (the node/callback), for a hop back into the call graph
 	Text     string // the source line, trimmed
+	// Param is the ROS parameter the name was read from when the source
+	// passes a variable, not a literal (NameResolution then reads
+	// "param:<name>=<value> (<file:line>)"), and NameConfidence how surely
+	// that value is the runtime one — always below a literal's. Zero for a
+	// literal name.
+	Param          string
+	NameConfidence float64
+
+	expr   string     // the non-literal name expression, pending resolution
+	inline *paramRead // a param read written inline as the name argument
 }
 
 // CommGroup is every endpoint bound to one name within a family (topic / service
@@ -98,27 +109,16 @@ type CommGraphResult struct {
 	// ($(find …), $(env …), an $(arg …) with no default), so the runtime name is
 	// unknown and the remap was NOT applied.
 	UnexpandedRemaps int
-	Note             string
-	Meta             Meta
-}
-
-// launchRemaps parses every indexed ROS launch file in scope into a remap
-// table. Query-time, over content the Store already holds — the same
-// zero-new-indexing model the rest of this file uses (§8D.5).
-func launchRemaps(s Store, repo, ref string) *roslaunch.Table {
-	var lf []roslaunch.File
-	for _, rp := range reposFor(s, repo) {
-		for _, f := range s.Files(rp, ref) {
-			if !roslaunch.IsLaunchFile(f.Path) {
-				continue
-			}
-			// A malformed launch file still contributes whatever parsed: losing
-			// its remaps entirely would silently return to pre-remap names.
-			parsed, _ := roslaunch.Parse(f.Path, f.Content)
-			lf = append(lf, parsed)
-		}
-	}
-	return roslaunch.NewTable(lf)
+	// ParamResolved counts endpoints whose name was resolved from a
+	// parameter. Unbound are the endpoints whose name comes from a variable or
+	// parameter that could not be resolved to a value: they cannot be linked,
+	// but they are real producers/consumers, so they are listed (the full graph
+	// lists all; a focused query lists those whose parameter or variable name
+	// matches the topic) instead of vanishing.
+	ParamResolved int
+	Unbound       []CommEndpoint
+	Note          string
+	Meta          Meta
 }
 
 // commIdiom is a client-library idiom for one role: the method-name pattern to
@@ -232,16 +232,20 @@ func commLang(path string) string {
 	return ""
 }
 
-// scanComms extracts every resolvable ROS endpoint from one file, plus a count
-// of endpoints whose name was not a string literal (dynamic — reported but not
-// linkable). Pure: it reads only the passed content and spans.
+// scanComms extracts every ROS endpoint from one file, plus a count of
+// endpoints whose name is genuinely dynamic (an expression no parameter or
+// variable trace applies to — reported, not linkable). An endpoint whose name
+// is a variable or an inline parameter read is returned with expr/inline set
+// for CommGraph to resolve against the repo's parameter reads and launch
+// files. Pure: it reads only the passed content and spans.
 func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoint, unresolved int) {
 	lang := commLang(path)
 	if lang == "" {
 		return nil, 0
 	}
 	var callbackTypes map[string]string // lazily built: only when a C++ endpoint needs it
-	for i, line := range strings.Split(content, "\n") {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
 		code := stripComment(line, lang)
 		for _, id := range commIdioms {
 			if lang == "cpp" && !id.cpp || lang == "py" && !id.py {
@@ -263,34 +267,73 @@ func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoi
 					msgType, msgSource = strings.TrimSpace(m[1]), "template"
 				}
 			}
-			qloc := firstQuotedRe.FindStringSubmatchIndex(rest)
-			if qloc == nil {
-				unresolved++ // e.g. advertise<T>(topic_var, 10) — can't resolve the name
-				break        // one idiom per line
+			cbType := func(after string) {
+				// ROS1 roscpp subscribe() carries no template — the type is
+				// inferred by the middleware from the callback. Recover it from
+				// the callback's message parameter in this file (best-effort,
+				// labeled; a cross-file callback stays "", never guessed).
+				if msgType != "" || lang != "cpp" || role != RoleSubscriber {
+					return
+				}
+				if cb := cppCallbackRefRe.FindStringSubmatch(after); cb != nil {
+					if callbackTypes == nil {
+						callbackTypes = cppCallbackTypes(content)
+					}
+					if t := callbackTypes[lastSegment(cb[1])]; t != "" {
+						msgType, msgSource = t, "callback-param"
+					}
+				}
 			}
-			raw := rest[qloc[2]:qloc[3]]
-			after := rest[qloc[1]:]
+			qloc := firstQuotedRe.FindStringSubmatchIndex(rest)
+			// The call's arguments, which may continue on the next lines.
+			args, nameAt := callNameArg(lang, id, code, loc, lines[i+1:min(len(lines), i+8)])
+			if nameAt >= 0 {
+				if expr, param, def, hasDef, ok := dynamicName(args[nameAt]); ok {
+					ep := CommEndpoint{
+						Repo: repo, Path: path, Line: i + 1, Role: role, Raw: expr, Param: param,
+						In: enclosing(spans, i+1), Text: strings.TrimSpace(line), expr: expr,
+					}
+					if param != "" {
+						ep.inline = &paramRead{param: param, def: def, hasDef: hasDef, path: path, line: i + 1}
+					}
+					cbType(strings.Join(args[nameAt+1:], ","))
+					if msgType == "" && lang == "py" {
+						msgType, msgSource = pyPositionalType(args, nameAt)
+					}
+					ep.MsgType, ep.MsgTypeSource = msgType, msgSource
+					eps = append(eps, ep)
+					break
+				}
+			}
+			var raw, after, before string
+			switch {
+			case qloc != nil:
+				raw, after, before = rest[qloc[2]:qloc[3]], rest[qloc[1]:], rest[:qloc[0]]
+			case nameAt >= 0:
+				// A literal name on a continuation line of the call.
+				lit, ok := stringLiteral(args[nameAt])
+				if !ok || lit == "" {
+					unresolved++
+					break
+				}
+				raw, after = lit, strings.Join(args[nameAt+1:], ",")
+				if nameAt > 0 {
+					before = args[nameAt-1] + ","
+				}
+			default:
+				unresolved++ // e.g. advertise<T>(topic + "/x", 10) — can't resolve the name
+			}
+			if raw == "" {
+				break // one idiom per line
+			}
 			if msgType == "" {
 				switch lang {
 				case "cpp":
-					// ROS1 roscpp subscribe() carries no template — the type is
-					// inferred by the middleware from the callback. Recover it from
-					// the callback's message parameter in this file (best-effort,
-					// labeled; a cross-file callback stays "", never guessed).
-					if role == RoleSubscriber {
-						if cb := cppCallbackRefRe.FindStringSubmatch(after); cb != nil {
-							if callbackTypes == nil {
-								callbackTypes = cppCallbackTypes(content)
-							}
-							if t := callbackTypes[lastSegment(cb[1])]; t != "" {
-								msgType, msgSource = t, "callback-param"
-							}
-						}
-					}
+					cbType(after)
 				case "py":
 					// rospy/rclpy pass the type class positionally: right before the
 					// topic literal (rclpy) or right after it (rospy).
-					if m := pyTypeBeforeRe.FindStringSubmatch(rest[:qloc[0]]); m != nil {
+					if m := pyTypeBeforeRe.FindStringSubmatch(before); m != nil {
 						msgType, msgSource = m[1], "positional-arg"
 					} else if m := pyTypeAfterRe.FindStringSubmatch(after); m != nil {
 						msgType, msgSource = m[1], "positional-arg"
@@ -306,6 +349,70 @@ func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoi
 		}
 	}
 	return eps, unresolved
+}
+
+// callNameArg parses the arguments of the pub/sub call matched at loc (the
+// call may continue on the following lines) and returns them with the index
+// of the one carrying the topic/service/action name, or -1 when the match is
+// not a call (a declaration, a word in a string).
+func callNameArg(lang string, id commIdiom, code string, loc []int, next []string) ([]string, int) {
+	text := code[loc[0]:]
+	for _, l := range next {
+		text += "\n" + stripComment(l, lang)
+	}
+	i := loc[1] - loc[0]
+	if i > 0 && text[i-1] == '(' {
+		i-- // the idiom pattern consumed the paren (rospy.Publisher\s*\()
+	} else {
+		for i < len(text) && (text[i] == ' ' || text[i] == '\t') {
+			i++
+		}
+		if i < len(text) && text[i] == '<' { // a C++ template argument list
+			depth := 0
+			for ; i < len(text); i++ {
+				if text[i] == '<' {
+					depth++
+				} else if text[i] == '>' {
+					if depth--; depth == 0 {
+						i++
+						break
+					}
+				}
+			}
+		}
+		for i < len(text) && (text[i] == ' ' || text[i] == '\t' || text[i] == '\n') {
+			i++
+		}
+	}
+	if i >= len(text) || text[i] != '(' {
+		return nil, -1
+	}
+	args, _, ok := splitCallArgs(text, i)
+	if !ok || len(args) == 0 {
+		return nil, -1
+	}
+	fn := strings.TrimRight(strings.TrimSpace(code[loc[0]:loc[1]]), "( \t")
+	at := topicArgIndex(lang, "", fn, args)
+	if at >= len(args) {
+		return nil, -1
+	}
+	return args, at
+}
+
+// pyPositionalType is the message/service type class passed next to the name
+// argument (rclpy: before it; rospy: after it).
+func pyPositionalType(args []string, nameAt int) (string, string) {
+	isType := func(a string) bool {
+		a = strings.TrimSpace(a)
+		return a != "" && !strings.Contains(a, "=") && identPathRe.MatchString(a) && !strings.HasPrefix(a, "self")
+	}
+	if nameAt > 0 && isType(args[nameAt-1]) {
+		return strings.TrimSpace(args[nameAt-1]), "positional-arg"
+	}
+	if nameAt+1 < len(args) && isType(args[nameAt+1]) {
+		return strings.TrimSpace(args[nameAt+1]), "positional-arg"
+	}
+	return "", ""
 }
 
 // stripComment drops a trailing line comment so commented-out pub/sub calls
@@ -351,48 +458,113 @@ func roleFamily(role string) (family string, producer bool) {
 // CommGraph builds the ROS communication graph across repo (FleetRepo "*" = the
 // whole fleet) at ref: every publisher/subscriber/service/action endpoint,
 // grouped by (family, name) so producers and consumers of the same name sit
-// together as a runtime edge. Pure over Store.Files, no new indexing.
+// together as a runtime edge. A name read from a parameter is resolved through
+// the parameter's launch/YAML value (rosparams.go). Pure over Store.Files, no
+// new indexing; each repo's files are read once.
 func CommGraph(s Store, repo, ref string) CommGraphResult {
-	res := CommGraphResult{Meta: Meta{Repo: repo, Ref: ref}}
+	res := CommGraphResult{Meta: NewMeta(s, repo, ref)}
 	type key struct{ family, name string }
 	groups := map[key]*CommGroup{}
+	var launch, yaml []repoFile
+	type pending struct {
+		ep CommEndpoint
+		ps *paramScope
+	}
+	var all []CommEndpoint
+	var dyn []pending
+	for _, rp := range reposFor(s, repo) {
+		files := s.Files(rp, ref)
+		ps := &paramScope{repo: rp, reads: map[string][]paramRead{}, byPkg: map[string][]paramRead{},
+			yaml: map[string]string{}, flat: map[string]map[string]roslaunch.YAMLScalar{}}
+		repoDyn := 0
+		for _, f := range files {
+			switch {
+			case roslaunch.IsLaunchFile(f.Path):
+				launch = append(launch, repoFile{rp, f.Path, f.Content})
+				continue
+			case roslaunch.IsParamFile(f.Path):
+				yaml = append(yaml, repoFile{rp, f.Path, f.Content})
+				ps.yaml[f.Path] = f.Content
+				continue
+			}
+			eps, un := scanComms(rp, f.Path, f.Content, f.Symbols)
+			res.Unresolved += un
+			for _, ep := range eps {
+				if ep.expr != "" {
+					dyn = append(dyn, pending{ep, ps})
+					repoDyn++
+					continue
+				}
+				all = append(all, ep)
+			}
+		}
+		if repoDyn > 0 {
+			// Only a repo with variable-named endpoints pays for the param scan.
+			for _, f := range files {
+				for _, r := range scanParamReads(f.Path, f.Content) {
+					ps.reads[f.Path] = append(ps.reads[f.Path], r)
+					ps.byPkg[packageDir(f.Path)] = append(ps.byPkg[packageDir(f.Path)], r)
+				}
+			}
+		}
+	}
 	// Launch-file remapping decides the RUNTIME topic name, so it must be known
 	// before endpoints are grouped: pairing on pre-remap names links the wrong
 	// producers and consumers (§8D.4's former limitation).
-	remaps := launchRemaps(s, repo, ref)
+	var lf []roslaunch.File
+	for _, l := range launch {
+		// A malformed launch file still contributes whatever parsed: losing
+		// its remaps entirely would silently return to pre-remap names.
+		parsed, _ := roslaunch.Parse(l.path, l.content)
+		lf = append(lf, parsed)
+	}
+	remaps := roslaunch.NewTable(lf)
 	res.LaunchFiles = remaps.Files
 	res.UnresolvedIncludes = remaps.Unresolved
 	res.UnexpandedRemaps = remaps.Unexpanded
-	for _, rp := range reposFor(s, repo) {
-		for _, f := range s.Files(rp, ref) {
-			eps, un := scanComms(rp, f.Path, f.Content, f.Symbols)
-			res.Unresolved += un
-			for i := range eps {
-				eff, resolution, via := remaps.Effective(eps[i].Path, eps[i].Name)
-				eps[i].Effective, eps[i].NameResolution, eps[i].RemapVia = eff, resolution, via
-				if resolution == roslaunch.ResolvedRemapped {
-					res.Remapped++
-				}
+	if len(dyn) > 0 {
+		lp := buildLaunchParams(launch, yaml)
+		for _, d := range dyn {
+			bound, unbound := resolveDynamic(d.ep, d.ps, lp)
+			if len(bound) > 0 {
+				res.ParamResolved++
 			}
-			for _, ep := range eps {
-				res.Endpoints++
-				fam, producer := roleFamily(ep.Role)
-				if fam == "" {
-					continue
-				}
-				// Group on the RUNTIME name.
-				k := key{fam, ep.Effective}
-				g := groups[k]
-				if g == nil {
-					g = &CommGroup{Family: fam, Name: ep.Effective}
-					groups[k] = g
-				}
-				if producer {
-					g.Producers = append(g.Producers, ep)
-				} else {
-					g.Consumers = append(g.Consumers, ep)
-				}
+			all = append(all, bound...)
+			res.Unbound = append(res.Unbound, unbound...)
+		}
+		res.Unresolved += len(res.Unbound)
+	}
+	for i := range all {
+		eff, resolution, via := remaps.Effective(all[i].Path, all[i].Name)
+		if resolution == roslaunch.ResolvedRemapped {
+			res.Remapped++
+		}
+		all[i].Effective, all[i].RemapVia = eff, via
+		if all[i].Param != "" {
+			if resolution != roslaunch.ResolvedAsWritten {
+				all[i].NameResolution += "; " + resolution
 			}
+		} else {
+			all[i].NameResolution = resolution
+		}
+	}
+	for _, ep := range all {
+		res.Endpoints++
+		fam, producer := roleFamily(ep.Role)
+		if fam == "" {
+			continue
+		}
+		// Group on the RUNTIME name.
+		k := key{fam, ep.Effective}
+		g := groups[k]
+		if g == nil {
+			g = &CommGroup{Family: fam, Name: ep.Effective}
+			groups[k] = g
+		}
+		if producer {
+			g.Producers = append(g.Producers, ep)
+		} else {
+			g.Consumers = append(g.Consumers, ep)
 		}
 	}
 	for _, g := range groups {
@@ -402,8 +574,74 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 		res.Groups = append(res.Groups, *g)
 	}
 	sortGroups(res.Groups)
+	sortEndpoints(res.Unbound)
 	res.Note = commGraphNote(res)
 	return res
+}
+
+// resolveDynamic turns an endpoint whose name is a variable or a parameter
+// read into bound endpoints (one per candidate value) or an unbound one that
+// says why its name is unknown.
+func resolveDynamic(ep CommEndpoint, ps *paramScope, lp *launchParamIndex) (bound, unbound []CommEndpoint) {
+	var reads []paramRead
+	if ep.inline != nil {
+		reads = []paramRead{*ep.inline}
+	} else {
+		reads = lookupRead(ps, ep.Path, ep.expr)
+	}
+	switch len(reads) {
+	case 0:
+		ep.NameResolution = "var:" + ep.expr + " (unresolved: no parameter read into it was found in its file or package)"
+		return nil, []CommEndpoint{ep}
+	case 1:
+	default:
+		names := make([]string, 0, len(reads))
+		for _, r := range reads {
+			names = append(names, r.param)
+		}
+		ep.Param = strings.Join(names, "|")
+		ep.NameResolution = "param:" + ep.Param + " (unresolved: several parameters are read into " + memberLeaf(ep.expr) + ")"
+		return nil, []CommEndpoint{ep}
+	}
+	r := withDefault(ps, ep.Path, reads[0])
+	ep.Param = r.param
+	cands := resolveParamValue(r.param, ep.Repo, ep.Path, r, lp, ps)
+	var usable []paramCandidate
+	for _, c := range cands {
+		if v := strings.TrimSpace(c.value); v != "" && !roslaunch.HasSubstitution(v) {
+			usable = append(usable, c)
+		}
+	}
+	switch {
+	case len(usable) == 0 && len(cands) > 0:
+		ep.NameResolution = "param:" + r.param + "=" + cands[0].value + " (" + cands[0].via + "; empty or unexpanded: no runtime name)"
+		return nil, []CommEndpoint{ep}
+	case len(usable) == 0:
+		ep.NameResolution = "param:" + r.param + " (unresolved)"
+		return nil, []CommEndpoint{ep}
+	case len(usable) > maxAmbiguous:
+		ep.NameResolution = "param:" + r.param + " (unresolved: " + strconv.Itoa(len(usable)) + " different values in scope)"
+		return nil, []CommEndpoint{ep}
+	}
+	for _, c := range usable {
+		b := ep
+		b.Name = normalizeTopic(c.value)
+		b.NameConfidence = c.conf
+		b.NameResolution = "param:" + r.param + "=" + c.value + " (" + c.via + ")"
+		if len(usable) > 1 {
+			b.NameConfidence = paramConfAmbiguous
+			var others []string
+			for _, o := range usable {
+				if o.value != c.value {
+					others = append(others, o.value+" ("+o.via+")")
+				}
+			}
+			b.NameResolution += "; ambiguous, also: " + strings.Join(others, ", ")
+		}
+		b.expr, b.inline = "", nil
+		bound = append(bound, b)
+	}
+	return bound, nil
 }
 
 // commGraphNote states what the graph is and, precisely, how far its remapping
@@ -424,7 +662,11 @@ func commGraphNote(res CommGraphResult) string {
 		b += fmt.Sprintf("%d <include> directive(s) were NOT expanded ($(find …) substitution is not resolved), so remaps defined only in included files are missing. ", res.UnresolvedIncludes)
 	}
 	b += "A remap is associated to source by PACKAGE, which is a heuristic — a launch file names an executable, not a file — and a name remapped inconsistently within one package is reported launch-ambiguous rather than guessed. "
-	b += "RPC/DDS wire topology is still inferred from source idioms only, dynamic (non-literal) names are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source."
+	if res.ParamResolved > 0 || len(res.Unbound) > 0 {
+		b += fmt.Sprintf("%d endpoint(s) take their name from a parameter and were resolved through it (name_resolution param:<name>=<value> (<source>), name_confidence below a literal's: a launch value for the node's package > one elsewhere in the repo = the call's default > a package YAML no launch file is seen loading); %d endpoint(s) name a variable/parameter whose value could not be resolved and are listed under unresolved_endpoints, never linked. ",
+			res.ParamResolved, len(res.Unbound))
+	}
+	b += "RPC/DDS wire topology is still inferred from source idioms only, names built by expressions (concatenation, calls) are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source."
 	return b
 }
 
@@ -435,8 +677,20 @@ func commGraphNote(res CommGraphResult) string {
 func Topic(s Store, repo, ref, name string) CommGraphResult {
 	full := CommGraph(s, repo, ref)
 	want := normalizeTopic(name)
-	res := CommGraphResult{Meta: full.Meta, Note: full.Note,
+	res := CommGraphResult{Meta: full.Meta, Note: full.Note, ParamResolved: full.ParamResolved,
 		LaunchFiles: full.LaunchFiles, Remapped: full.Remapped, UnresolvedIncludes: full.UnresolvedIncludes}
+	// An endpoint whose name could not be resolved is still a candidate when
+	// its parameter or variable is named after the topic (status_topic for
+	// /status): listed, labeled, never linked.
+	wantCanon := canonName(want)
+	for _, ep := range full.Unbound {
+		for _, n := range append(strings.Split(ep.Param, "|"), ep.expr, ep.Raw) {
+			if n != "" && canonName(n) == wantCanon {
+				res.Unbound = append(res.Unbound, ep)
+				break
+			}
+		}
+	}
 	for _, g := range full.Groups {
 		// Groups are keyed on the RUNTIME name, but a reader may well ask using
 		// the name they saw in source. Match either, so a remapped topic is
@@ -457,6 +711,9 @@ func Topic(s Store, repo, ref, name string) CommGraphResult {
 	}
 	if len(res.Groups) == 0 {
 		res.Note = topicMiss(name, want, full.Groups, ref)
+		if len(res.Unbound) > 0 {
+			res.Note += fmt.Sprintf(" — %d endpoint(s) whose name comes from an unresolved parameter/variable named like it are listed under unresolved_endpoints", len(res.Unbound))
+		}
 	}
 	return res
 }
@@ -511,6 +768,33 @@ func topicMiss(orig, want string, groups []CommGroup, ref string) string {
 // bumped when a producer and a consumer share a captured message type (C++), and
 // left at the producer/consumer floor for a dangling (one-sided) group.
 func linkConfidence(g CommGroup) float64 {
+	c := nameLinkConfidence(g)
+	// A name read from a parameter is only as sure as its value: the edge
+	// claims no more than its best-supported producer and consumer names (a
+	// literal counts as certain), so one ambiguous mock does not sink the
+	// edge, and a param-only edge never reads as sure as a literal one.
+	best := func(eps []CommEndpoint) float64 {
+		b := 0.0
+		for _, ep := range eps {
+			v := ep.NameConfidence
+			if v == 0 {
+				v = 1
+			}
+			if v > b {
+				b = v
+			}
+		}
+		return b
+	}
+	for _, side := range [][]CommEndpoint{g.Producers, g.Consumers} {
+		if b := best(side); len(side) > 0 && b < c {
+			c = b
+		}
+	}
+	return c
+}
+
+func nameLinkConfidence(g CommGroup) float64 {
 	if !g.Connected() {
 		return 0.6 // one-sided: the endpoint is real, the edge is not (yet) proven
 	}

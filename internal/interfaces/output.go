@@ -36,6 +36,12 @@ type metaDTO struct {
 	Repo     string   `json:"repo"`
 	Ref      string   `json:"ref"`
 	Warnings []string `json:"warnings,omitempty"`
+	// refs: the ref each repo was actually read at, when repos are pinned.
+	Refs map[string]string `json:"refs,omitempty"`
+}
+
+func metaOf(m query.Meta) metaDTO {
+	return metaDTO{Repo: m.Repo, Ref: m.Ref, Warnings: m.Warnings, Refs: m.Refs}
 }
 
 type verdictDTO struct {
@@ -60,7 +66,7 @@ func CompatJSON(r query.CompatReport) (string, error) {
 	dto := compatDTO{
 		Symbol: r.Symbol,
 		Origin: refDTO{Repo: r.Origin.Repo, Ref: r.Origin.Ref},
-		Meta:   metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:   metaOf(r.Meta),
 	}
 	for _, v := range r.Verdicts {
 		dto.Verdicts = append(dto.Verdicts, verdictDTO{
@@ -89,7 +95,7 @@ type diffDTO struct {
 func DiffJSON(r query.DiffReport) (string, error) {
 	dto := diffDTO{
 		Repo: r.Repo, From: r.From, To: r.To,
-		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta: metaOf(r.Meta),
 	}
 	for _, c := range r.Changes {
 		dto.Changes = append(dto.Changes, changeDTO{Name: c.Name, Change: string(c.Kind), Confidence: c.Confidence})
@@ -217,7 +223,7 @@ func BriefJSON(b query.BriefResult) (string, error) {
 		Callers: briefNeighbors(b.Callers),
 		Tests:   b.Tests,
 		Omitted: b.Omitted,
-		Meta:    metaDTO{Repo: b.Meta.Repo, Ref: b.Meta.Ref, Warnings: b.Meta.Warnings},
+		Meta:    metaOf(b.Meta),
 	}
 	if dto.Tests == nil {
 		dto.Tests = []string{}
@@ -251,7 +257,7 @@ func RootCauseTraceJSON(r query.RootCauseTraceResult) (string, error) {
 		Frames:   make([]mappedFrameDTO, 0, len(r.Frames)),
 		Unmapped: r.Unmapped,
 		Note:     r.Note,
-		Meta:     metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:     metaOf(r.Meta),
 	}
 	for _, f := range r.Frames {
 		dto.Frames = append(dto.Frames, mappedFrameDTO{File: f.File, Function: f.Function, Symbol: f.Symbol})
@@ -308,7 +314,7 @@ func XImpactJSON(r query.XImpactResult) (string, error) {
 		ContractChanged: r.ContractChanged,
 		StaleCallers:    r.StaleCallers,
 		Note:            r.Note,
-		Meta:            metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:            metaOf(r.Meta),
 	}
 	for _, c := range r.Callers {
 		dto.Callers = append(dto.Callers, ximpactCallerDTO{
@@ -352,7 +358,7 @@ func BlastRadiusJSON(r query.BlastRadiusResult) (string, error) {
 		ContractChanged: r.ContractChanged, Note: r.Note,
 		InRepoCallers: nonNil(r.InRepoCallers), CoveringTests: nonNil(r.CoveringTests),
 		FleetCallers: make([]ximpactCallerDTO, 0, len(r.FleetCallers)),
-		Meta:         metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:         metaOf(r.Meta),
 	}
 	for _, c := range r.FleetCallers {
 		dto.FleetCallers = append(dto.FleetCallers, ximpactCallerDTO{Repo: c.Repo, Ref: c.Ref, Caller: c.Caller, Module: c.Module, ResolutionMethod: c.ResolutionMethod, Confidence: c.Confidence})
@@ -492,7 +498,7 @@ func SemanticJSON(r query.SemanticResult) (string, error) {
 	dto := semanticDTO{
 		Ranker: r.Ranker, Note: r.Note,
 		Hits: make([]semanticHitDTO, 0, len(r.Hits)),
-		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta: metaOf(r.Meta),
 	}
 	for _, h := range r.Hits {
 		dto.Hits = append(dto.Hits, semanticHitDTO{Repo: h.Repo, Path: h.Path, Symbol: h.Symbol, Line: h.Line, Score: h.Score})
@@ -532,7 +538,7 @@ func InvestigateJSON(r query.InvestigateResult) (string, error) {
 		Question: r.Question, Dossier: r.Dossier, Omitted: r.Omitted,
 		Considered: r.Considered, TopScore: r.TopScore,
 		Findings: make([]investigateFindingDTO, 0, len(r.Findings)),
-		Meta:     metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:     metaOf(r.Meta),
 	}
 	for _, f := range r.Findings {
 		dto.Findings = append(dto.Findings, investigateFindingDTO{
@@ -566,7 +572,7 @@ func UsagesJSON(r query.UsagesResult) (string, error) {
 	dto := usagesDTO{
 		Symbol: r.Symbol, Total: r.Total, Note: r.Note,
 		Usages: make([]usageDTO, 0, len(r.Usages)),
-		Meta:   metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:   metaOf(r.Meta),
 	}
 	for _, u := range r.Usages {
 		dto.Usages = append(dto.Usages, usageDTO{Repo: u.Repo, Path: u.Path, Line: u.Line, Text: u.Text, In: u.In, Confirmed: u.Confirmed})
@@ -593,6 +599,10 @@ type commEndpointDTO struct {
 	RemapVia       string `json:"remap_via,omitempty"`
 	In             string `json:"in,omitempty"`
 	Text           string `json:"text,omitempty"`
+	// param: the ROS parameter a non-literal name was read from;
+	// name_confidence: how surely its value is the runtime name (below a literal).
+	Param          string  `json:"param,omitempty"`
+	NameConfidence float64 `json:"name_confidence,omitempty"`
 }
 
 type commGroupDTO struct {
@@ -610,12 +620,15 @@ type topicsDTO struct {
 	Unresolved int            `json:"unresolved,omitempty"`
 	// How complete the remap picture is: launch files parsed, endpoints
 	// rewritten, and <include>s not expanded (§8D.4).
-	LaunchFiles        int     `json:"launch_files,omitempty"`
-	Remapped           int     `json:"remapped,omitempty"`
-	UnresolvedIncludes int     `json:"unresolved_includes,omitempty"`
-	UnexpandedRemaps   int     `json:"unexpanded_remaps,omitempty"`
-	Note               string  `json:"note,omitempty"`
-	Meta               metaDTO `json:"_meta"`
+	LaunchFiles        int `json:"launch_files,omitempty"`
+	Remapped           int `json:"remapped,omitempty"`
+	UnresolvedIncludes int `json:"unresolved_includes,omitempty"`
+	UnexpandedRemaps   int `json:"unexpanded_remaps,omitempty"`
+	ParamResolved      int `json:"param_resolved,omitempty"`
+	// Endpoints whose name is a variable/parameter with no resolvable value.
+	UnresolvedEndpoints []commEndpointDTO `json:"unresolved_endpoints,omitempty"`
+	Note                string            `json:"note,omitempty"`
+	Meta                metaDTO           `json:"_meta"`
 }
 
 func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
@@ -625,7 +638,7 @@ func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
 			Repo: e.Repo, Path: e.Path, Line: e.Line, Role: e.Role,
 			Name: e.Name, Raw: e.Raw, MsgType: e.MsgType, MsgTypeSource: e.MsgTypeSource,
 			Effective: e.Effective, NameResolution: e.NameResolution, RemapVia: e.RemapVia,
-			In: e.In, Text: e.Text,
+			In: e.In, Text: e.Text, Param: e.Param, NameConfidence: e.NameConfidence,
 		})
 	}
 	return out
@@ -638,9 +651,9 @@ func TopicsJSON(r query.CommGraphResult) (string, error) {
 	dto := topicsDTO{
 		Endpoints: r.Endpoints, Unresolved: r.Unresolved, Note: r.Note,
 		LaunchFiles: r.LaunchFiles, Remapped: r.Remapped, UnresolvedIncludes: r.UnresolvedIncludes,
-		UnexpandedRemaps: r.UnexpandedRemaps,
-		Groups:           make([]commGroupDTO, 0, len(r.Groups)),
-		Meta:             metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		UnexpandedRemaps: r.UnexpandedRemaps, ParamResolved: r.ParamResolved,
+		Groups: make([]commGroupDTO, 0, len(r.Groups)),
+		Meta:   metaOf(r.Meta),
 	}
 	for _, g := range r.Groups {
 		dto.Groups = append(dto.Groups, commGroupDTO{
@@ -648,6 +661,9 @@ func TopicsJSON(r query.CommGraphResult) (string, error) {
 			Producers: commEndpointsToDTO(g.Producers),
 			Consumers: commEndpointsToDTO(g.Consumers),
 		})
+	}
+	if len(r.Unbound) > 0 {
+		dto.UnresolvedEndpoints = commEndpointsToDTO(r.Unbound)
 	}
 	return marshal(dto)
 }
@@ -675,7 +691,7 @@ func VerifyEditJSON(r query.VerifyResult) (string, error) {
 	dto := verifyDTO{
 		Path: r.Path, Safe: r.Safe, Added: r.Added, Removed: r.Removed, Changed: r.Changed, Note: r.Note,
 		Impacts: make([]editImpactDTO, 0, len(r.Impacts)),
-		Meta:    metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings},
+		Meta:    metaOf(r.Meta),
 	}
 	for _, im := range r.Impacts {
 		e := editImpactDTO{Symbol: im.Symbol, Kind: string(im.Kind), Breaks: make([]usageDTO, 0, len(im.Breaks))}
@@ -725,7 +741,7 @@ type logSitesDTO struct {
 // LogSitesJSON renders the code locations that print a log line.
 func LogSitesJSON(r query.LogSitesResult) (string, error) {
 	dto := logSitesDTO{Line: r.Line, Note: r.Note, Sites: make([]logSiteDTO, 0, len(r.Sites)),
-		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings}}
+		Meta: metaOf(r.Meta)}
 	for _, x := range r.Sites {
 		dto.Sites = append(dto.Sites, logSiteDTO{Repo: x.Repo, Path: x.Path, Line: x.Line, In: x.In, Call: x.Call,
 			Format: x.Format, Text: x.Text, Fixed: x.Fixed, Logging: x.Logging, InPkg: x.InPackage})
@@ -757,7 +773,7 @@ type implsDTO struct {
 // ImplsJSON renders a base class's implementations.
 func ImplsJSON(r query.ImplsResult) (string, error) {
 	dto := implsDTO{Base: r.Base, Method: r.Method, BaseDefs: r.BaseDefs, Note: r.Note, Impls: make([]implDTO, 0, len(r.Impls)),
-		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings}}
+		Meta: metaOf(r.Meta)}
 	for _, x := range r.Impls {
 		dto.Impls = append(dto.Impls, implDTO{Repo: x.Repo, Path: x.Path, Line: x.Line, Class: x.Class, Bases: x.Bases,
 			Depth: x.Depth, Plugin: x.Plugin, Method: x.Method, Test: x.Test})
@@ -816,7 +832,7 @@ func clientDTO(c query.ClientCall) clientCallDTO {
 // RoutesJSON renders the HTTP client↔route map.
 func RoutesJSON(r query.RoutesResult) (string, error) {
 	dto := routesDTO{Filter: r.Filter, Routes: r.Routes, Clients: r.Clients, Note: r.Note, Links: make([]routeLinkDTO, 0, len(r.Links)),
-		Meta: metaDTO{Repo: r.Meta.Repo, Ref: r.Meta.Ref, Warnings: r.Meta.Warnings}}
+		Meta: metaOf(r.Meta)}
 	for _, l := range r.Links {
 		x := routeLinkDTO{Route: routeDTO{Repo: l.Route.Repo, Path: l.Route.Path, Line: l.Route.Line, Method: l.Route.Method,
 			Pattern: l.Route.Pattern, Handler: l.Route.Handler, Framework: l.Route.Framework}, Clients: make([]clientCallDTO, 0, len(l.Clients))}

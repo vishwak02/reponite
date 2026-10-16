@@ -90,14 +90,16 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 	var warns []string
 	names := ResolveSymbol(s, repo, ref, symbol)
 	if len(names) == 0 {
-		return BriefResult{Symbol: symbol, Ref: ref, Meta: Meta{Repo: repo, Ref: ref, Warnings: []string{"symbol not found at " + ref}}}
+		m := NewMeta(s, repo, ref)
+		m.Warnings = []string{"symbol not found at " + m.Ref}
+		return BriefResult{Symbol: symbol, Ref: m.Ref, Meta: m}
 	}
 	qid := names[0]
 	if len(names) > 1 {
 		warns = append(warns, "ambiguous "+symbol+"; using "+qid+" (also: "+strings.Join(names[1:], ", ")+")")
 	}
 
-	res := BriefResult{Symbol: qid, Ref: ref, Omitted: []string{}}
+	res := BriefResult{Symbol: qid, Ref: EffectiveRef(s, repo, ref), Omitted: []string{}}
 	files := s.Files(repo, ref)
 	spent := 0
 	add := func(cost int) bool { // reserve budget; false when it would overflow
@@ -184,11 +186,11 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 	if res.Target.Exported {
 		var targets []RepoRef
 		for _, r := range s.Refs(repo) {
-			if r != ref {
+			if r != ref && r != EffectiveRef(s, repo, ref) {
 				targets = append(targets, RepoRef{Repo: repo, Ref: r})
 			}
 		}
-		if rep, err := CompatSymbol(s, RepoRef{Repo: repo, Ref: ref}, qid, targets); err == nil {
+		if rep, err := CompatSymbol(s, RepoRef{Repo: repo, Ref: EffectiveRef(s, repo, ref)}, qid, targets); err == nil {
 			for _, v := range rep.Verdicts {
 				if !add(20) {
 					res.Omitted = append(res.Omitted, "compat(budget)")
@@ -199,7 +201,8 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 		}
 	}
 
-	res.Meta = Meta{Repo: repo, Ref: ref, Warnings: warns}
+	res.Meta = NewMeta(s, repo, ref)
+	res.Meta.Warnings = warns
 	return res
 }
 

@@ -36,3 +36,21 @@ func launchFile(path, content string) ParsedFile {
 	}
 	return pf
 }
+
+// maxParamFileBytes skips YAML too large to be a parameter file (fixtures,
+// generated data): a rosparam load target is a few KB.
+const maxParamFileBytes = 256 << 10
+
+// IsROSParamFile reports whether path is a YAML file stored for parameter
+// resolution (`topics` resolves a topic name read from a parameter through the
+// <rosparam> YAML a launch file loads).
+func IsROSParamFile(path string) bool { return roslaunch.IsParamFile(path) }
+
+// paramFile stores a YAML parameter file for content search and query-time
+// parameter resolution: no symbols, no spans. ok=false when it is too large.
+func paramFile(path, content string) (ParsedFile, bool) {
+	if len(content) > maxParamFileBytes {
+		return ParsedFile{}, false
+	}
+	return ParsedFile{Path: path, Content: content, Lang: "yaml", IsTest: IsTestPath(path)}, true
+}

@@ -103,7 +103,7 @@ func RoutesWith(s Store, repo, ref, filter string, limit int, opt RoutesOptions)
 	if limit <= 0 {
 		limit = 50
 	}
-	res := RoutesResult{Filter: filter, Meta: Meta{Repo: repo, Ref: ref}}
+	res := RoutesResult{Filter: filter, Meta: NewMeta(s, repo, ref)}
 	var routes []Route
 	var clients []ClientCall
 	for _, rp := range reposFor(s, repo) {

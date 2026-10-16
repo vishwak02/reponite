@@ -88,7 +88,7 @@ index-backed (build with `+"`make cli`"+`):
   fleet [list|add <dir>|remove <dir|repo>|path]   the persistent registry serve/mcp mount by default
   grep <pattern> [ref] trigram-prefiltered search with symbol fusion
   search <substr> [ref]   structural name search
-  semsearch <query> [ref] [--limit N]   semantic search ("where is the thing that does X")
+  semsearch <query> [ref] [--limit N]   "where is the thing that does X": KEYWORD ranking (term-idf) unless an embeddings endpoint is configured (neural build)
   investigate <question...> [--budget N] [--json]   one cited dossier answering "how does X work?" (fleet-wide)
   context <symbol> [ref]  direct callers/callees, each edge with resolution_method + confidence
   rootcause <symbol> <from> <to>   drill a behavior change down to its mutation sites

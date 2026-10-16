@@ -84,6 +84,14 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
+		if IsROSParamFile(path) {
+			if b, readErr := os.ReadFile(path); readErr == nil {
+				if pf, ok := paramFile(rel, string(b)); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
 		src, rules, ext, ok := readSource(path)
 		if !ok {
 			return nil

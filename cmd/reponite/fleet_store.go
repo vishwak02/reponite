@@ -3,6 +3,8 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -87,9 +89,53 @@ func openFleet(local bool) *fleetStore {
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", refsEnv, err))
 		}
-		f.Store = &storage.Pinned{Inner: f.Store, Pins: p}
+		// The pins stand in for the default ref only: an explicit other ref
+		// (a compat target, `context X 5.6.7`) is read as asked.
+		f.Store = &storage.Pinned{Inner: f.Store, Pins: p, Only: "HEAD"}
+	}
+	if hideTests() {
+		f.Store = &storage.NoTests{Inner: f.Store}
 	}
 	return f
+}
+
+// RefFor and IndexVersion forward the wrapped store's optional interfaces:
+// fleetStore embeds query.Store, which does not carry them, so without these a
+// pinned fleet looked unpinned to every coverage check ("nothing searched").
+func (f *fleetStore) RefFor(repo, ref string) string { return query.EffectiveRef(f.Store, repo, ref) }
+func (f *fleetStore) IndexVersion(repo, ref string) (int, bool) {
+	if iv, ok := f.Store.(query.IndexVersioner); ok {
+		return iv.IndexVersion(repo, ref)
+	}
+	return 0, false
+}
+
+// noTestsEnv hides test code from the commands that take --no-tests.
+const noTestsEnv = "REPONITE_NO_TESTS"
+
+// noTestsFlag is --no-tests; noTestsCmd marks a command that honors it (and
+// the env), so a command whose answer IS about tests (brief's covering tests,
+// blast-radius) never silently loses them to an exported env var.
+var noTestsFlag, noTestsCmd bool
+
+// registerNoTests adds --no-tests to a command.
+func registerNoTests(fs *flag.FlagSet) {
+	noTestsCmd = true
+	fs.BoolVar(&noTestsFlag, "no-tests", false, "drop test code (symbols and files classified as test: test/ dirs, *_test.*, test_*.py, mocks …) from the answer; also "+noTestsEnv+"=1")
+}
+
+func hideTests() bool {
+	if !noTestsCmd {
+		return false
+	}
+	if noTestsFlag {
+		return true
+	}
+	switch strings.ToLower(os.Getenv(noTestsEnv)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // refsEnv pins repos to refs fleet-wide: "repoA=ref1,repoB=ref2".
@@ -133,15 +179,27 @@ func openPeers(dir string) *fleetStore {
 }
 
 // repoFor finds which repo in this store actually defines symbol at ref, so a
-// symbol-scoped command (brief, context, blast-radius) answers about the repo
-// that HAS it rather than silently returning a blank result for the working
-// directory. Preference order: the local repo, then a unique fleet match.
+// symbol-scoped command (brief, context, compat, rootcause, blast-radius)
+// answers about the repo that HAS it rather than silently returning a blank
+// result for the working directory. Preference order: --repo, the local repo,
+// then a unique fleet match. C++ spellings (Class::method, ns::Class::method)
+// resolve like reponite's own dir.Class.method ids.
 //
-// It never guesses: an ambiguous symbol reports every candidate, and a missing
-// one reports the near names. Returning an empty brief for a symbol that plainly
-// exists elsewhere in the fleet reads as "this symbol is empty", which is worse
-// than an error.
-func (f *fleetStore) repoFor(symbol, ref string) string {
+// It never guesses: a symbol defined in several repos prints the candidates
+// (each with its repo and the ref read) as the answer, and a miss says WHICH
+// miss it is — the ref is not indexed (nothing could match), or the symbol is
+// in no searched repo — with the nearest names and their repos.
+func (f *fleetStore) repoFor(symbol, ref, prefer string) string {
+	at := func(repo string) string { return repo + "@" + query.EffectiveRef(f, repo, ref) }
+	if prefer != "" {
+		if !containsName(f.Names, prefer) {
+			fail(fmt.Errorf("--repo %s is not in the fleet (%v)", prefer, f.Names))
+		}
+		if len(query.ResolveSymbol(f, prefer, ref, symbol)) > 0 {
+			return prefer
+		}
+		f.missFail(symbol, ref, []string{prefer})
+	}
 	if len(query.ResolveSymbol(f, f.Local, ref, symbol)) > 0 {
 		return f.Local
 	}
@@ -156,21 +214,75 @@ func (f *fleetStore) repoFor(symbol, ref string) string {
 	}
 	switch len(found) {
 	case 1:
-		fmt.Fprintf(os.Stderr, "reponite: %q is not in %s; answering for %s\n", symbol, f.Local, found[0])
+		fmt.Fprintf(os.Stderr, "reponite: %q is not in %s; answering for %s\n", symbol, at(f.Local), at(found[0]))
 		return found[0]
 	case 0:
-		near := query.Suggest(f, query.FleetRepo, ref, symbol, 5)
-		if len(near) > 0 {
-			names := make([]string, 0, len(near))
-			for _, n := range near {
-				names = append(names, n.Name)
-			}
-			fail(fmt.Errorf("symbol %q is not indexed in any registered repo at %s; did you mean: %s", symbol, ref, strings.Join(names, ", ")))
-		}
-		fail(fmt.Errorf("symbol %q is not indexed in any registered repo at %s (indexed repos: %v)", symbol, ref, f.Names))
+		f.missFail(symbol, ref, f.Names)
 	}
-	fail(fmt.Errorf("symbol %q exists in several repos (%s); re-run in one of them, or use --local", symbol, strings.Join(found, ", ")))
+	// Several repos define it: the candidates ARE the answer.
+	type cand struct {
+		Repo    string   `json:"repo"`
+		Ref     string   `json:"ref"`
+		Symbols []string `json:"symbols"`
+	}
+	out := struct {
+		Symbol     string `json:"symbol"`
+		Ambiguous  bool   `json:"ambiguous"`
+		Candidates []cand `json:"candidates"`
+		Note       string `json:"note"`
+	}{Symbol: symbol, Ambiguous: true,
+		Note: fmt.Sprintf("%q is not in %s and is defined in %d other repos — re-run with --repo <repo> (or a more qualified name)", symbol, at(f.Local), len(found))}
+	for _, repo := range found {
+		out.Candidates = append(out.Candidates, cand{Repo: repo, Ref: query.EffectiveRef(f, repo, ref), Symbols: query.ResolveSymbol(f, repo, ref, symbol)})
+	}
+	b, _ := json.MarshalIndent(out, "", "  ")
+	fmt.Println(string(b))
+	os.Exit(0)
 	return ""
+}
+
+// missFail explains a symbol miss precisely: no ref matched (nothing was
+// readable at the requested/pinned ref) is a different problem from "the
+// symbol is not in this repo", and both differ from "not anywhere".
+func (f *fleetStore) missFail(symbol, ref string, repos []string) {
+	var readable, unreadable []string
+	for _, repo := range repos {
+		eff := query.EffectiveRef(f, repo, ref)
+		if query.RefIndexed(f, repo, ref) {
+			readable = append(readable, repo+"@"+eff)
+		} else {
+			refs := f.Refs(repo)
+			if len(refs) > 5 {
+				refs = append(append([]string{}, refs[len(refs)-5:]...), fmt.Sprintf("+%d more", len(refs)-5))
+			}
+			unreadable = append(unreadable, fmt.Sprintf("%s@%s (indexed: %v)", repo, eff, refs))
+		}
+	}
+	if len(unreadable) > 6 {
+		unreadable = append(unreadable[:5], fmt.Sprintf("… and %d more repos", len(unreadable)-5))
+	}
+	if len(readable) == 0 {
+		fail(fmt.Errorf("no ref matched: %s — nothing could be searched for %q; index the ref (reponite index <dir> <ref> --git <rev>) or pass the indexed ref", strings.Join(unreadable, "; "), symbol))
+	}
+	msg := fmt.Sprintf("symbol %q is not defined in %s", symbol, strings.Join(readable, ", "))
+	if len(repos) > 1 {
+		msg = fmt.Sprintf("symbol %q is not defined in any of the %d searched repos at their refs (local %s@%s)", symbol, len(readable), f.Local, query.EffectiveRef(f, f.Local, ref))
+	}
+	if len(unreadable) > 0 {
+		msg += fmt.Sprintf("; not searched (ref not indexed): %s", strings.Join(unreadable, "; "))
+	}
+	scope := query.FleetRepo
+	if len(repos) == 1 {
+		scope = repos[0]
+	}
+	if near := query.Suggest(f, scope, ref, symbol, 6); len(near) > 0 {
+		names := make([]string, 0, len(near))
+		for _, n := range near {
+			names = append(names, fmt.Sprintf("%s (%s@%s)", n.Name, n.Repo, n.Ref))
+		}
+		msg += "; near matches: " + strings.Join(names, ", ")
+	}
+	fail(fmt.Errorf("%s", msg))
 }
 
 // view is the fleet read at ref, with any repo=ref pins applied, plus a note
@@ -189,7 +301,7 @@ func (f *fleetStore) view(ref, pins string) (query.Store, string) {
 				fail(fmt.Errorf("--refs names %q, which is not in the fleet (%v)", repo, f.Names))
 			}
 		}
-		s = &storage.Pinned{Inner: f.Store, Pins: p}
+		s = &storage.Pinned{Inner: f.Store, Pins: p, Only: ref}
 	}
 	read, missing := storage.Coverage(s, ref)
 	note := ""

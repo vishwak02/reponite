@@ -302,21 +302,28 @@ func moduleNote(st interface{ ModulePath(string) string }, repo string) string {
 }
 
 func cmdCompat(args []string) {
-	pos := parseCmd("compat", "compat <symbol> [ref]", args, nil)
+	var repoFlag string
+	pos := parseCmd("compat", "compat <symbol> [ref] [--repo R] [--no-tests]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&repoFlag, "repo", "", "the repo defining the symbol (default: this repo, else the one fleet repo that has it)")
+		registerNoTests(fs)
+	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite compat <symbol> [ref]"))
+		fail(fmt.Errorf("usage: reponite compat <symbol> [ref] [--repo R] [--no-tests]"))
 	}
+	f := openFleet(false)
+	defer f.Close()
 	ref := arg(pos, 1, "HEAD")
-	repo := repoName(".")
-	st := openStore(".")
-	defer st.Close()
+	repo := f.repoFor(pos[0], ref, repoFlag)
+	// The origin is the ref actually read (a pin's label under REPONITE_REFS),
+	// so the report names it and never compares the pinned ref to itself.
+	origin := query.EffectiveRef(f, repo, ref)
 	var targets []query.RepoRef
-	for _, r := range st.Refs(repo) {
-		if r != ref {
+	for _, r := range f.Refs(repo) {
+		if r != origin {
 			targets = append(targets, query.RepoRef{Repo: repo, Ref: r})
 		}
 	}
-	rep, err := query.CompatSymbol(st, query.RepoRef{Repo: repo, Ref: ref}, pos[0], targets)
+	rep, err := query.CompatSymbol(f, query.RepoRef{Repo: repo, Ref: origin}, pos[0], targets)
 	if err != nil {
 		fail(err)
 	}
@@ -345,14 +352,15 @@ func cmdGrep(args []string) {
 	var fixed bool
 	var limit, offset int
 	var local bool
-	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed] [--limit N] [--offset N] [--local]", args, func(fs *flag.FlagSet) {
+	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed] [--limit N] [--offset N] [--local] [--no-tests]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&fixed, "fixed", false, "treat the pattern as a literal string, not a regex")
 		fs.IntVar(&limit, "limit", 0, "max matches returned (0 = default 50, -1 = all)")
 		fs.IntVar(&offset, "offset", 0, "matches to skip — page through a truncated result")
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
+		registerNoTests(fs)
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite grep <pattern> [ref] [--fixed] [--limit N] [--offset N]"))
+		fail(fmt.Errorf("usage: reponite grep <pattern> [ref] [--fixed] [--limit N] [--offset N] [--no-tests]"))
 	}
 	f := openFleet(local)
 	defer f.Close()
@@ -367,10 +375,12 @@ func cmdGrep(args []string) {
 func cmdSearch(args []string) {
 	var tests bool
 	var local bool
-	pos := parseCmd("search", "search <substr> [ref] [--tests] [--local]", args, func(fs *flag.FlagSet) {
+	pos := parseCmd("search", "search <substr> [ref] [--tests] [--local] [--no-tests]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&tests, "tests", false, "include test symbols (Test*/Benchmark*/…)")
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
+		registerNoTests(fs)
 	})
+	tests = tests && !hideTests()
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite search <substr> [ref] [--tests] [--local]"))
 	}
@@ -380,13 +390,18 @@ func cmdSearch(args []string) {
 }
 
 func cmdRootCause(args []string) {
-	pos := parseCmd("rootcause", "rootcause <symbol> <from-ref> <to-ref>", args, nil)
+	var repoFlag string
+	pos := parseCmd("rootcause", "rootcause <symbol> <from-ref> <to-ref> [--repo R] [--no-tests]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&repoFlag, "repo", "", "the repo defining the symbol (default: this repo, else the one fleet repo that has it)")
+		registerNoTests(fs)
+	})
 	if len(pos) < 3 {
-		fail(fmt.Errorf("usage: reponite rootcause <symbol> <from-ref> <to-ref>"))
+		fail(fmt.Errorf("usage: reponite rootcause <symbol> <from-ref> <to-ref> [--repo R] [--no-tests]"))
 	}
-	st := openStore(".")
-	defer st.Close()
-	printJSON(interfaces.RootCauseJSON(query.RootCauseBy(st, repoName("."), pos[0], pos[1], pos[2])))
+	f := openFleet(false)
+	defer f.Close()
+	repo := f.repoFor(pos[0], pos[2], repoFlag)
+	printJSON(interfaces.RootCauseJSON(query.RootCauseBy(f, repo, pos[0], pos[1], pos[2])))
 }
 
 // cmdCICheck exits non-zero if any exported symbol broke (removed or
@@ -447,16 +462,22 @@ func cmdCICheck(args []string) {
 func cmdSemSearch(args []string) {
 	var limit int
 	var local bool
-	pos := parseCmd("semsearch", "semsearch <query> [ref] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+	pos := parseCmd("semsearch", "semsearch <query> [ref] [--limit N] [--local] [--no-tests]\n  Ranks symbols by KEYWORD similarity (term-idf over identifiers and bodies) unless an embeddings\n  endpoint is configured (REPONITE_EMBED_ENDPOINT + REPONITE_EMBED_MODEL, neural build): it is not\n  semantic search by default. Per-repo term indexes are cached next to each index.", args, func(fs *flag.FlagSet) {
 		fs.IntVar(&limit, "limit", 0, "max results (0 = default)")
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
+		registerNoTests(fs)
 	})
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite semsearch <query> [ref] [--limit N] [--local]"))
 	}
 	f := openFleet(local)
 	defer f.Close()
-	res := query.SemanticSearch(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], limit, semanticRanker())
+	ranker, why := semanticRankerWhy()
+	res := query.SemanticSearchCached(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], limit, ranker,
+		&termCache{store: f, noTests: hideTests()})
+	if ranker == nil {
+		res.Note = joinNote(res.Note, why)
+	}
 	res.Note = joinNote(res.Note, f.fleetNote())
 	printJSON(interfaces.SemanticJSON(res))
 }
@@ -516,7 +537,7 @@ func cmdBlastRadius(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	ref := arg(pos, 1, "HEAD")
-	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(f, f.repoFor(pos[0], ref), ref, pos[0])))
+	printJSON(interfaces.BlastRadiusJSON(query.BlastRadius(f, f.repoFor(pos[0], ref, ""), ref, pos[0])))
 }
 
 // cmdVerifyEdit compares the (edited) working-tree file at path against its
@@ -565,6 +586,7 @@ func cmdUsages(args []string) {
 	pos := parseCmd("usages", "usages <symbol> [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 		rf.register(fs)
+		registerNoTests(fs)
 	})
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite usages <symbol> [--ref R] [--refs repo=ref,...] [--local]"))
@@ -608,6 +630,7 @@ func cmdImpls(args []string) {
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 50, "max classes")
 		rf.register(fs)
+		registerNoTests(fs)
 	})
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite impls <Base[::method]>"))
@@ -633,6 +656,7 @@ func cmdRoutes(args []string) {
 		fs.StringVar(&gateways, "gateway", "", "reverse-proxy gateway config(s) in Caddy JSON, comma-separated: follow each request through its mount")
 		fs.StringVar(&upstreams, "upstream", "", "which repo serves a gateway upstream, host:port=repo,... (default: matched by name)")
 		rf.register(fs)
+		registerNoTests(fs)
 	})
 	opt, err := interfaces.LoadGateways(gateways, upstreams)
 	if err != nil {
@@ -659,6 +683,7 @@ func cmdTopics(args []string) {
 	pos := parseCmd("topics", "topics [name] [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		rf.register(fs)
+		registerNoTests(fs)
 	})
 	f := openFleet(local)
 	defer f.Close()
@@ -682,9 +707,11 @@ func cmdRepos(args []string) {
 func cmdBrief(args []string) {
 	var budget int
 	var local bool
-	pos := parseCmd("brief", "brief <symbol> [ref] [--budget N] [--local]", args, func(fs *flag.FlagSet) {
+	var repoFlag string
+	pos := parseCmd("brief", "brief <symbol | Class::method> [ref] [--repo R] [--budget N] [--local]", args, func(fs *flag.FlagSet) {
 		fs.IntVar(&budget, "budget", 0, "token budget (0 = default ~3000)")
 		fs.BoolVar(&local, "local", false, "only consider this repo, not the registered fleet")
+		fs.StringVar(&repoFlag, "repo", "", "the repo defining the symbol (default: this repo, else the one fleet repo that has it)")
 	})
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite brief <symbol> [ref] [--budget N] [--local]"))
@@ -692,7 +719,7 @@ func cmdBrief(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	ref := arg(pos, 1, "HEAD")
-	printJSON(interfaces.BriefJSON(query.Brief(f, f.repoFor(pos[0], ref), ref, pos[0], budget, processing.NewGitIntent("."))))
+	printJSON(interfaces.BriefJSON(query.Brief(f, f.repoFor(pos[0], ref, repoFlag), ref, pos[0], budget, processing.NewGitIntent("."))))
 }
 
 // cmdRootCauseTrace reads a stack trace (from a file arg or stdin) and drills
@@ -724,17 +751,21 @@ func cmdRootCauseTrace(args []string) {
 func cmdContext(args []string) {
 	var tests bool
 	var local bool
-	pos := parseCmd("context", "context <symbol> [ref] [--tests] [--local]", args, func(fs *flag.FlagSet) {
+	var repoFlag string
+	pos := parseCmd("context", "context <symbol | Class::method | ns::Class::method> [ref] [--repo R] [--tests] [--no-tests] [--local]", args, func(fs *flag.FlagSet) {
 		fs.BoolVar(&tests, "tests", false, "include test symbols among callers")
 		fs.BoolVar(&local, "local", false, "only consider this repo, not the registered fleet")
+		fs.StringVar(&repoFlag, "repo", "", "the repo defining the symbol (default: this repo, else the one fleet repo that has it)")
+		registerNoTests(fs)
 	})
+	tests = tests && !hideTests()
 	if len(pos) < 1 {
 		fail(fmt.Errorf("usage: reponite context <symbol> [ref] [--tests] [--local]"))
 	}
 	f := openFleet(local)
 	defer f.Close()
 	ref := arg(pos, 1, "HEAD")
-	repo := f.repoFor(pos[0], ref)
+	repo := f.repoFor(pos[0], ref, repoFlag)
 	res := query.Context(f, repo, ref, pos[0], tests)
 	printJSON(interfaces.ContextJSON(query.WithCrossRepoDispatch(f, repo, ref, res, tests)))
 }

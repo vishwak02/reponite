@@ -59,7 +59,7 @@ func LogSites(s Store, repo, ref, logLine string, limit int) LogSitesResult {
 		limit = 10
 	}
 	line := strings.TrimSpace(logLine)
-	res := LogSitesResult{Line: line, Meta: Meta{Repo: repo, Ref: ref}}
+	res := LogSitesResult{Line: line, Meta: NewMeta(s, repo, ref)}
 	if len(line) < 4 {
 		res.Note = "log line too short to match"
 		return res

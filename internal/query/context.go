@@ -90,7 +90,8 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	sort.Slice(callerEdges, func(i, j int) bool { return callerEdges[i].Name < callerEdges[j].Name })
 	sort.Strings(callees)
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
-	return ContextResult{Symbol: sym, Ref: ref, Callers: callers, Callees: callees,
-		CallerEdges: callerEdges, CalleeEdges: edges,
-		Meta: Meta{Repo: repo, Ref: ref, Warnings: warns}}
+	meta := NewMeta(s, repo, ref)
+	meta.Warnings = warns
+	return ContextResult{Symbol: sym, Ref: meta.Ref, Callers: callers, Callees: callees,
+		CallerEdges: callerEdges, CalleeEdges: edges, Meta: meta}
 }

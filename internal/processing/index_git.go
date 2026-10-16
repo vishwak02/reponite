@@ -86,6 +86,17 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			return nil
 		}
+		if IsROSParamFile(f.Name) {
+			if f.Size > maxParamFileBytes {
+				return nil
+			}
+			if src, cerr := f.Contents(); cerr == nil {
+				if pf, ok := paramFile(f.Name, src); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
 		ext := filepath.Ext(f.Name)
 		if _, known := RulesForExt(ext); !known && ext != "" {
 			return nil // an unsupported extension: never read its blob

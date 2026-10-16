@@ -20,6 +20,53 @@ type Meta struct {
 	Repo     string
 	Ref      string
 	Warnings []string
+	// Refs is the ref each repo was actually read at, set when the store pins
+	// repos to their own refs (REPONITE_REFS / --refs) for a fleet-wide answer.
+	Refs map[string]string
+}
+
+// NewMeta is the _meta of an answer about repo at ref, read through s. When s
+// pins repos to their own refs (REPONITE_REFS / --refs), the ref reported is
+// the one actually read — the pin's label — never the ref the query was
+// phrased in: "HEAD" on an answer read at a release tag is a lie about what
+// was analyzed. A fleet-wide answer lists every repo's ref in Refs.
+func NewMeta(s Store, repo, ref string) Meta {
+	m := Meta{Repo: repo, Ref: ref}
+	p, ok := s.(RefPinner)
+	if !ok {
+		return m
+	}
+	if repo != FleetRepo && repo != "" {
+		m.Ref = p.RefFor(repo, ref)
+		return m
+	}
+	pinned := 0
+	repos := s.Repos()
+	m.Refs = make(map[string]string, len(repos))
+	for _, r := range repos {
+		got := p.RefFor(r, ref)
+		m.Refs[r] = got
+		if got != ref {
+			pinned++
+		}
+	}
+	switch {
+	case pinned == 0:
+		m.Refs = nil
+	case pinned == len(repos):
+		m.Ref = "pinned per repo (see refs)"
+	default:
+		m.Ref = ref + " where not pinned (see refs)"
+	}
+	return m
+}
+
+// EffectiveRef is the ref repo is actually read at when a query names ref.
+func EffectiveRef(s Store, repo, ref string) string {
+	if p, ok := s.(RefPinner); ok {
+		return p.RefFor(repo, ref)
+	}
+	return ref
 }
 
 // CompatReport is the Oracle result for one symbol across targets, with _meta.
@@ -93,6 +140,9 @@ func resolveIn(syms map[string]SymbolRef, q string) []string {
 	if _, ok := syms[q]; ok {
 		return []string{q}
 	}
+	if strings.Contains(q, "::") {
+		return resolveCpp(syms, q)
+	}
 	// A partly qualified name (Class.method, dir.Class.method) matches every id
 	// ending in it on a "." boundary; a bare name matches by base name.
 	var out []string
@@ -103,6 +153,33 @@ func resolveIn(syms map[string]SymbolRef, q string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// resolveCpp resolves a C++-spelled name (Class::method, ns::Class::method,
+// ::ns::f) against reponite's ids, which qualify by directory and class with
+// "." and carry no C++ namespace: leading qualifiers are dropped one at a time
+// until a match, keeping Class::method at least two segments so a method name
+// alone never matches every class. A namespace-qualified free function
+// (lower-case qualifier, ns::f) may fall back to its bare name.
+func resolveCpp(syms map[string]SymbolRef, q string) []string {
+	parts := strings.Split(strings.Trim(strings.ReplaceAll(q, "::", "."), "."), ".")
+	for i := 0; i < len(parts); i++ {
+		if len(parts)-i < 2 && !(len(parts) >= 2 && isLowerIdent(parts[len(parts)-2])) {
+			break
+		}
+		if r := resolveIn(syms, strings.Join(parts[i:], ".")); len(r) > 0 {
+			return r
+		}
+	}
+	return nil
+}
+
+func isLowerIdent(s string) bool { return s != "" && s[0] >= 'a' && s[0] <= 'z' }
+
+// NormalizeSymbol spells a C++ qualified name (A::b) the way reponite ids
+// qualify (A.b), for matching and suggestions.
+func NormalizeSymbol(q string) string {
+	return strings.Trim(strings.ReplaceAll(q, "::", "."), ".")
 }
 
 // baseName is the bare name of a qualified id (segment after the last "."); the
@@ -289,7 +366,7 @@ func SearchName(s Store, repo, ref, substr string, includeTests bool) []SearchHi
 			if test && !includeTests {
 				continue
 			}
-			hits = append(hits, SearchHit{Repo: rp, Name: name, Ref: ref, IsTest: test})
+			hits = append(hits, SearchHit{Repo: rp, Name: name, Ref: EffectiveRef(s, rp, ref), IsTest: test})
 		}
 	}
 	sort.Slice(hits, func(i, j int) bool {

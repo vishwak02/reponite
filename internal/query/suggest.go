@@ -17,6 +17,12 @@ func Suggest(s Store, repo, ref, q string, limit int) []SearchHit {
 	if limit <= 0 {
 		limit = 5
 	}
+	// A qualified miss (Class::method, dir.Class.method) is matched on its
+	// bare name, and same-named members of OTHER classes are good hints.
+	qualified := strings.Contains(q, "::") || strings.Contains(q, ".")
+	if qualified {
+		q = baseName(NormalizeSymbol(q))
+	}
 	ql := strings.ToLower(q)
 	type scored struct {
 		hit   SearchHit
@@ -26,7 +32,7 @@ func Suggest(s Store, repo, ref, q string, limit int) []SearchHit {
 	for _, rp := range reposFor(s, repo) {
 		for name := range s.SymbolsAt(rp, ref) {
 			base := baseName(name)
-			if base == q {
+			if base == q && !qualified {
 				continue // exact base match isn't a "did you mean"
 			}
 			bl := strings.ToLower(base)
@@ -43,7 +49,7 @@ func Suggest(s Store, repo, ref, q string, limit int) []SearchHit {
 				}
 				sc = 10 + d
 			}
-			cands = append(cands, scored{SearchHit{Repo: rp, Name: name, Ref: ref}, sc})
+			cands = append(cands, scored{SearchHit{Repo: rp, Name: name, Ref: EffectiveRef(s, rp, ref)}, sc})
 		}
 	}
 	sort.Slice(cands, func(i, j int) bool {

@@ -2,6 +2,7 @@ package query_test
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -32,8 +33,9 @@ func TestTokenizeIdentifiersAndSearch(t *testing.T) {
 		t.Fatalf("top hit = %q (want validateCardNumber); hits=%+v", res.Hits[0].Symbol, res.Hits)
 	}
 	// The result names the strategy that ranked it (provenance, ADR-020).
-	if res.Ranker != "term-idf" || res.Note != "" {
-		t.Fatalf("default ranking must be labeled term-idf with no note, got %q / %q", res.Ranker, res.Note)
+	// It must also say plainly that it is keyword ranking, not semantic.
+	if res.Ranker != "term-idf" || !strings.Contains(res.Note, "NOT semantic") {
+		t.Fatalf("default ranking must be labeled term-idf and keyword-only, got %q / %q", res.Ranker, res.Note)
 	}
 
 	// A query with no shared terms yields nothing.
@@ -108,5 +110,62 @@ func TestSemanticRankerFallbackOnError(t *testing.T) {
 	}
 	if len(res.Hits) != 1 || res.Hits[0].Symbol != "alpha" {
 		t.Fatalf("fallback must still rank (term match on alpha), got %+v", res.Hits)
+	}
+}
+
+// memCache is an in-memory TermIndexCache that counts builds.
+type memCache struct {
+	m     map[string]*query.TermIndex
+	saves int
+}
+
+func (c *memCache) Load(repo, ref string) (*query.TermIndex, bool) {
+	ix, ok := c.m[repo+"@"+ref]
+	return ix, ok
+}
+func (c *memCache) Save(repo, ref string, ix *query.TermIndex) {
+	c.m[repo+"@"+ref] = ix
+	c.saves++
+}
+
+// The indexed term search scores exactly like TermIDFRanker.Rank over the same
+// docs (IDF over the whole multi-repo corpus), and a warm cache rebuilds nothing.
+func TestTermSearchMatchesRankerAndCaches(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("platform", "HEAD", query.File{Path: "planner/a.cpp",
+		Content: "void Planner::publishStatus() { status_pub_.publish(robot_status_); }\nvoid Planner::plan() { computePath(goal_); }\nint idle();\n",
+		Symbols: []query.SymbolSpan{{Name: "Planner.publishStatus", StartLine: 1, EndLine: 1}, {Name: "Planner.plan", StartLine: 2, EndLine: 2}, {Name: "idle", StartLine: 3, EndLine: 3}}})
+	m.PutFile("monitor", "HEAD", query.File{Path: "monitor/w.py",
+		Content: "def on_status(msg):\n    log_robot_status(msg)\ndef éclair_ÉtatRobot():\n    pass\n",
+		Symbols: []query.SymbolSpan{{Name: "on_status", StartLine: 1, EndLine: 2}, {Name: "éclair_ÉtatRobot", StartLine: 3, EndLine: 4}}})
+	var docs []query.SemanticDoc
+	for _, rp := range []string{"monitor", "platform"} {
+		for _, f := range m.Files(rp, "HEAD") {
+			lines := strings.Split(f.Content, "\n")
+			for _, sp := range f.Symbols {
+				docs = append(docs, query.SemanticDoc{Repo: rp, Path: f.Path, Symbol: sp.Name, Line: sp.StartLine,
+					Text: strings.Join(lines[sp.StartLine-1:sp.EndLine], "\n")})
+			}
+		}
+	}
+	for _, q := range []string{"publish robot status", "plan path", "état robot"} {
+		want, _ := query.TermIDFRanker{}.Rank(q, docs, 10)
+		c := &memCache{m: map[string]*query.TermIndex{}}
+		got := query.SemanticSearchCached(m, query.FleetRepo, "HEAD", q, 10, nil, c)
+		if len(got.Hits) != len(want) {
+			t.Fatalf("%q: %d hits, want %d (%+v vs %+v)", q, len(got.Hits), len(want), got.Hits, want)
+		}
+		for i := range want {
+			if got.Hits[i].Symbol != want[i].Symbol || math.Abs(got.Hits[i].Score-want[i].Score) > 1e-12 {
+				t.Fatalf("%q hit %d: %+v want %+v", q, i, got.Hits[i], want[i])
+			}
+		}
+		if c.saves != 2 {
+			t.Fatalf("cold run builds each repo once, saves=%d", c.saves)
+		}
+		again := query.SemanticSearchCached(m, query.FleetRepo, "HEAD", q, 10, nil, c)
+		if c.saves != 2 || len(again.Hits) != len(want) {
+			t.Fatalf("warm run must not rebuild: saves=%d", c.saves)
+		}
 	}
 }

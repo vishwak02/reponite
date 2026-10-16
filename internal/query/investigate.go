@@ -75,7 +75,7 @@ func InvestigateWith(s Store, repo, ref, question string, budget int, r Semantic
 	if repo == "" {
 		repo = FleetRepo
 	}
-	res := InvestigateResult{Question: question, Meta: Meta{Repo: repo, Ref: ref}}
+	res := InvestigateResult{Question: question, Meta: NewMeta(s, repo, ref)}
 	sem := SemanticSearch(s, repo, ref, question, investigateCandidates, r)
 	// A degraded discovery rung must reach the caller: if the configured ranker
 	// failed and the search fell back, the dossier says so (never-lie) — its

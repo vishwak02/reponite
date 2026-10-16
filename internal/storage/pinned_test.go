@@ -49,3 +49,33 @@ func TestParsePins(t *testing.T) {
 		}
 	}
 }
+
+// Pins stand in for the default ref only: an explicit other ref (a compat
+// target) is read as asked, and answers name the pinned label, never "HEAD".
+func TestPinnedOnlyDefaultRefAndLabels(t *testing.T) {
+	m := NewMem()
+	_ = m.Put("platform", "5.6.8", "planner.Planner.run", SymbolRecord{Lang: "cpp"})
+	_ = m.Put("platform", "5.6.7", "planner.Planner.old", SymbolRecord{Lang: "cpp"})
+	_ = m.Put("monitor", "HEAD", "watch.Watch.cb", SymbolRecord{Lang: "cpp"})
+	p := &Pinned{Inner: m, Pins: map[string]string{"platform": "5.6.8"}, Only: "HEAD"}
+	if _, ok := p.SymbolsAt("platform", "HEAD")["planner.Planner.run"]; !ok {
+		t.Fatal("HEAD must read the pin")
+	}
+	if _, ok := p.SymbolsAt("platform", "5.6.7")["planner.Planner.old"]; !ok {
+		t.Fatal("an explicit ref must be read as asked")
+	}
+	if got := query.NewMeta(p, "platform", "HEAD"); got.Ref != "5.6.8" {
+		t.Errorf("single-repo meta ref = %q, want the pin label", got.Ref)
+	}
+	fleet := query.NewMeta(p, query.FleetRepo, "HEAD")
+	if fleet.Ref == "HEAD" || fleet.Refs["platform"] != "5.6.8" || fleet.Refs["monitor"] != "HEAD" {
+		t.Errorf("fleet meta must list each repo's ref: %+v", fleet)
+	}
+	hits := query.SearchName(p, query.FleetRepo, "HEAD", "Planner", false)
+	if len(hits) != 1 || hits[0].Ref != "5.6.8" {
+		t.Errorf("hits carry the ref read: %+v", hits)
+	}
+	if unpinned := query.NewMeta(m, "platform", "HEAD"); unpinned.Ref != "HEAD" || unpinned.Refs != nil {
+		t.Errorf("no pins, no change: %+v", unpinned)
+	}
+}

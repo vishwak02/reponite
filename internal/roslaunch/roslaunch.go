@@ -75,6 +75,35 @@ type File struct {
 	// Includes are the launch files this one pulls in, AS WRITTEN — usually with
 	// $(find pkg) substitutions, which are not resolved (and callers say so).
 	Includes []string
+	// Params are the `<param name value>` declarations, and Rosparams the
+	// `<rosparam>` loads (a YAML file or inline YAML). They are how a node whose
+	// source reads its topic name from a parameter gets that name at runtime.
+	Params    []Param
+	Rosparams []Rosparam
+}
+
+// Param is one `<param>` declaration. Value is AS WRITTEN: callers expand
+// $(arg …) against the file's Args, so the unexpanded form stays reportable.
+type Param struct {
+	Name  string // as written: relative, private (~x) or absolute
+	Value string
+	Ns    string // the enclosing <group> namespace chain
+	Pkg   string // the <node pkg> it is private to; "" for a global param
+	Node  string // that node's name
+	Line  int
+}
+
+// Rosparam is one `<rosparam>` element: a YAML file load (File) or inline
+// YAML (Inline), optionally under a namespace (Ns) or a single name (Param).
+type Rosparam struct {
+	Command string // load (default), delete, dump
+	File    string // as written, e.g. $(find pkg)/config/x.yaml
+	Inline  string
+	Param   string
+	Ns      string // ns attribute composed with the enclosing group namespace
+	Pkg     string // the <node pkg> it loads into; "" when global
+	Node    string
+	Line    int
 }
 
 // Parse reads launch XML. It is deliberately lenient about everything it does
@@ -98,7 +127,8 @@ func Parse(path, content string) (File, error) {
 		pushedNS bool
 	}
 	var scopes []scope
-	var cur *Node // the <node> currently open, if any
+	var cur *Node     // the <node> currently open, if any
+	curRosparam := -1 // index of the <rosparam> whose inline text is being read
 
 	inherited := func() []Remap {
 		var out []Remap
@@ -163,6 +193,43 @@ func Parse(path, content string) (File, error) {
 						scopes[len(scopes)-1].remaps = append(scopes[len(scopes)-1].remaps, r)
 					}
 				}
+			case "param":
+				p := Param{Line: line, Ns: strings.Join(nsStack, "/")}
+				for _, a := range t.Attr {
+					switch strings.ToLower(a.Name.Local) {
+					case "name":
+						p.Name = a.Value
+					case "value":
+						p.Value = a.Value
+					}
+				}
+				if cur != nil {
+					p.Pkg, p.Node = cur.Pkg, cur.Name
+				}
+				if p.Name != "" {
+					f.Params = append(f.Params, p)
+				}
+				scopes = append(scopes, scope{elem: "param"})
+			case "rosparam":
+				r := Rosparam{Line: line, Command: "load", Ns: strings.Join(nsStack, "/")}
+				for _, a := range t.Attr {
+					switch strings.ToLower(a.Name.Local) {
+					case "file":
+						r.File = a.Value
+					case "param":
+						r.Param = a.Value
+					case "ns":
+						r.Ns = joinNS(r.Ns, a.Value)
+					case "command":
+						r.Command = strings.ToLower(a.Value)
+					}
+				}
+				if cur != nil {
+					r.Pkg, r.Node = cur.Pkg, cur.Name
+				}
+				f.Rosparams = append(f.Rosparams, r)
+				curRosparam = len(f.Rosparams) - 1
+				scopes = append(scopes, scope{elem: "rosparam"})
 			case "group", "launch":
 				s := scope{elem: strings.ToLower(t.Name.Local)}
 				for _, a := range t.Attr {
@@ -201,10 +268,17 @@ func Parse(path, content string) (File, error) {
 			default:
 				scopes = append(scopes, scope{elem: strings.ToLower(t.Name.Local)})
 			}
+		case xml.CharData:
+			if curRosparam >= 0 {
+				f.Rosparams[curRosparam].Inline += string(t)
+			}
 		case xml.EndElement:
 			name := strings.ToLower(t.Name.Local)
 			if name == "node" {
 				cur = nil
+			}
+			if name == "rosparam" {
+				curRosparam = -1
 			}
 			for i := len(scopes) - 1; i >= 0; i-- {
 				if scopes[i].elem == name {

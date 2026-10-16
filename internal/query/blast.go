@@ -33,7 +33,7 @@ type BlastRadiusResult struct {
 // contract state (from XImpact), and the compat verdict across the repo's other
 // refs. Resolves symbol (bare or qualified) to a stored id first.
 func BlastRadius(s Store, repo, ref, symbol string) BlastRadiusResult {
-	res := BlastRadiusResult{Symbol: symbol, Repo: repo, Meta: Meta{Repo: repo, Ref: ref}}
+	res := BlastRadiusResult{Symbol: symbol, Repo: repo, Meta: NewMeta(s, repo, ref)}
 	names := ResolveSymbol(s, repo, ref, symbol)
 	if len(names) == 0 {
 		res.Note = fmt.Sprintf("symbol %q not found at %s@%s", symbol, repo, ref)
@@ -67,12 +67,12 @@ func BlastRadius(s Store, repo, ref, symbol string) BlastRadiusResult {
 	// Compat across the repo's other refs — is this symbol already moving?
 	var targets []RepoRef
 	for _, rf := range s.Refs(repo) {
-		if rf != ref {
+		if rf != ref && rf != EffectiveRef(s, repo, ref) {
 			targets = append(targets, RepoRef{Repo: repo, Ref: rf})
 		}
 	}
 	if len(targets) > 0 {
-		if rep, err := CompatSymbol(s, RepoRef{Repo: repo, Ref: ref}, qid, targets); err == nil {
+		if rep, err := CompatSymbol(s, RepoRef{Repo: repo, Ref: EffectiveRef(s, repo, ref)}, qid, targets); err == nil {
 			res.Compat = rep.Verdicts
 		}
 	}

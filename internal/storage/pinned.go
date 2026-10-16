@@ -20,6 +20,10 @@ import (
 type Pinned struct {
 	Inner query.Store
 	Pins  map[string]string
+	// Only, when set, is the one requested ref the pins stand in for (the
+	// query's default, "HEAD"): any other ref is an explicit request — a
+	// compat target, a diff side — and is read as asked. Empty pins every ref.
+	Only string
 }
 
 var _ query.Store = (*Pinned)(nil)
@@ -45,6 +49,9 @@ func ParsePins(s string) (map[string]string, error) {
 func (p *Pinned) RefFor(repo, ref string) string { return p.at(repo, ref) }
 
 func (p *Pinned) at(repo, ref string) string {
+	if p.Only != "" && ref != p.Only {
+		return ref
+	}
 	if r, ok := p.Pins[repo]; ok {
 		return r
 	}
@@ -56,10 +63,7 @@ func (p *Pinned) at(repo, ref string) string {
 // contributes nothing — which must be said, never passed off as "no results".
 func Coverage(s query.Store, ref string) (read []string, missing []string) {
 	for _, repo := range s.Repos() {
-		r := ref
-		if p, ok := s.(*Pinned); ok {
-			r = p.at(repo, ref)
-		}
+		r := query.EffectiveRef(s, repo, ref) // any pinning view, wrapped or not
 		found := false
 		for _, x := range s.Refs(repo) {
 			if x == r {

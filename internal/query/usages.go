@@ -41,7 +41,7 @@ type UsagesResult struct {
 // static graph misses — those come back unconfirmed rather than dropped.
 func Usages(s Store, repo, ref, symbol string) UsagesResult {
 	base := baseName(symbol)
-	res := UsagesResult{Symbol: base, Meta: Meta{Repo: repo, Ref: ref}}
+	res := UsagesResult{Symbol: base, Meta: NewMeta(s, repo, ref)}
 	if base == "" {
 		return res
 	}
