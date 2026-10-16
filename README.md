@@ -9,7 +9,7 @@
   <a href="https://github.com/vishwak02/reponite/releases"><img src="https://img.shields.io/github/v/release/vishwak02/reponite?color=00ADD8" alt="Release"></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-1.22%2B-00ADD8.svg" alt="Go 1.22+"></a>
   <a href="#languages"><img src="https://img.shields.io/badge/languages-10-00ADD8.svg" alt="10 languages"></a>
-  <a href="#ai-agents-mcp"><img src="https://img.shields.io/badge/MCP-17%20tools-6E56CF.svg" alt="17 MCP tools"></a>
+  <a href="#ai-agents-mcp"><img src="https://img.shields.io/badge/MCP-30%20tools-6E56CF.svg" alt="30 MCP tools"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
 </p>
 

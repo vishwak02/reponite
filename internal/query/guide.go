@@ -14,6 +14,18 @@ const Guide = `reponite — which tool to call (start at the top; each answer ca
                                              "METHOD /route" — what it is, doc, body, callers/callees, routes/
                                              topics/UI events reaching it, tests
                 reponite_investigate "<q>"   a feature by question when you have no handle yet
+                reponite_trace <entry>       "what happens when …": the call tree below a symbol, "VERB /route",
+                                             CLI command or topic (direction=up: how it is reached), crossing
+                                             UI → API → server, topics and implementations, with side effects
+                reponite_ui [page|component] frontend: the pages, a page's component tree, props/state/handlers
+                                             and the API call (and server route) behind each handler
+                reponite_models [model]      data: tables/entities, fields, relations, and the code that reads or
+                                             writes each one
+                reponite_config [key]        configuration: env vars, flags, settings — where each is read (with
+                                             default) and where it is set; read-never-set and set-never-read
+                reponite_errors ["<msg>"]    where an error message, type or HTTP status is produced and who catches it
+                reponite_why <symbol>        the commits behind a symbol (and their PRs), oldest change first shipped
+                reponite_tests <symbol>      which tests exercise it, and the command to run just those
 3. NAVIGATE     reponite_context             direct callers/callees with confidence
                 reponite_usages              every call site with its line (before changing a signature)
                 reponite_routes / topics     runtime edges the call graph cannot see: HTTP client ↔ route,
