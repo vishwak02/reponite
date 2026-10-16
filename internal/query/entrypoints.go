@@ -152,7 +152,7 @@ func EntryPoints(repo string, files []File) []EntryPoint {
 		}
 	}
 	for _, f := range files {
-		if IsTestPath(f.Path) {
+		if IsTestPath(f.Path) || isAuxPath(f.Path) {
 			continue
 		}
 		switch kind := ProjectFileKind(f.Path); kind {
@@ -535,7 +535,14 @@ func dockerEntry(f File) (EntryPoint, bool) {
 	var from []string
 	var cmd, entry string
 	cmdLine, entryLine := 0, 0
-	for i, ln := range strings.Split(f.Content, "\n") {
+	lines := strings.Split(f.Content, "\n")
+	for i := 0; i < len(lines); i++ {
+		ln, start := lines[i], i
+		// An instruction continued with trailing backslashes is one instruction.
+		for strings.HasSuffix(strings.TrimRight(ln, " \t"), "\\") && i+1 < len(lines) {
+			i++
+			ln = strings.TrimSuffix(strings.TrimRight(ln, " \t"), "\\") + " " + strings.TrimSpace(lines[i])
+		}
 		m := reDockerInstr.FindStringSubmatch(ln)
 		if m == nil {
 			continue
@@ -544,9 +551,9 @@ func dockerEntry(f File) (EntryPoint, bool) {
 		case "FROM":
 			from = append(from, strings.Fields(m[2])[0])
 		case "CMD":
-			cmd, cmdLine = strings.TrimSpace(m[2]), i+1
+			cmd, cmdLine = strings.Join(strings.Fields(m[2]), " "), start+1
 		case "ENTRYPOINT":
-			entry, entryLine = strings.TrimSpace(m[2]), i+1
+			entry, entryLine = strings.Join(strings.Fields(m[2]), " "), start+1
 		}
 	}
 	if len(from) == 0 && cmd == "" && entry == "" {

@@ -240,18 +240,18 @@ type symbolSourceFacts struct {
 }
 
 var (
-	reClass     = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:public\s+|private\s+|protected\s+)?(?:abstract\s+|final\s+|static\s+|sealed\s+)*(?:data\s+)?class\b`)
-	reStruct    = regexp.MustCompile(`^(?:pub(?:\([\w:]+\))?\s+)?(?:typedef\s+)?struct\b|^type\s+\w+(?:\[[^\]]*\])?\s+struct\b`)
-	reInterface = regexp.MustCompile(`^(?:export\s+)?(?:public\s+)?interface\b|^type\s+\w+(?:\[[^\]]*\])?\s+interface\b|^(?:pub(?:\([\w:]+\))?\s+)?trait\b`)
-	reEnum      = regexp.MustCompile(`^(?:export\s+)?(?:pub(?:\([\w:]+\))?\s+)?(?:const\s+)?enum\b`)
-	reTypeAlias = regexp.MustCompile(`^(?:export\s+)?type\s+\w+`)
-	reGoMethod  = regexp.MustCompile(`^func\s*\(`)
-	reGoFuncDecl    = regexp.MustCompile(`^func\b`)
-	rePyDef     = regexp.MustCompile(`^(?:async\s+)?def\b`)
-	reRustFn    = regexp.MustCompile(`^(?:pub(?:\([\w:]+\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"\w+"\s+)?fn\b`)
-	reJSFunc    = regexp.MustCompile(`\bfunction\b|=>`)
-	reShellFunc = regexp.MustCompile(`^(?:function\s+)?[\w-]+\s*\(\)\s*\{?`)
-	reImplBlock = regexp.MustCompile(`^impl\b`)
+	reClass      = regexp.MustCompile(`^(?:export\s+)?(?:default\s+)?(?:public\s+|private\s+|protected\s+)?(?:abstract\s+|final\s+|static\s+|sealed\s+)*(?:data\s+)?class\b`)
+	reStruct     = regexp.MustCompile(`^(?:pub(?:\([\w:]+\))?\s+)?(?:typedef\s+)?struct\b|^type\s+\w+(?:\[[^\]]*\])?\s+struct\b`)
+	reInterface  = regexp.MustCompile(`^(?:export\s+)?(?:public\s+)?interface\b|^type\s+\w+(?:\[[^\]]*\])?\s+interface\b|^(?:pub(?:\([\w:]+\))?\s+)?trait\b`)
+	reEnum       = regexp.MustCompile(`^(?:export\s+)?(?:pub(?:\([\w:]+\))?\s+)?(?:const\s+)?enum\b`)
+	reTypeAlias  = regexp.MustCompile(`^(?:export\s+)?type\s+\w+`)
+	reGoMethod   = regexp.MustCompile(`^func\s*\(`)
+	reGoFuncDecl = regexp.MustCompile(`^func\b`)
+	rePyDef      = regexp.MustCompile(`^(?:async\s+)?def\b`)
+	reRustFn     = regexp.MustCompile(`^(?:pub(?:\([\w:]+\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+"\w+"\s+)?fn\b`)
+	reJSFunc     = regexp.MustCompile(`\bfunction\b|=>`)
+	reShellFunc  = regexp.MustCompile(`^(?:function\s+)?[\w-]+\s*\(\)\s*\{?`)
+	reImplBlock  = regexp.MustCompile(`^impl\b`)
 )
 
 // sourceFacts reads kind, signature, decorators and doc for the span starting

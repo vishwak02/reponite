@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/version"
 )
 
@@ -25,6 +26,8 @@ func main() {
 		usage()
 	case "demo":
 		runDemo()
+	case "guide":
+		fmt.Println(query.Guide)
 	case "setup":
 		setupCommand(os.Args[2:])
 	case "mcp":
@@ -33,7 +36,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "map", "explain":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
@@ -69,6 +72,7 @@ usage: reponite <command> [flags]
 available in any build:
   version              print version and identity constants
   demo                 in-memory end-to-end run (compat / rootcause / grep as JSON)
+  guide                which command answers which question (the agent decision table)
 
 index-backed (build with `+"`make cli`"+`):
   index <dir> [ref]    index a repo's source files at a ref (working tree)
@@ -95,6 +99,8 @@ index-backed (build with `+"`make cli`"+`):
   rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace
   brief <symbol> [ref] [--budget N]   one bundle to edit a symbol: body + callees/callers + tests + compat
   refs                 list the repo's indexed refs
+  map [ref] [--repo R] [--budget N] [--format text]   orientation: entry points, modules, hubs, deps (no --repo = fleet + cross-repo links)
+  explain <symbol|path[:line]|dir|"METHOD /route"> [ref] [--budget N]   understand one thing: doc, body, callers/callees, routes/topics, tests
   mcp [dir...]         serve the tools over MCP (stdio) for an AI agent (no dir = the registered fleet)
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
