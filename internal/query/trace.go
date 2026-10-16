@@ -17,6 +17,7 @@ package query
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -130,7 +131,27 @@ type TraceOptions struct {
 	Skip []string
 	// Routes carries the gateway hops between clients and servers.
 	Routes RoutesOptions
+	// Edges, when set, contributes edges the call graph lacks (a UI
+	// component's render/handler edges, an event handler's API call) at
+	// every symbol node, both directions.
+	Edges TraceEdgeSource
 }
+
+// TraceEdge is one edge an outside source contributes to the walk.
+type TraceEdge struct {
+	Repo       string // the target's repo ("" = the node's repo)
+	Target     string // the target symbol id (DOWN: callee-side; UP: caller-side); "" for an API call
+	Kind       string // the edge label shown (renders, handles, calls_api, …)
+	Method     string // its resolution method
+	Confidence float64
+	// An API call: the request's method and path. The walk crosses it to the
+	// indexed routes serving that path, like a client call found in a body.
+	HTTPMethod, URL string
+}
+
+// TraceEdgeSource returns the extra edges leaving (up=false) or reaching
+// (up=true) symbol qid in repo at the trace's ref.
+type TraceEdgeSource func(repo, qid string, up bool) []TraceEdge
 
 // TraceResult is the walked tree.
 type TraceResult struct {
@@ -325,6 +346,7 @@ func (v *repoView) locate() {
 	v.inFile = map[int]map[string][]string{}
 	for i, f := range v.files {
 		pkg := pkgFromPath(f.Path)
+		cpp := cppExts[strings.ToLower(filepath.Ext(f.Path))]
 		for _, sp := range f.Symbols {
 			var chain []SymbolSpan
 			for _, o := range f.Symbols {
@@ -344,7 +366,7 @@ func (v *repoView) locate() {
 			if len(names) > 1 {
 				cands = append(cands, qualifyID(pkg, sp.Name))
 			}
-			if lines := v.fileLines(i); sp.StartLine-1 < len(lines) && sp.StartLine > 0 {
+			if lines := v.fileLines(i); cpp && sp.StartLine-1 < len(lines) && sp.StartLine > 0 && len(lines[sp.StartLine-1]) < 400 && strings.Contains(lines[sp.StartLine-1], "::") {
 				if m := cppScopedDef.FindStringSubmatch(lines[sp.StartLine-1]); m != nil && m[2] == sp.Name {
 					cands = append([]string{qualifyID(pkg, m[1]+"."+sp.Name)}, cands...)
 				}
@@ -692,7 +714,9 @@ func (t *tracer) downChildren(n *TraceNode) []*TraceNode {
 			case c.ResolutionMethod == "unresolved-external":
 				add(t.importedFrom(n, c))
 			case c.ResolutionMethod == "ambiguous" || !t.known(v, c.Name):
-				add(t.disambiguate(n, v, body, c))
+				if !ormOnly(body, baseName(c.Name)) {
+					add(t.disambiguate(n, v, body, c))
+				}
 			default:
 				if t.isTest(n.Repo, c.Name, "") || t.skipped(c.Name) || c.ResolutionMethod == "member-name-resolved" && ormOnly(body, baseName(c.Name)) {
 					continue
@@ -701,6 +725,9 @@ func (t *tracer) downChildren(n *TraceNode) []*TraceNode {
 			}
 		}
 		for _, k := range t.implsOf(n) {
+			add(k)
+		}
+		for _, k := range t.extraEdges(n, false) {
 			add(k)
 		}
 	} else {
@@ -717,12 +744,41 @@ func (t *tracer) downChildren(n *TraceNode) []*TraceNode {
 	return kids
 }
 
+// extraEdges: the nodes TraceOptions.Edges contributes at n.
+func (t *tracer) extraEdges(n *TraceNode, up bool) []*TraceNode {
+	if t.opt.Edges == nil || n.Kind != NodeSymbol {
+		return nil
+	}
+	var out []*TraceNode
+	for _, e := range t.opt.Edges(n.Repo, n.Symbol, up) {
+		repo := e.Repo
+		if repo == "" {
+			repo = n.Repo
+		}
+		kind := e.Kind
+		if kind == "" {
+			kind = EdgeCall
+		}
+		if e.URL != "" && !up {
+			for _, r := range t.matchRoutes(strings.ToUpper(e.HTTPMethod), e.URL, 3, "") {
+				out = append(out, t.routeNode(r, e.HTTPMethod, EdgeHTTP, kind, min(e.Confidence, confHTTP)))
+			}
+			continue
+		}
+		if e.Target == "" || t.isTest(repo, e.Target, "") {
+			continue
+		}
+		out = append(out, t.symbolNode(repo, e.Target, kind, e.Method, e.Confidence))
+	}
+	return out
+}
+
 // ormOnly: every call of name in body is an ORM manager/queryset method
 // (Model.objects….create()), so a member-name guess pinning it on a
 // same-named method of the repo is wrong — the call is a DB effect.
 func ormOnly(body, name string) bool {
 	all := regexp.MustCompile(`\b`+regexp.QuoteMeta(name)+`\s*\(`).FindAllStringIndex(body, -1)
-	orm := regexp.MustCompile(`\.objects(?:\.\w+\([^()]*\))*\.`+regexp.QuoteMeta(name)+`\s*\(`).FindAllStringIndex(body, -1)
+	orm := regexp.MustCompile(`(?:\.objects|\b\w*(?:queryset|_qs)|\bqs|\.(?:filter|exclude|all|select_related|prefetch_related|order_by|annotate)\([^()]*\))(?:\.\w+\([^()]*\))*\.`+regexp.QuoteMeta(name)+`\s*\(`).FindAllStringIndex(body, -1)
 	return len(all) > 0 && len(orm) == len(all)
 }
 
@@ -811,6 +867,17 @@ func (t *tracer) disambiguate(n *TraceNode, v *repoView, body string, c Callee) 
 				return pick(q, "picked: own class")
 			}
 		}
+		// Not defined on the class itself: an indexed base's, else the
+		// framework's (inherited from a base outside the indexed repos).
+		own := strings.TrimSuffix(n.Symbol, "."+baseName(n.Symbol))
+		if rp, q := t.methodOf(v, own, name); q != "" {
+			k := t.symbolNode(rp, q, EdgeCall, "inherited-method", 0.75)
+			k.Note = "self." + name + " via a base of " + cls
+			return k
+		}
+		return &TraceNode{Kind: NodeFramework, Repo: n.Repo, Label: "self." + name, Edge: EdgeCall, Method: "inherited",
+			Confidence: 0.6, Stop: StopFramework, Note: "inherited from a base class outside the indexed repos",
+			key: n.key + "\x00self." + name, fi: -1}
 	}
 	// recv.m(): a class named like the receiver (label -> Label, tote_type -> ToteType).
 	for _, m := range regexp.MustCompile(`([A-Za-z_]\w*)\s*(?:\.|->)\s*`+regexp.QuoteMeta(name)+`\s*\(`).FindAllStringSubmatch(body, -1) {
@@ -958,6 +1025,9 @@ func (t *tracer) upChildren(n *TraceNode) []*TraceNode {
 			}
 			add(t.symbolNode(h.Repo, h.Caller, EdgeXRepo, h.ResolutionMethod, h.Confidence))
 		}
+	}
+	for _, k := range t.extraEdges(n, true) {
+		add(k)
 	}
 	for _, k := range t.routesServedBy(n) {
 		add(k)

@@ -159,10 +159,20 @@ func (t *tracer) routeEntry(entry string) []*TraceNode {
 	if verb == "ANY" {
 		verb = "*"
 	}
+	var roots []*TraceNode
+	for _, r := range t.matchRoutes(verb, path, 4, t.opt.Repo) {
+		roots = append(roots, t.routeNode(r, verb, "", "", 1))
+	}
+	return roots
+}
+
+// matchRoutes: the indexed routes serving verb+path, best literal-segment
+// match first ("" or "*" verb = any); a tie keeps every best route.
+func (t *tracer) matchRoutes(verb, path string, limit int, repo string) []Route {
 	segs := segments(path)
 	best, var0 := 0, []Route(nil)
 	for _, r := range t.routeIdx().routes {
-		if t.opt.Repo != "" && r.Repo != t.opt.Repo {
+		if repo != "" && repo != FleetRepo && r.Repo != repo {
 			continue
 		}
 		if verb != "" && verb != "*" && r.Method != "*" && r.Method != "" && r.Method != verb {
@@ -179,14 +189,10 @@ func (t *tracer) routeEntry(entry string) []*TraceNode {
 			var0 = append(var0, r)
 		}
 	}
-	var roots []*TraceNode
-	for i, r := range var0 {
-		if i == 4 {
-			break
-		}
-		roots = append(roots, t.routeNode(r, verb, "", "", 1))
+	if len(var0) > limit {
+		var0 = var0[:limit]
 	}
-	return roots
+	return var0
 }
 
 var (
@@ -426,6 +432,10 @@ func (t *tracer) classDispatch(n *TraceNode, v *repoView, cls string) []*TraceNo
 		verbs = []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
 	}
 	bases := t.classHeader(v, cls)
+	viewset := strings.Contains(bases, "ViewSet")
+	for _, a := range t.classGraph().ancestors(baseName(cls)) {
+		viewset = viewset || strings.Contains(a, "ViewSet")
+	}
 	l, _ := v.where(cls)
 	body := ""
 	if l.span.StartLine > 0 {
@@ -445,12 +455,17 @@ func (t *tracer) classDispatch(n *TraceNode, v *repoView, cls string) []*TraceNo
 		if vm == "" {
 			continue
 		}
-		if _, ok := v.syms[cls+"."+vm]; ok {
-			out = append(out, t.symbolNode(r.Repo, cls+"."+vm, EdgeHandler, "http-method-dispatch", confHandler))
-			continue
+		// A ViewSet binds each HTTP method to its action (DELETE -> destroy),
+		// shadowing a same-named get/post/delete method; a plain view runs the
+		// method named after the HTTP method.
+		if !viewset {
+			if rp, q := t.methodOf(v, cls, vm); q != "" {
+				out = append(out, t.symbolNode(rp, q, EdgeHandler, "http-method-dispatch", confHandler))
+				continue
+			}
 		}
-		if _, ok := v.syms[cls+"."+action]; ok {
-			out = append(out, t.symbolNode(r.Repo, cls+"."+action, EdgeHandler, "viewset-action", confHandler))
+		if rp, q := t.methodOf(v, cls, action); q != "" {
+			out = append(out, t.symbolNode(rp, q, EdgeHandler, "viewset-action", confHandler))
 			continue
 		}
 		if len(verbs) > 1 && !basesAllow(bases, action) {
@@ -485,6 +500,25 @@ func (t *tracer) classDispatch(n *TraceNode, v *repoView, cls string) []*TraceNo
 			key: n.key + "\x00" + cls, fi: -1})
 	}
 	return out
+}
+
+// methodOf is the definition of method m a class (id cls in v) runs: its own,
+// else the nearest indexed base class's (fleet-wide, in derivation order — an
+// approximation of the language's method resolution order).
+func (t *tracer) methodOf(v *repoView, cls, m string) (repo, qid string) {
+	if _, ok := v.syms[cls+"."+m]; ok {
+		return v.repo, cls + "." + m
+	}
+	g := t.classGraph()
+	for _, b := range g.ancestors(baseName(cls)) {
+		repos := append([]string{v.repo}, t.s.Repos()...)
+		for _, rp := range repos {
+			if def := g.defOf(t.s, t.ref, rp, b, m); def != "" && !t.isTest(rp, def, "") {
+				return rp, def
+			}
+		}
+	}
+	return "", ""
 }
 
 // inferredEffect: what a framework's default action does to the database.
@@ -532,8 +566,12 @@ func (t *tracer) frameworkChildren(n *TraceNode) []*TraceNode {
 	v := t.view(n.Repo)
 	var out []*TraceNode
 	for _, h := range drfHooks[n.fw.action] {
-		if _, ok := v.syms[n.fw.class+"."+h]; ok {
-			out = append(out, t.symbolNode(n.Repo, n.fw.class+"."+h, EdgeFramework, "drf-convention", confFramework))
+		if rp, q := t.methodOf(v, n.fw.class, h); q != "" {
+			k := t.symbolNode(rp, q, EdgeFramework, "drf-convention", confFramework)
+			if !strings.HasPrefix(q, n.fw.class+".") {
+				k.Note = "inherited from an indexed base"
+			}
+			out = append(out, k)
 		}
 	}
 	if n.fw.serializer != "" {
@@ -545,8 +583,8 @@ func (t *tracer) frameworkChildren(n *TraceNode) []*TraceNode {
 				}
 			}
 			for _, h := range hooks {
-				if _, ok := v.syms[sq+"."+h]; ok {
-					k := t.symbolNode(n.Repo, sq+"."+h, EdgeFramework, "drf-convention", confFramework)
+				if rp, q := t.methodOf(v, sq, h); q != "" {
+					k := t.symbolNode(rp, q, EdgeFramework, "drf-convention", confFramework)
 					k.Note = "serializer_class"
 					out = append(out, k)
 				}

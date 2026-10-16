@@ -333,3 +333,35 @@ func TestTraceMissSuggests(t *testing.T) {
 		t.Errorf("miss: %+v", r)
 	}
 }
+
+// An outside edge source (UI render/handler/API-call edges) joins the walk:
+// a component -> its handler -> the API call -> the route -> the view.
+func TestTraceExtraEdgeSource(t *testing.T) {
+	m := shopFleet()
+	m.Put("web", "v1", "src/pages.OrderButton", storage.SymbolRecord{})
+	m.Put("web", "v1", "src/pages.onClick", storage.SymbolRecord{})
+	src := func(repo, qid string, up bool) []query.TraceEdge {
+		switch {
+		case !up && qid == "src/pages.OrderButton":
+			return []query.TraceEdge{{Target: "src/pages.onClick", Kind: "handles", Method: "jsx-handler", Confidence: 0.8}}
+		case !up && qid == "src/pages.onClick":
+			return []query.TraceEdge{{Kind: "calls_api", HTTPMethod: "POST", URL: "/api/orders/", Confidence: 0.7}}
+		case up && qid == "src/pages.onClick":
+			return []query.TraceEdge{{Target: "src/pages.OrderButton", Kind: "handles", Method: "jsx-handler", Confidence: 0.8}}
+		}
+		return nil
+	}
+	r := query.Trace(m, "OrderButton", "v1", query.TraceOptions{Edges: src})
+	h := find(r.Roots, bySym("src/pages.onClick"))
+	if h == nil || h.Edge != "handles" {
+		t.Fatalf("handler edge: %s", query.TraceText(r))
+	}
+	rt := find(h.Children, func(n *query.TraceNode) bool { return n.Kind == query.NodeRoute })
+	if rt == nil || find(rt.Children, bySym("shop.OrderView.post")) == nil {
+		t.Errorf("api call -> route -> view: %s", query.TraceText(r))
+	}
+	up := query.Trace(m, "onClick", "v1", query.TraceOptions{Direction: "up", Edges: src})
+	if find(up.Roots, bySym("src/pages.OrderButton")) == nil {
+		t.Errorf("up through the source: %s", query.TraceText(up))
+	}
+}
