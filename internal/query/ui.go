@@ -137,7 +137,8 @@ func (c *uiCtx) consts(repo string) map[string]string {
 	if m, ok := c.constsM[repo]; ok {
 		return m
 	}
-	m := urlConstants(c.s.Files(repo, c.ref))
+	files := c.s.Files(repo, c.ref)
+	m := routeConstants(files, urlConstants(files))
 	c.constsM[repo] = m
 	return m
 }
@@ -483,7 +484,7 @@ func (c *uiCtx) ensureAPI() {
 // retrieve/update/partial_update/destroy on its detail path.
 func routeHandler(r Route, method string) string {
 	h := r.Handler
-	if r.Framework != "django" || r.Method != "*" || !strings.HasSuffix(h, "ViewSet") && !strings.HasSuffix(h, "Viewset") {
+	if r.Framework != "django" || r.Method != "*" || !strings.Contains(h, "ViewSet") && !strings.Contains(h, "Viewset") {
 		return h
 	}
 	detail := strings.HasSuffix(strings.TrimSuffix(r.Pattern, "/"), "{}")
@@ -531,6 +532,18 @@ func (c *uiCtx) apiFrom(r *uiRepo, d *uiDef, body string, off int, setters map[s
 	return dedupAPI(out)
 }
 
+// collapseVia drops a name repeated back-to-back in a call chain (the called
+// name and the function it resolved to are the same hop).
+func collapseVia(v []string) []string {
+	out := v[:0:0]
+	for _, x := range v {
+		if len(out) == 0 || out[len(out)-1] != x {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 func dedupAPI(in []UIAPICall) []UIAPICall {
 	seen := map[string]bool{}
 	var out []UIAPICall
@@ -552,10 +565,7 @@ func (c *uiCtx) apiFromNames(r *uiRepo, d *uiDef, names []calledName, via []stri
 	for _, cn := range names {
 		for _, qid := range c.qidsFor(r, d.File, cn) {
 			for _, a := range c.reachable(r.Name, qid) {
-				a.Via = append(append(append([]string{}, via...), cn.name), a.Via...)
-				if len(a.Via) > 1 && a.Via[len(a.Via)-1] == a.Via[len(a.Via)-2] {
-					a.Via = a.Via[:len(a.Via)-1]
-				}
+				a.Via = collapseVia(append(append(append([]string{}, via...), cn.name), a.Via...))
 				out = append(out, a)
 			}
 		}

@@ -155,6 +155,17 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
 		mcp.WithString("ref", mcp.Description("default HEAD"))))
+	add(mcp.NewTool("reponite_ui",
+		mcp.WithDescription("Frontend understanding in one call. With no `target`: the app's PAGES — every client route (react-router <Route>/createBrowserRouter/useRoutes, vue-router and other {path, component} route tables incl. lazy imports and module-federation exposes, Next.js pages/ and app/, SvelteKit, Nuxt) mapped to the component it renders, with a drill-in handle. With a page route (\"/orders/:id\") or a component (name, handle or file path): its COMPONENT TREE (budget-bounded, breadth-first) and per component its props (TS types, PropTypes, defineProps, Svelte export let/$props), state (useState/useReducer/useContext, redux/zustand/pinia/vuex stores, Vue refs, Svelte runes), effects with deps, event handlers (onClick/@click/on:click → handler) and the API calls each reaches through the call graph, linked to the server route that serves it — \"button Save → handleSave → POST /api/orders → OrdersView.create\". With uses=true: where the component is rendered, passed or routed to. Use it to orient in a React/Vue/Svelte codebase or to trace a UI action to the backend; follow handles with brief/context. Medium confidence (source idioms + name-resolved calls; stated in the result)."),
+		mcp.WithString("target", mcp.Description("page route or component (name, dir.Name handle, or file path); empty = list the pages")),
+		mcp.WithString("uses", mcp.Description(`"true" to list where target is rendered/routed instead of its tree`)),
+		mcp.WithString("budget", mcp.Description("token budget (default 3000); a cut answer says truncated + next")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse readable rendering (default JSON)`)),
+		mcp.WithString("gateway", mcp.Description("reverse-proxy gateway config file(s), Caddy JSON, comma-separated — API calls are followed through each mount to the repo behind it")),
+		mcp.WithString("upstream", mcp.Description("which repo serves a gateway upstream, host:port=repo,...")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD"))))
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("List indexed refs for the repo."),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))

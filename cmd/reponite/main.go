@@ -33,7 +33,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "ui":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
@@ -82,6 +82,7 @@ index-backed (build with `+"`make cli`"+`):
   logsite "<log line>"  which code printed this log line (format strings with placeholders filled)
   impls <Base[::method]>  fleet-wide C++ subclasses/plugins of a base class and their override of method
   routes [path]        HTTP edges: client calls (fetch/axios/requests…) linked to server routes (Django/FastAPI/Flask/Express/Go)
+  ui [route|component] [ref] [--uses] [--budget N] [--format text]   frontend: pages (client routes -> component), a component tree with props/state/effects/handlers -> API -> server route, or where a component is rendered
   topics [name]        ROS comms graph: publishers <-> subscribers linked by name (the call graph can't see it)
   verify-edit <path>   pre-commit check: what breaks if you save your edits to this file
   repos                fleet overview: every indexed repo with its module + per-ref stats

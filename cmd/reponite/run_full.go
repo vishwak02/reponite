@@ -65,6 +65,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdContext(args)
 	case "refs":
 		cmdRefs(args)
+	case "ui":
+		cmdUI(args)
 	default:
 		notImplemented(cmd)
 	}
@@ -776,4 +778,43 @@ func cmdRefs(args []string) {
 	defer st.Close()
 	repo := repoName(".")
 	printJSON(interfaces.RefsJSON(repo, st.Refs(repo)))
+}
+
+// cmdUI is the frontend view: pages, a component tree, or a component's uses.
+func cmdUI(args []string) {
+	var local, uses bool
+	var budget int
+	var format, gateways, upstreams string
+	var rf refFlags
+	pos := parseCmd("ui", "ui [page-route | component] [ref] [--uses] [--budget N] [--format json|text] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--local] [--no-tests]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
+		fs.BoolVar(&uses, "uses", false, "list where the component is rendered, passed or routed to")
+		fs.IntVar(&budget, "budget", 0, "token budget (0 = default ~3000)")
+		fs.StringVar(&format, "format", "json", "json | text")
+		fs.StringVar(&gateways, "gateway", "", "reverse-proxy gateway config(s) in Caddy JSON, comma-separated: follow API calls through each mount")
+		fs.StringVar(&upstreams, "upstream", "", "which repo serves a gateway upstream, host:port=repo,...")
+		rf.register(fs)
+		registerNoTests(fs)
+	})
+	opt, err := interfaces.LoadGateways(gateways, upstreams)
+	if err != nil {
+		fail(err)
+	}
+	target := arg(pos, 0, "")
+	if len(pos) > 1 {
+		rf.ref = pos[1]
+	}
+	if uses && target == "" {
+		fail(fmt.Errorf("usage: reponite ui <component> --uses"))
+	}
+	f := openFleet(local)
+	defer f.Close()
+	s, cov := f.view(rf.ref, rf.pins)
+	res := query.UI(s, query.FleetRepo, rf.ref, target, query.UIOptions{Budget: budget, Uses: uses, Routes: opt})
+	res.Note = joinNote(res.Note, cov)
+	if format == "text" {
+		fmt.Print(interfaces.UIText(res))
+		return
+	}
+	printJSON(interfaces.UIJSON(res))
 }

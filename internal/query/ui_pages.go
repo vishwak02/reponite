@@ -181,7 +181,7 @@ func joinRoute(parent, child string) string {
 
 // routePathExpr evaluates a route path written as a literal, a template
 // literal or a named constant; what it cannot evaluate stays visible as {EXPR}.
-func routePathExpr(expr string, consts map[string]string) string {
+func routePathExpr(expr string, lookup func(string) (string, bool)) string {
 	expr = strings.TrimSpace(expr)
 	if expr == "" {
 		return ""
@@ -192,13 +192,13 @@ func routePathExpr(expr string, consts map[string]string) string {
 	case '`':
 		return jsTmpl.ReplaceAllStringFunc(unquote(expr), func(m string) string {
 			ref := strings.TrimSpace(m[2 : len(m)-1])
-			if v, ok := lookupConst(ref, consts); ok {
+			if v, ok := lookup(ref); ok {
 				return v
 			}
 			return "{" + ref + "}"
 		})
 	}
-	if v, ok := lookupConst(expr, consts); ok {
+	if v, ok := lookup(expr); ok {
 		return v
 	}
 	return "{" + expr + "}"
@@ -219,6 +219,7 @@ type routeTagInfo struct {
 
 // jsxRoutes reads <Route …> trees (react-router v4–v6 and *Route wrappers).
 func (r *uiRepo) jsxRoutes(uf *uiFile, consts map[string]string) []UIPage {
+	lookup := constLookup(uf, consts)
 	tags := scanTags(uf.Code, true)
 	var routes []*routeTagInfo
 	for _, t := range tags {
@@ -234,7 +235,7 @@ func (r *uiRepo) jsxRoutes(uf *uiFile, consts map[string]string) []UIPage {
 			case "path":
 				ri.hasPath = true
 				if a.Expr {
-					ri.path = routePathExpr(a.Value, consts)
+					ri.path = routePathExpr(a.Value, lookup)
 				} else {
 					ri.path = a.Value
 				}
@@ -318,6 +319,11 @@ func (r *uiRepo) jsxRoutes(uf *uiFile, consts map[string]string) []UIPage {
 	}
 	fw := "react-router"
 	var out []UIPage
+	for _, ri := range routes {
+		if strings.Contains(ri.redirect, "${") {
+			ri.redirect = routePathExpr("`"+ri.redirect+"`", lookup)
+		}
+	}
 	for i, ri := range routes {
 		if !ri.hasPath && !ri.index {
 			if ri.component == "" || ri.parent < 0 {
@@ -522,10 +528,11 @@ func objValue(code string, o *jsObj, key string) (string, bool) {
 // arrays a host app loads (module federation).
 func (r *uiRepo) objectRoutes(uf *uiFile, consts map[string]string) []UIPage {
 	code := uf.Script
+	lookup := constLookup(uf, consts)
 	objs := scanObjects(code)
 	isRoute := func(o *jsObj) bool {
-		if _, ok := o.keys["path"]; !ok {
-			return false
+		if at, ok := o.keys["path"]; !ok || at < 0 {
+			return false // no path, or { path, … } shorthand: a destructuring pattern
 		}
 		for _, k := range routeHasComp {
 			if _, ok := o.keys[k]; ok {
@@ -576,10 +583,10 @@ func (r *uiRepo) objectRoutes(uf *uiFile, consts map[string]string) []UIPage {
 			continue
 		}
 		pv, _ := objValue(code, o, "path")
-		route := routePathExpr(pv, consts)
+		route := routePathExpr(pv, lookup)
 		for p := parentRoute(o); p != nil; p = parentRoute(p) {
 			ppv, _ := objValue(code, p, "path")
-			route = joinRoute(routePathExpr(ppv, consts), route)
+			route = joinRoute(routePathExpr(ppv, lookup), route)
 		}
 		if !strings.HasPrefix(route, "/") && !strings.HasPrefix(route, "{") {
 			route = "/" + route
@@ -672,4 +679,51 @@ func (r *uiRepo) lookupPath(p string) string {
 		return q
 	}
 	return p
+}
+
+var strConst = regexp.MustCompile(`(?m)^\s*(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::\s*\w+\s*)?=\s*(?:'([^'\s]{1,80})'|"([^"\s]{1,80})"|` + "`([^`$\\s]{1,80})`" + `)`)
+
+// routeConstants are the repo's string constants a route path may be built
+// from (`BASE_ROUTE = '/manage'`, `PARAM = 'asset'`) on top of its URL
+// constants; a name bound to two values is dropped.
+func routeConstants(files []File, urls map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range urls {
+		out[k] = v
+	}
+	bad := map[string]bool{}
+	for _, f := range files {
+		if codeExts[strings.ToLower(path.Ext(f.Path))] != "js" || minified(f) {
+			continue
+		}
+		for _, m := range strConst.FindAllStringSubmatch(f.Content, -1) {
+			v := m[2] + m[3] + m[4]
+			if old, ok := out[m[1]]; ok && old != v {
+				bad[m[1]] = true
+			}
+			out[m[1]] = v
+		}
+	}
+	for k := range bad {
+		delete(out, k)
+	}
+	return out
+}
+
+// constLookup resolves a constant reference in uf, through an aliased import
+// (`import { BASE_ROUTE as MANAGE_BASE } from …`).
+func constLookup(uf *uiFile, consts map[string]string) func(string) (string, bool) {
+	return func(ref string) (string, bool) {
+		if v, ok := lookupConst(ref, consts); ok {
+			return v, true
+		}
+		head := ref
+		if i := strings.IndexByte(ref, '.'); i >= 0 {
+			head = ref[:i]
+		}
+		if im, ok := uf.Imports[head]; ok && im.Name != "default" && im.Name != "*" && im.Name != head {
+			return lookupConst(im.Name+ref[len(head):], consts)
+		}
+		return "", false
+	}
 }
