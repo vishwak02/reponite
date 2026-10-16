@@ -165,7 +165,7 @@ func analyzeProps(r *uiRepo, d *uiDef) []UIProp {
 		pre := ""
 		if open >= 0 {
 			pre = head[:open]
-			if m := reForwardRef.FindStringSubmatch(head[:min(len(head), open+200)]); m != nil {
+			if m := reForwardRef.FindStringSubmatch(head[:minInt(len(head), open+200)]); m != nil {
 				add(r.typeFields(uf, m[1], 0))
 			}
 			// forwardRef((props, ref) => …) / memo(function X(props) …): the
@@ -883,7 +883,7 @@ func funcBody(code, name string) (string, int, bool) {
 // the end of its statement.
 func bodyFrom(code string, i int) (string, int, bool) {
 	// Skip wrappers like useCallback( and the parameter list.
-	limit := min(len(code), i+400)
+	limit := minInt(len(code), i+400)
 	for j := i; j < limit; j++ {
 		switch code[j] {
 		case '(':
@@ -971,7 +971,7 @@ func renders(d *uiDef) []UIRender {
 	return out
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

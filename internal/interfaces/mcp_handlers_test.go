@@ -117,3 +117,27 @@ func TestToolServerWhyErrorsTests(t *testing.T) {
 		t.Fatalf("tests: %s", out)
 	}
 }
+
+// reponite_trace returns the nested JSON tree by default and the text tree
+// with format=text, each with the coverage note.
+func TestToolServerTrace(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("r", "HEAD", "Checkout", storage.SymbolRecord{Callees: []query.Callee{{Name: "SaveOrder", ResolutionMethod: "name-resolved", Confidence: 0.9}}})
+	m.Put("r", "HEAD", "SaveOrder", storage.SymbolRecord{})
+	m.PutFile("r", "HEAD", query.File{Path: "c.go", Content: "func Checkout(){ SaveOrder() }\nfunc SaveOrder(){ db.Exec(\"INSERT INTO orders\") }\n",
+		Symbols: []query.SymbolSpan{{Name: "Checkout", StartLine: 1, EndLine: 1}, {Name: "SaveOrder", StartLine: 2, EndLine: 2}}})
+	ts := &ToolServer{Store: m, Repo: "r"}
+	out, err := ts.Call("reponite_trace", map[string]string{"entry": "Checkout"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"handle": "SaveOrder"`, `"resolution_method": "name-resolved"`, `"kind": "db"`, `"op": "sql"`, `read [r@HEAD]`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("trace json lacks %s: %s", want, out)
+		}
+	}
+	out, _ = ts.Call("reponite_trace", map[string]string{"entry": "SaveOrder", "direction": "up", "format": "text"})
+	if !strings.Contains(out, "- Checkout  ⟵caller name-resolved 0.90") {
+		t.Errorf("trace text: %s", out)
+	}
+}

@@ -7,6 +7,7 @@ package interfaces
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
@@ -256,6 +257,23 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return t.mapExplain(tool, args, ref)
 	case "reponite_guide":
 		return GuideText(), nil
+	case "reponite_trace":
+		depth, _ := strconv.Atoi(args["depth"])
+		budget, _ := strconv.Atoi(args["budget"])
+		ropt, err := LoadGateways(args["gateway"], args["upstream"])
+		if err != nil {
+			return "", err
+		}
+		opt := query.TraceOptions{Direction: args["direction"], Depth: depth, Budget: budget, IncludeTests: includeTests,
+			Repo: args["repo"], Routes: ropt, Edges: query.UITraceEdges(t.Store, query.FleetRepo, ref)}
+		for _, p := range strings.Split(args["skip"], ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				opt.Skip = append(opt.Skip, p)
+			}
+		}
+		res := query.Trace(t.Store, args["entry"], ref, opt)
+		res.Note = res.Note + " — " + coverage()
+		return TraceOutput(res, args["format"])
 	default:
 		return "", fmt.Errorf("unknown tool %q", tool)
 	}

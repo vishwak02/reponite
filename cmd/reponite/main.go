@@ -36,7 +36,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests", "ui", "map", "explain":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests", "ui", "map", "explain", "trace":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "arch",
 		"sync", "status", "gc":
@@ -105,6 +105,7 @@ index-backed (build with `+"`make cli`"+`):
   tests <symbol> [ref] [--depth N]   which tests exercise it (direct + via callers), framework, and the command to run just those
   map [ref] [--repo R] [--budget N] [--format text]   orientation: entry points, modules, hubs, deps (no --repo = fleet + cross-repo links)
   explain <symbol|path[:line]|dir|"METHOD /route"> [ref] [--budget N]   understand one thing: doc, body, callers/callees, routes/topics, tests
+  trace <entry> [ref] [--direction down|up] [--depth N] [--budget N] [--format text]   "what happens when …": call tree from a symbol, "VERB /route", path:line, CLI command or ROS topic, across HTTP/topic/impl boundaries, with side effects
   mcp [dir...]         serve the tools over MCP (stdio) for an AI agent (no dir = the registered fleet)
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
