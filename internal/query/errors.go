@@ -73,12 +73,17 @@ type ErrorType struct {
 
 // ErrorsResult is the answer: ranked producers + their handlers, or a catalogue.
 type ErrorsResult struct {
-	Query     string
-	Mode      string // message | type | status | catalogue
-	Sites     []ErrorSite
-	Handlers  []ErrorHandler
-	Types     []ErrorType // catalogue mode
-	Total     int         // producers matched (message/type/status) or found (catalogue)
+	Query    string
+	Mode     string // message | type | status | catalogue
+	Sites    []ErrorSite
+	Handlers []ErrorHandler
+	Types    []ErrorType // catalogue mode
+	// Data are places the error's name or text is DEFINED as data (a JSON/YAML
+	// error catalogue, a message table) rather than produced by a raise: the
+	// code then looks it up by key or code at runtime. LoadedBy cites code
+	// files that name the data file, the hop back into the producing code.
+	Data      []ErrorDataDef
+	Total     int // producers matched (message/type/status) or found (catalogue)
 	Truncated bool
 	Next      string
 	Note      string
@@ -803,9 +808,12 @@ func Errors(s Store, repo, ref, q string, budget int) ErrorsResult {
 	if res.Truncated {
 		res.Next = fmt.Sprintf("%d of %d producers shown; re-run with --budget %d (MCP: budget=%d), or narrow with the exact message/type", len(res.Sites), res.Total, budget*2, budget*2)
 	}
+	res.Data = errorDataDefs(s, repo, ref, q)
 	switch {
+	case res.Total == 0 && len(res.Data) > 0:
+		res.Note = "no raise/throw/error value/HTTP error response produces this text directly, but it is DEFINED as data (see data): the code reads that catalogue at runtime and raises/reports the entry by key or code — follow loaded_by into the code, then search for the entry's key/code"
 	case res.Total == 0:
-		res.Note = "no raise/throw/error value/HTTP error response at this ref produces this — it may come from a dependency, another repo or version, or be built dynamically"
+		res.Note = "no raise/throw/error value/HTTP error response at this ref produces this, and no JSON/YAML catalogue defines it — it may come from a dependency, another repo or version, or be built dynamically"
 	default:
 		res.Note = "producers ranked: type/status/code match, then message (fixed template text matched); callers = one hop up the call graph; handlers: on_path (same function or a direct caller) first, then exact type, base type, framework-level, catch-all"
 	}

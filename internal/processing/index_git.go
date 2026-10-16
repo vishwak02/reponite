@@ -135,6 +135,18 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			return nil
 		}
+		if IsContentFile(f.Name) {
+			// JSON catalogues and rviz configs: content-only, for errors/topics/grep
+			if f.Size > maxContentFileBytes {
+				return nil
+			}
+			if src, cerr := f.Contents(); cerr == nil {
+				if pf, ok := contentFile(f.Name, src); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
 		ext := filepath.Ext(f.Name)
 		if _, known := RulesForExt(ext); !known && ext != "" {
 			return nil // an unsupported extension: never read its blob

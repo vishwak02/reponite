@@ -133,6 +133,15 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
+		// JSON catalogues and rviz configs: content-only (contentfile.go).
+		if IsContentFile(rel) {
+			if b, readErr := os.ReadFile(path); readErr == nil {
+				if pf, ok := contentFile(filepath.ToSlash(rel), string(b)); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
 		src, rules, ext, ok := readSource(path)
 		if !ok {
 			return nil

@@ -612,6 +612,8 @@ type commGroupDTO struct {
 	Confidence float64           `json:"confidence"`
 	Producers  []commEndpointDTO `json:"producers"`
 	Consumers  []commEndpointDTO `json:"consumers"`
+	// declared: launch-file bindings no indexed source explains (direction unknown).
+	Declared []commEndpointDTO `json:"declared,omitempty"`
 }
 
 type topicsDTO struct {
@@ -625,6 +627,8 @@ type topicsDTO struct {
 	UnresolvedIncludes int `json:"unresolved_includes,omitempty"`
 	UnexpandedRemaps   int `json:"unexpanded_remaps,omitempty"`
 	ParamResolved      int `json:"param_resolved,omitempty"`
+	Declared           int `json:"declared,omitempty"`
+	VizConfigs         int `json:"viz_configs,omitempty"`
 	// Endpoints whose name is a variable/parameter with no resolvable value.
 	UnresolvedEndpoints []commEndpointDTO `json:"unresolved_endpoints,omitempty"`
 	Note                string            `json:"note,omitempty"`
@@ -644,6 +648,13 @@ func commEndpointsToDTO(eps []query.CommEndpoint) []commEndpointDTO {
 	return out
 }
 
+func declaredDTO(eps []query.CommEndpoint) []commEndpointDTO {
+	if len(eps) == 0 {
+		return nil
+	}
+	return commEndpointsToDTO(eps)
+}
+
 // TopicsJSON renders the ROS communication graph — producers and consumers
 // linked by topic/service/action name, the cross-process edges the call graph
 // can't see.
@@ -652,6 +663,7 @@ func TopicsJSON(r query.CommGraphResult) (string, error) {
 		Endpoints: r.Endpoints, Unresolved: r.Unresolved, Note: r.Note,
 		LaunchFiles: r.LaunchFiles, Remapped: r.Remapped, UnresolvedIncludes: r.UnresolvedIncludes,
 		UnexpandedRemaps: r.UnexpandedRemaps, ParamResolved: r.ParamResolved,
+		Declared: r.Declared, VizConfigs: r.VizConfigs,
 		Groups: make([]commGroupDTO, 0, len(r.Groups)),
 		Meta:   metaOf(r.Meta),
 	}
@@ -660,6 +672,7 @@ func TopicsJSON(r query.CommGraphResult) (string, error) {
 			Family: g.Family, Name: g.Name, Connected: g.Connected(), Confidence: g.Confidence,
 			Producers: commEndpointsToDTO(g.Producers),
 			Consumers: commEndpointsToDTO(g.Consumers),
+			Declared:  declaredDTO(g.Declared),
 		})
 	}
 	if len(r.Unbound) > 0 {

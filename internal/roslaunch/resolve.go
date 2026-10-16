@@ -46,6 +46,76 @@ type Table struct {
 	Files      int
 	Unresolved int
 	Unexpanded int
+	// Declared is every node remap as the launch file wrote it, resolved or
+	// not. A remap is evidence on its own that the launched node binds the
+	// target name at runtime, even when that node's source is not indexed (a
+	// third-party package) or names the topic through an expression — then the
+	// launch file is the only place the wiring is visible at all.
+	Declared []Declaration
+}
+
+// Declaration is one `<remap>` on a `<node>`: the node it wires and the name
+// it binds at runtime. To is expanded against the file's args; Prefix holds
+// the substitution(s) left unexpanded at the START of the target — a namespace
+// prefix such as `$(arg ns)` — and Runtime the remainder, which is the runtime
+// name when that prefix expands to the root (the usual default). Runtime is ""
+// when a substitution sits anywhere but the front, so no name is claimed.
+type Declaration struct {
+	Pkg, Type, Node, Ns string
+	From, To            string
+	Prefix, Runtime     string
+	Via                 string
+	Line                int
+}
+
+// leadingSubst returns the length of the run of substitutions at the very
+// start of s (parentheses balanced, so `$(eval f('x'))` is one substitution),
+// 0 when s does not start with one.
+func leadingSubst(s string) int {
+	i := 0
+	for {
+		j := i
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+			j++
+		}
+		if !strings.HasPrefix(s[j:], "$(") {
+			return i
+		}
+		depth := 0
+		k := j + 1
+		for ; k < len(s); k++ {
+			if s[k] == '(' {
+				depth++
+			} else if s[k] == ')' {
+				depth--
+				if depth == 0 {
+					break
+				}
+			}
+		}
+		if k >= len(s) {
+			return i // unbalanced: claim nothing
+		}
+		i = k + 1
+	}
+}
+
+// declare records a node remap with whatever runtime name can honestly be read
+// from it.
+func declare(path string, n Node, r Remap, args map[string]string) Declaration {
+	to := strings.TrimSpace(Substitute(r.To, args))
+	d := Declaration{Pkg: n.Pkg, Type: n.Type, Node: n.Name, Ns: n.Ns,
+		From: strings.TrimSpace(Substitute(r.From, args)), To: to, Via: path, Line: n.Line}
+	if !HasSubstitution(to) {
+		d.Runtime = norm(to)
+		return d
+	}
+	if n := leadingSubst(to); n > 0 {
+		if rest := strings.TrimSpace(to[n:]); rest != "" && !HasSubstitution(rest) {
+			d.Prefix, d.Runtime = strings.TrimSpace(to[:n]), norm(rest)
+		}
+	}
+	return d
 }
 
 // NewTable builds a remap table from parsed launch files.
@@ -83,6 +153,7 @@ func NewTable(files []File) *Table {
 				continue // nothing to link it to source with
 			}
 			for _, r := range n.Remaps {
+				t.Declared = append(t.Declared, declare(f.Path, n, r, f.Args))
 				from, okF := resolve(r.From)
 				to, okT := resolve(r.To)
 				if !okF || !okT {

@@ -172,12 +172,24 @@ type errTypeDTO struct {
 	Handled  int      `json:"handled"`
 }
 
+// errDataDTO is a line of a JSON/YAML catalogue that defines the error.
+type errDataDTO struct {
+	Repo     string   `json:"repo"`
+	Path     string   `json:"path"`
+	Line     int      `json:"line"`
+	Key      string   `json:"key,omitempty"`
+	Text     string   `json:"text"`
+	Context  []string `json:"context,omitempty"`
+	LoadedBy []string `json:"loaded_by,omitempty"`
+}
+
 type errorsDTO struct {
 	Query     string          `json:"query,omitempty"`
 	Mode      string          `json:"mode"`
 	Sites     []errSiteDTO    `json:"producers"`
 	Handlers  []errHandlerDTO `json:"handlers,omitempty"`
 	Types     []errTypeDTO    `json:"types,omitempty"`
+	Data      []errDataDTO    `json:"data,omitempty"`
 	Total     int             `json:"total"`
 	Truncated bool            `json:"truncated"`
 	Next      string          `json:"next,omitempty"`
@@ -197,6 +209,10 @@ func ErrorsJSON(r query.ErrorsResult) (string, error) {
 	for _, h := range r.Handlers {
 		dto.Handlers = append(dto.Handlers, errHandlerDTO{Repo: h.Repo, Path: h.Path, Line: h.Line, In: h.In, Kind: h.Kind,
 			Types: h.Types, Match: h.Match, OnPath: h.OnPath, Text: h.Text, Test: h.Test})
+	}
+	for _, d := range r.Data {
+		dto.Data = append(dto.Data, errDataDTO{Repo: d.Repo, Path: d.Path, Line: d.Line, Key: d.Key, Text: d.Text,
+			Context: d.Context, LoadedBy: d.LoadedBy})
 	}
 	for _, t := range r.Types {
 		dto.Types = append(dto.Types, errTypeDTO{Repo: t.Repo, Type: t.Type, Bases: t.Bases, Defined: t.Defined,
@@ -249,6 +265,12 @@ func ErrorsText(r query.ErrorsResult) string {
 					more = fmt.Sprintf(" +%d", x.MoreCalls)
 				}
 				fmt.Fprintf(&b, "    called by: %s%s\n", strings.Join(x.Callers, ", "), more)
+			}
+		}
+		for _, d := range r.Data {
+			fmt.Fprintf(&b, "defined as data: %s %s:%d  %s\n", d.Repo, d.Path, d.Line, d.Text)
+			if len(d.LoadedBy) > 0 {
+				fmt.Fprintf(&b, "    loaded by: %s\n", strings.Join(d.LoadedBy, ", "))
 			}
 		}
 		for _, h := range r.Handlers {

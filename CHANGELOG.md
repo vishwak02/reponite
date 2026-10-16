@@ -9,6 +9,30 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Wiring outside source code (IndexVer 8)
+
+#### Added
+
+- **`topics`: launch-declared bindings.** A `<remap>` on a launched node whose source
+  shows no endpoint for the target — a third-party package that is not indexed, or a
+  name built by an expression — is listed under `declared` (role `launch_declared`,
+  direction unknown) instead of the topic looking producer-less. A leading namespace
+  substitution such as `$(arg ns)` is read as the root and labeled. A remap already
+  explaining an indexed endpoint is not repeated.
+- **`topics`: rviz configs.** `.rviz` displays are consumers and `Tools:` entries
+  producers of the topics they name (`Topic`, `Marker Topic`, `Update Topic`, rviz2
+  `Value:`), cited with the display name, class and line.
+- **`errors`: names and texts defined as data.** When the queried text sits in a JSON or
+  YAML catalogue (error tables, message files), the matching lines are returned under
+  `data` with sibling keys and the code files that load the catalogue (`loaded_by`).
+- JSON files (≤ 256 KB, lockfiles excepted) and `.rviz` files are stored as content-only
+  files, so grep and search see them too. Re-index to pick them up.
+
+#### Changed
+
+- The `topics` note now says that an empty producer list means none was found in the
+  indexed code, not that none exists.
+
 ### History, errors and tests
 
 #### Added

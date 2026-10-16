@@ -40,7 +40,10 @@ const (
 	//      content-only files, for `map`, `explain`, `models` and `config`.
 	//   7: minified/bundled assets (*.min.js, *-bundle.js, *.chunk.js, …) are
 	//      excluded by default.
-	IndexVer = 7
+	//   8: JSON data files (up to 256 KB, lockfiles excepted) and rviz
+	//      configs are stored as content-only files, so `errors` finds names
+	//      defined in JSON catalogues and `topics` reads rviz displays/tools.
+	IndexVer = 8
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

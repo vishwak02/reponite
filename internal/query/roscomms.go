@@ -33,6 +33,10 @@ const (
 	RoleServiceClient = "service_client"
 	RoleActionServer  = "action_server"
 	RoleActionClient  = "action_client"
+	// RoleLaunchDeclared is a binding seen only in a launch file: a `<remap>`
+	// on a launched node whose source does not show the endpoint (third-party
+	// package, or a name built by an expression). The direction is unknown.
+	RoleLaunchDeclared = "launch_declared"
 )
 
 // CommEndpoint is one ROS communication endpoint found in source: a
@@ -83,10 +87,15 @@ type CommEndpoint struct {
 // / action): the producers on one side, the consumers on the other. When both
 // sides are non-empty it is a resolved cross-process edge.
 type CommGroup struct {
-	Family     string // "topic" | "service" | "action"
-	Name       string // normalized name
-	Producers  []CommEndpoint
-	Consumers  []CommEndpoint
+	Family    string // "topic" | "service" | "action"
+	Name      string // normalized name
+	Producers []CommEndpoint
+	Consumers []CommEndpoint
+	// Declared are launch-file bindings whose node source shows no endpoint
+	// for the name: the node is wired to it at runtime, direction unknown. A
+	// group with no producers but a declared binding is NOT "no producer" —
+	// the producer may well be that node.
+	Declared   []CommEndpoint
 	Confidence float64 // name-string linkage: medium (0.75), bumped when a captured type matches
 }
 
@@ -117,8 +126,12 @@ type CommGraphResult struct {
 	// matches the topic) instead of vanishing.
 	ParamResolved int
 	Unbound       []CommEndpoint
-	Note          string
-	Meta          Meta
+	// Declared counts launch-file bindings added because no indexed source
+	// endpoint explains them; VizConfigs the rviz configs read as endpoints.
+	Declared   int
+	VizConfigs int
+	Note       string
+	Meta       Meta
 }
 
 // commIdiom is a client-library idiom for one role: the method-name pattern to
@@ -470,8 +483,9 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 		ep CommEndpoint
 		ps *paramScope
 	}
-	var all []CommEndpoint
+	var all, viz []CommEndpoint
 	var dyn []pending
+	launchRepo := map[string]string{} // launch path -> repo, to cite a declaration
 	for _, rp := range reposFor(s, repo) {
 		files := s.Files(rp, ref)
 		ps := &paramScope{repo: rp, reads: map[string][]paramRead{}, byPkg: map[string][]paramRead{},
@@ -481,6 +495,13 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 			switch {
 			case roslaunch.IsLaunchFile(f.Path):
 				launch = append(launch, repoFile{rp, f.Path, f.Content})
+				if _, ok := launchRepo[f.Path]; !ok {
+					launchRepo[f.Path] = rp
+				}
+				continue
+			case IsVizConfig(f.Path):
+				viz = append(viz, scanVizConfig(rp, f.Path, f.Content)...)
+				res.VizConfigs++
 				continue
 			case roslaunch.IsParamFile(f.Path) && ProjectFileKind(f.Path) != ProjCI:
 				yaml = append(yaml, repoFile{rp, f.Path, f.Content})
@@ -548,6 +569,52 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 			all[i].NameResolution = resolution
 		}
 	}
+	// A launch remap whose target no remapped source endpoint carries is the
+	// only record that its node binds that name (a third-party node, or one
+	// whose source builds the name by an expression): keep it, labeled.
+	explained := map[string]bool{}
+	for _, ep := range all {
+		if ep.RemapVia != "" {
+			explained[ep.RemapVia+"\x00"+ep.Effective] = true
+		}
+	}
+	var declared []CommEndpoint
+	seenDecl := map[string]bool{}
+	for _, d := range remaps.Declared {
+		if d.Runtime == "" || explained[d.Via+"\x00"+d.Runtime] {
+			continue
+		}
+		k := d.Via + "\x00" + d.Runtime + "\x00" + d.Pkg + "\x00" + d.Node
+		if seenDecl[k] {
+			continue
+		}
+		seenDecl[k] = true
+		resolution := "launch-declared"
+		if d.Prefix != "" {
+			resolution += "; namespace prefix " + d.Prefix + " not expanded, read as the root namespace"
+		}
+		node := d.Pkg + "/" + d.Type
+		if d.Node != "" {
+			node += " (node " + d.Node + ")"
+		}
+		declared = append(declared, CommEndpoint{
+			Repo: launchRepo[d.Via], Path: d.Via, Line: d.Line, Role: RoleLaunchDeclared,
+			Name: d.Runtime, Raw: d.From, Effective: d.Runtime, NameResolution: resolution,
+			RemapVia: d.Via, In: node, Text: `<remap from="` + d.From + `" to="` + d.To + `"/>`,
+		})
+	}
+	all = append(all, viz...)
+	for _, ep := range declared {
+		res.Endpoints++
+		res.Declared++
+		k := key{"topic", ep.Effective}
+		g := groups[k]
+		if g == nil {
+			g = &CommGroup{Family: "topic", Name: ep.Effective}
+			groups[k] = g
+		}
+		g.Declared = append(g.Declared, ep)
+	}
 	for _, ep := range all {
 		res.Endpoints++
 		fam, producer := roleFamily(ep.Role)
@@ -571,6 +638,7 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 		g.Confidence = linkConfidence(*g)
 		sortEndpoints(g.Producers)
 		sortEndpoints(g.Consumers)
+		sortEndpoints(g.Declared)
 		res.Groups = append(res.Groups, *g)
 	}
 	sortGroups(res.Groups)
@@ -666,6 +734,13 @@ func commGraphNote(res CommGraphResult) string {
 		b += fmt.Sprintf("%d endpoint(s) take their name from a parameter and were resolved through it (name_resolution param:<name>=<value> (<source>), name_confidence below a literal's: a launch value for the node's package > one elsewhere in the repo = the call's default > a package YAML no launch file is seen loading); %d endpoint(s) name a variable/parameter whose value could not be resolved and are listed under unresolved_endpoints, never linked. ",
 			res.ParamResolved, len(res.Unbound))
 	}
+	if res.Declared > 0 {
+		b += fmt.Sprintf("%d launch-declared binding(s) (role launch_declared, listed under declared): a launched node is remapped onto the name but no indexed source endpoint shows it — typically a third-party package (move_base_flex, drivers) or a name built by an expression; the node binds the name at runtime, its direction is unknown, and the topic/service family is assumed topic. ", res.Declared)
+	}
+	if res.VizConfigs > 0 {
+		b += fmt.Sprintf("%d rviz config(s) read: displays are listed as subscribers and tools as publishers (name_resolution as-configured (rviz)). ", res.VizConfigs)
+	}
+	b += "Producers can also live in packages that are not indexed at all; an empty producer list means none was FOUND, not that none exists. "
 	b += "RPC/DDS wire topology is still inferred from source idioms only, names built by expressions (concatenation, calls) are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source."
 	return b
 }
@@ -678,7 +753,8 @@ func Topic(s Store, repo, ref, name string) CommGraphResult {
 	full := CommGraph(s, repo, ref)
 	want := normalizeTopic(name)
 	res := CommGraphResult{Meta: full.Meta, Note: full.Note, ParamResolved: full.ParamResolved,
-		LaunchFiles: full.LaunchFiles, Remapped: full.Remapped, UnresolvedIncludes: full.UnresolvedIncludes}
+		LaunchFiles: full.LaunchFiles, Remapped: full.Remapped, UnresolvedIncludes: full.UnresolvedIncludes,
+		UnexpandedRemaps: full.UnexpandedRemaps, VizConfigs: full.VizConfigs}
 	// An endpoint whose name could not be resolved is still a candidate when
 	// its parameter or variable is named after the topic (status_topic for
 	// /status): listed, labeled, never linked.
@@ -697,7 +773,7 @@ func Topic(s Store, repo, ref, name string) CommGraphResult {
 		// findable by both spellings instead of looking absent.
 		match := g.Name == want
 		if !match {
-			for _, ep := range append(append([]CommEndpoint{}, g.Producers...), g.Consumers...) {
+			for _, ep := range append(append(append([]CommEndpoint{}, g.Producers...), g.Consumers...), g.Declared...) {
 				if ep.Name == want {
 					match = true
 					break
@@ -706,7 +782,8 @@ func Topic(s Store, repo, ref, name string) CommGraphResult {
 		}
 		if match {
 			res.Groups = append(res.Groups, g)
-			res.Endpoints += len(g.Producers) + len(g.Consumers)
+			res.Endpoints += len(g.Producers) + len(g.Consumers) + len(g.Declared)
+			res.Declared += len(g.Declared)
 		}
 	}
 	if len(res.Groups) == 0 {
