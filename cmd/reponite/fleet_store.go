@@ -103,6 +103,12 @@ func openFleet(local bool) *fleetStore {
 // fleetStore embeds query.Store, which does not carry them, so without these a
 // pinned fleet looked unpinned to every coverage check ("nothing searched").
 func (f *fleetStore) RefFor(repo, ref string) string { return query.EffectiveRef(f.Store, repo, ref) }
+func (f *fleetStore) ExternalRefsFrom(repo, ref string) []query.ExternalRefHit {
+	if l, ok := f.Store.(query.ExternalRefLister); ok {
+		return l.ExternalRefsFrom(repo, ref)
+	}
+	return nil
+}
 func (f *fleetStore) IndexVersion(repo, ref string) (int, bool) {
 	if iv, ok := f.Store.(query.IndexVersioner); ok {
 		return iv.IndexVersion(repo, ref)

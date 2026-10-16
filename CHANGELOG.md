@@ -28,6 +28,22 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   the call graph (≤ N hops), HTTP requests to its route, or test-file references, the
   framework per file, and the command that runs only those tests.
 - `--format text` and `--budget` on all three.
+### Orientation (map / explain / guide)
+
+#### Added
+
+- **`reponite map`** / `reponite_map`: the first call on an unfamiliar codebase — README
+  summary, languages, entry points (mains, CLI commands, HTTP servers with route counts,
+  UI roots and page routes, ROS nodes/launch files/plugins, build targets, Dockerfile
+  CMD/ENTRYPOINT, compose services, CI jobs, package scripts, Make targets), modules with
+  their stated purpose, hub symbols and declared dependencies; without `--repo`, every
+  repo plus the known cross-repo links. Token-budgeted with `truncated` + `next`.
+- **`reponite explain`** / `reponite_explain`: one bundle to understand a symbol, file,
+  `path:line`, directory or `"METHOD /route"`.
+- **`reponite guide`** and the `reponite_guide` MCP tool, prompt and resource; every MCP
+  tool description now opens with when to use it.
+- Project files (READMEs, Dockerfiles, Makefiles, dependency manifests, CI workflows) are
+  stored at index time — **IndexVer 6**.
 
 ### Production answers (devel)
 

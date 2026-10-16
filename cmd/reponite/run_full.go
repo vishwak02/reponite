@@ -73,6 +73,10 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdTests(args)
 	case "ui":
 		cmdUI(args)
+	case "map":
+		cmdMap(args)
+	case "explain":
+		cmdExplain(args)
 	default:
 		notImplemented(cmd)
 	}

@@ -33,7 +33,10 @@ const (
 	//   6: JSX elements are component-render call edges (<CartItem/> calls
 	//      CartItem); .vue/.svelte single-file components are indexed (script
 	//      parsed in place, the component a symbol whose callees are the
-	//      components its template renders and the handlers it binds).
+	//      components its template renders and the handlers it binds); project
+	//      files (READMEs, Dockerfiles, Makefiles, dependency manifests, CI
+	//      workflows under .github/workflows) are stored as content-only files,
+	//      for `map` and `explain`.
 	IndexVer = 6
 
 	// GoTarget documents the intended production Go toolchain. The build

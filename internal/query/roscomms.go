@@ -482,7 +482,7 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 			case roslaunch.IsLaunchFile(f.Path):
 				launch = append(launch, repoFile{rp, f.Path, f.Content})
 				continue
-			case roslaunch.IsParamFile(f.Path):
+			case roslaunch.IsParamFile(f.Path) && ProjectFileKind(f.Path) != ProjCI:
 				yaml = append(yaml, repoFile{rp, f.Path, f.Content})
 				ps.yaml[f.Path] = f.Content
 				continue

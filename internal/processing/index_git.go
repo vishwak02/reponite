@@ -63,12 +63,27 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	var files []ParsedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
-		if ig.Excluded(f.Name, false) || strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.") {
-			return nil // ignore set + dot-dirs/dot-files, mirroring IndexDir
+		dotted := strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.")
+		if ig.Excluded(f.Name, false) || dotted && query.ProjectFileKind(f.Name) != query.ProjCI {
+			return nil // ignore set + dot-dirs/dot-files (CI definitions excepted), mirroring IndexDir
 		}
 		if IsManifestFile(f.Name) {
 			if src, err := f.Contents(); err == nil {
 				manifests[f.Name] = []byte(src)
+				if pf, ok := projectFile(f.Name, src); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
+		if IsProjectFile(f.Name) && !IsROSParamFile(f.Name) {
+			if f.Size > query.MaxProjectFileBytes {
+				return nil
+			}
+			if src, err := f.Contents(); err == nil {
+				if pf, ok := projectFile(f.Name, src); ok {
+					files = append(files, pf)
+				}
 			}
 			return nil
 		}

@@ -252,6 +252,10 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 			return TestsText(res), nil
 		}
 		return TestsJSON(res)
+	case "reponite_map", "reponite_explain":
+		return t.mapExplain(tool, args, ref)
+	case "reponite_guide":
+		return GuideText(), nil
 	default:
 		return "", fmt.Errorf("unknown tool %q", tool)
 	}
@@ -274,4 +278,41 @@ func (t *ToolServer) symbolRepo(repo string, explicit bool, ref, symbol string) 
 		return found[0]
 	}
 	return repo
+}
+
+// mapExplain serves reponite_map and reponite_explain: no_tests hides test
+// code for this call, format=text returns the terse rendering.
+func (t *ToolServer) mapExplain(tool string, args map[string]string, ref string) (string, error) {
+	st := t.Store
+	if args["no_tests"] == "true" {
+		st = &storage.NoTests{Inner: st}
+	}
+	budget, _ := strconv.Atoi(args["budget"])
+	text := args["format"] == "text"
+	if tool == "reponite_map" {
+		repo := args["repo"]
+		if repo == "" && len(st.Repos()) == 1 {
+			repo = st.Repos()[0]
+		}
+		if repo == "" {
+			r := query.FleetMap(st, ref, budget)
+			if text {
+				return FleetMapText(r), nil
+			}
+			return FleetMapJSON(r)
+		}
+		r := query.Map(st, repo, ref, budget)
+		if text {
+			return MapText(r), nil
+		}
+		return MapJSON(r)
+	}
+	if args["target"] == "" {
+		return "", fmt.Errorf("explain needs a target: a symbol, path[:line], directory or \"METHOD /route\"")
+	}
+	r := query.Explain(st, ref, args["target"], query.ExplainOptions{Repo: args["repo"], Prefer: t.Repo, Budget: budget})
+	if text {
+		return ExplainText(r), nil
+	}
+	return ExplainJSON(r)
 }

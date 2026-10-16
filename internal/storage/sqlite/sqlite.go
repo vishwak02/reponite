@@ -860,6 +860,12 @@ func (s *Store) ExternalRefsTo(module, name string) []query.ExternalRefHit {
 		ORDER BY r.repo, r.ref, fn.s`, name, module, len(prefix), prefix)
 }
 
+// ExternalRefsFrom lists the cross-repo references captured at repo@ref
+// (query.ExternalRefLister), for the fleet map's import links.
+func (s *Store) ExternalRefsFrom(repo, ref string) []query.ExternalRefHit {
+	return s.scanExt(extSelect+` WHERE r.repo=? AND r.ref=? ORDER BY fn.s`, repo, ref)
+}
+
 // ExternalRefsToSymbol returns every reference targeting this exact SCIP
 // moniker — the symbol-resolved cross-repo tier (Phase 6b).
 func (s *Store) ExternalRefsToSymbol(moniker string) []query.ExternalRefHit {

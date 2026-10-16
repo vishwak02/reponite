@@ -48,7 +48,9 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 				// Dot-dirs (.git, .reponite, …) are always skipped; the ignore
 				// set adds vendor/third_party/node_modules/… + .reponiteignore
 				// + --exclude.
-				if strings.HasPrefix(info.Name(), ".") || ig.Excluded(rel, true) {
+				// .github/workflows is the one dot-dir read, for CI
+				// definitions (project files).
+				if strings.HasPrefix(info.Name(), ".") && !query.IsProjectDir(rel) || ig.Excluded(rel, true) {
 					return filepath.SkipDir
 				}
 			}
@@ -59,11 +61,27 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		}
 		// Module manifests carry the repo's identity, not symbols; collect for
 		// module_path detection (§8B.2). They are never source, so return after.
+		// They are also stored as project files (as are READMEs, Dockerfiles,
+		// Makefiles and CI definitions) for `map`/`explain`.
 		if IsManifestFile(path) {
 			if src, readErr := os.ReadFile(path); readErr == nil {
 				manifests[rel] = src
+				if pf, ok := projectFile(rel, string(src)); ok {
+					files = append(files, pf)
+				}
 			}
 			return nil
+		}
+		if IsProjectFile(rel) && !IsROSParamFile(path) {
+			if src, readErr := os.ReadFile(path); readErr == nil {
+				if pf, ok := projectFile(rel, string(src)); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
+		if filepath.ToSlash(filepath.Dir(rel)) != "." && query.IsProjectDir(filepath.ToSlash(filepath.Dir(rel))) && !IsProjectFile(rel) {
+			return nil // a non-CI file under .github
 		}
 		// ROS interface files (.msg/.srv/.action) are pure text, not tree-sitter.
 		if IsROSFile(path) {
