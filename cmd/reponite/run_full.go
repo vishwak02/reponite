@@ -65,6 +65,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdContext(args)
 	case "refs":
 		cmdRefs(args)
+	case "trace":
+		cmdTrace(args)
 	default:
 		notImplemented(cmd)
 	}
@@ -776,4 +778,54 @@ func cmdRefs(args []string) {
 	defer st.Close()
 	repo := repoName(".")
 	printJSON(interfaces.RefsJSON(repo, st.Refs(repo)))
+}
+
+// cmdTrace answers "what happens when …": the call tree below (or above) an
+// entry — a symbol, "VERB /route", path:line, a CLI command or a ROS topic —
+// crossing HTTP, topic, implementation and import boundaries fleet-wide, with
+// each node's side effects.
+func cmdTrace(args []string) {
+	var local bool
+	var depth, budget int
+	var direction, format, repoFlag, skip, gateways, upstreams string
+	var tests bool
+	var rf refFlags
+	pos := parseCmd("trace", "trace <symbol | \"VERB /path\" | path:line | cli-command | topic> [ref] [--direction down|up] [--depth N] [--budget N] [--format json|text] [--repo R] [--skip prefix,...] [--gateway caddy.json] [--refs repo=ref,...] [--tests] [--no-tests] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "only walk this repo instead of the registered fleet")
+		fs.IntVar(&depth, "depth", 0, "levels to walk below the entry (0 = default 5)")
+		fs.IntVar(&budget, "budget", 0, "token budget of the text rendering (0 = default 2000)")
+		fs.StringVar(&direction, "direction", "down", "down: what this sets off; up: how execution gets here")
+		fs.StringVar(&format, "format", "json", "json (nested tree) or text (indented tree)")
+		fs.StringVar(&repoFlag, "repo", "", "the repo defining the entry symbol (default: every repo that has it)")
+		fs.StringVar(&skip, "skip", "", "extra library/handle prefixes to treat as noise, comma-separated")
+		fs.StringVar(&gateways, "gateway", "", "reverse-proxy gateway config(s) in Caddy JSON, comma-separated")
+		fs.StringVar(&upstreams, "upstream", "", "which repo serves a gateway upstream, host:port=repo,...")
+		fs.BoolVar(&tests, "tests", false, "walk into test code too")
+		rf.register(fs)
+		registerNoTests(fs)
+	})
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite trace <entry> [ref] [--direction down|up] [--depth N] [--budget N] [--format text]"))
+	}
+	ref := rf.ref
+	if len(pos) > 1 {
+		ref = pos[1]
+	}
+	ropt, err := interfaces.LoadGateways(gateways, upstreams)
+	if err != nil {
+		fail(err)
+	}
+	f := openFleet(local)
+	defer f.Close()
+	s, cov := f.view(ref, rf.pins)
+	opt := query.TraceOptions{Direction: direction, Depth: depth, Budget: budget, IncludeTests: tests && !hideTests(),
+		Repo: repoFlag, Routes: ropt}
+	for _, p := range strings.Split(skip, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			opt.Skip = append(opt.Skip, p)
+		}
+	}
+	res := query.Trace(s, pos[0], ref, opt)
+	res.Note = joinNote(res.Note, cov)
+	printJSON(interfaces.TraceOutput(res, format))
 }

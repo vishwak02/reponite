@@ -33,7 +33,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "trace":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "why", "arch",
 		"sync", "status", "gc":
@@ -95,6 +95,7 @@ index-backed (build with `+"`make cli`"+`):
   rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace
   brief <symbol> [ref] [--budget N]   one bundle to edit a symbol: body + callees/callers + tests + compat
   refs                 list the repo's indexed refs
+  trace <entry> [ref] [--direction down|up] [--depth N] [--budget N] [--format text]   "what happens when …": call tree from a symbol, "VERB /route", path:line, CLI command or ROS topic, across HTTP/topic/impl boundaries, with side effects
   mcp [dir...]         serve the tools over MCP (stdio) for an AI agent (no dir = the registered fleet)
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
