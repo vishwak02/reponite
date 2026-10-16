@@ -9,6 +9,7 @@ package processing
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -60,7 +61,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	}
 	ig := NewIgnore(ignoreContent, opt.Excludes)
 
-	var files []ParsedFile
+	pool := newParsePool()
 	var skipped []SkippedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
@@ -76,7 +77,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			if src, cerr := f.Contents(); cerr == nil {
 				if pf, ok := dataFile(f.Name, src); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -85,7 +86,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			if src, err := f.Contents(); err == nil {
 				manifests[f.Name] = []byte(src)
 				if pf, ok := projectFile(f.Name, src); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -96,7 +97,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			if src, err := f.Contents(); err == nil {
 				if pf, ok := projectFile(f.Name, src); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -107,13 +108,13 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 				return err
 			}
 			if pf, ok := rosFile(f.Name, src); ok {
-				files = append(files, pf)
+				pool.add(pf)
 			}
 			return nil
 		}
 		if IsROSLaunchFile(f.Name) {
 			if src, cerr := f.Contents(); cerr == nil {
-				files = append(files, launchFile(f.Name, src))
+				pool.add(launchFile(f.Name, src))
 			}
 			return nil
 		}
@@ -123,7 +124,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			if src, cerr := f.Contents(); cerr == nil {
 				if pf, ok := paramFile(f.Name, src); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -131,7 +132,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 		if query.IsSFCPath(f.Name) {
 			if src, cerr := f.Contents(); cerr == nil {
 				if pf, ok := sfcFile(f.Name, src, normVer); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -143,7 +144,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 				return nil
 			}
 			if src, cerr := f.Contents(); cerr == nil {
-				files = append(files, robotFile(f.Name, src))
+				pool.add(robotFile(f.Name, src))
 			}
 			return nil
 		}
@@ -154,7 +155,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			if src, cerr := f.Contents(); cerr == nil {
 				if pf, ok := contentFile(f.Name, src); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -194,20 +195,28 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			ext = rules.Exts[0]
 		}
-		root, spans, perr := parseFileRules([]byte(src), ext, rules)
-		if perr != nil {
-			return perr
-		}
-		if root == nil {
-			return nil // no grammar bound for this extension; skip
-		}
-		files = append(files, ParsedFile{
-			Path: f.Name, Content: src, Lang: rules.Name, IsTest: IsTestPath(f.Name),
-			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
-			Types: CppTypeFacts(root, rules),
+		name, blob := f.Name, f.Blob.Hash
+		pool.submit(func() (ParsedFile, bool, error) {
+			root, spans, perr := parseFileRules([]byte(src), ext, rules)
+			if perr != nil || root == nil {
+				return ParsedFile{}, false, perr // nil root: no grammar bound for this extension
+			}
+			defer releaseAST(root)
+			syms := Extract(root, rules, normVer)
+			sealSymbols(repo, rules.Name, normVer, syms)
+			return ParsedFile{
+				Path: name, Lang: rules.Name, IsTest: IsTestPath(name),
+				Symbols: syms, Spans: spans, Imports: Imports(root, rules),
+				Types: CppTypeFacts(root, rules),
+				Load:  func() (string, error) { return blobString(r, blob) },
+			}, true, nil
 		})
 		return nil
 	})
+	files, perr := pool.wait()
+	if err == nil {
+		err = perr
+	}
 	if err != nil {
 		return "", err
 	}
@@ -369,4 +378,21 @@ func parseGitmodules(s string) map[string]string {
 		}
 	}
 	return out
+}
+
+// blobString reads one blob of r by hash.
+func blobString(r *git.Repository, h plumbing.Hash) (string, error) {
+	b, err := r.BlobObject(h)
+	if err != nil {
+		return "", err
+	}
+	rd, err := b.Reader()
+	if err != nil {
+		return "", err
+	}
+	defer rd.Close()
+	var sb strings.Builder
+	sb.Grow(int(b.Size))
+	_, err = io.Copy(&sb, rd)
+	return sb.String(), err
 }

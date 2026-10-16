@@ -76,17 +76,21 @@ func canonChildren(t string, kids []AST, sortKids bool) []byte {
 	if sortKids {
 		sort.Slice(subs, func(i, j int) bool { return bytes.Compare(subs[i], subs[j]) < 0 })
 	}
-	var b bytes.Buffer
-	b.WriteString(t)
-	b.WriteByte('(')
+	// Sized exactly: every symbol keeps its canonical body, so growth slack
+	// would be held for the life of an index.
+	n := len(t) + 2 + len(subs)
+	for _, s := range subs {
+		n += len(s)
+	}
+	b := make([]byte, 0, n)
+	b = append(append(b, t...), '(')
 	for i, s := range subs {
 		if i > 0 {
-			b.WriteByte(unitSep)
+			b = append(b, unitSep)
 		}
-		b.Write(s)
+		b = append(b, s...)
 	}
-	b.WriteByte(')')
-	return b.Bytes()
+	return append(b, ')')
 }
 
 // DocText concatenates the comment/docstring text under a node in source order.

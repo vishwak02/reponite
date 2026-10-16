@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/pprof"
+	"time"
 
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/version"
@@ -23,6 +24,20 @@ func main() {
 				defer pprof.StopCPUProfile()
 			}
 		}
+	}
+	// REPONITE_MEMPROFILE=<file> rewrites a heap profile every few seconds
+	// while the command runs, so the last one survives a run that is killed
+	// for using too much memory.
+	if p := os.Getenv("REPONITE_MEMPROFILE"); p != "" {
+		go func() {
+			for {
+				time.Sleep(5 * time.Second)
+				if f, err := os.Create(p); err == nil {
+					_ = pprof.WriteHeapProfile(f)
+					f.Close()
+				}
+			}
+		}()
 	}
 	if len(os.Args) < 2 {
 		usage()

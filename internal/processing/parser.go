@@ -29,8 +29,9 @@ import (
 
 // tsNode wraps a tree-sitter node + source to satisfy content.AST.
 type tsNode struct {
-	n   *sitter.Node
-	src []byte
+	n    *sitter.Node
+	src  []byte
+	tree *sitter.Tree // set on a parsed root only, for releaseAST
 }
 
 func (t tsNode) Type() string  { return t.n.Type() }
@@ -79,13 +80,31 @@ func grammarForExt(ext string) *sitter.Language {
 // parseRoot parses source with a specific grammar, returning the raw root node
 // (callers wrap it in tsNode for content.AST or read positions directly).
 func parseRoot(src []byte, lang *sitter.Language) (*sitter.Node, error) {
-	p := sitter.NewParser()
-	p.SetLanguage(lang)
-	tree, err := p.ParseCtx(context.Background(), nil, src)
+	tree, err := parseTree(src, lang)
 	if err != nil {
 		return nil, err
 	}
 	return tree.RootNode(), nil
+}
+
+// parseTree parses src and frees the parser at once. The tree lives in C
+// memory the Go collector cannot see, so a finalizer frees it only when a
+// collection happens to run: an indexer that parses tens of thousands of
+// files must release each tree itself (releaseAST) or the process grows by
+// gigabytes the Go heap never accounts for.
+func parseTree(src []byte, lang *sitter.Language) (*sitter.Tree, error) {
+	p := sitter.NewParser()
+	defer p.Close()
+	p.SetLanguage(lang)
+	return p.ParseCtx(context.Background(), nil, src)
+}
+
+// releaseAST frees the tree under a root returned by parseFileRules. Nothing
+// read from it may be used afterwards; strings already extracted are copies.
+func releaseAST(a content.AST) {
+	if t, ok := a.(tsNode); ok && t.tree != nil {
+		t.tree.Close()
+	}
 }
 
 // ParseGo parses Go source into a content.AST tree rooted at source_file.

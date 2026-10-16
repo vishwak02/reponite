@@ -30,6 +30,24 @@ type Symbol struct {
 	// CallSites keeps each call's shape for languages with CallSiteKinds
 	// (C/C++): resolution uses it instead of the bare names (callsite.go).
 	CallSites []CallSite
+	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
+	// after which CanonBody is dropped: a large repo would otherwise hold
+	// every function's canonical body until the whole ref is resolved.
+	symHash content.Hash
+}
+
+// sealSymbols computes each symbol's SymbolHash now and releases its
+// canonical body. The hash is the one indexFiles would compute.
+func sealSymbols(repo, lang string, normVer int, syms []Symbol) {
+	if lang == "" {
+		lang = "go"
+	}
+	for i := range syms {
+		s := &syms[i]
+		s.symHash = content.SymbolHash(normVer, content.SymbolIdentity{Repo: repo, Lang: lang, Kind: s.Kind,
+			Signature: s.Signature, CanonBody: s.CanonBody})
+		s.CanonBody = nil
+	}
 }
 
 // QualifiedCall is one call site reduced to the two identifiers that matter for

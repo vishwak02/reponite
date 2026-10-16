@@ -36,6 +36,7 @@ func sfcFile(path, src string, normVer int) (ParsedFile, bool) {
 			pf.Imports = Imports(root, rules)
 			qcalls = qualifiedCallsWithRules(root, rules)
 		}
+		releaseAST(root)
 	}
 	facts := query.SFCComponentFacts(path, src)
 	if facts.Name == "" {

@@ -7,6 +7,7 @@
 package processing
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -56,6 +57,10 @@ type ParsedFile struct {
 	// Types are the file's C++ class/field/base/alias facts (cpptypes.go), for
 	// resolving member calls by the receiver's declared type. nil elsewhere.
 	Types *TypeFacts
+	// Load, when set, re-reads the file's content for storage; Content is
+	// then empty. A parsed source file's text is needed only when it is
+	// stored, so a large repo does not hold all of it until then.
+	Load func() (string, error)
 }
 
 // IndexFiles indexes all files of one repo ref with name-based edge resolution.
@@ -105,7 +110,11 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				order = append(order, qid)
 				byBase[s.Name] = append(byBase[s.Name], qid)
 			}
-			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: content.SymbolHash(normVer, id), sigHash: content.SignatureHash(normVer, id), imports: byLocal}
+			sh := s.symHash
+			if sh == "" {
+				sh = content.SymbolHash(normVer, id)
+			}
+			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: byLocal}
 			if len(byLocal) > 0 {
 				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, byLocal)...)
 			}
@@ -227,7 +236,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 	}
 	for _, f := range files {
-		if err := w.PutFile(repo, ref, query.File{Path: f.Path, Content: f.Content, Symbols: f.Spans}); err != nil {
+		src := f.Content
+		if f.Load != nil {
+			var err error
+			if src, err = f.Load(); err != nil {
+				return fmt.Errorf("re-read %s: %w", f.Path, err)
+			}
+		}
+		if err := w.PutFile(repo, ref, query.File{Path: f.Path, Content: src, Symbols: f.Spans}); err != nil {
 			return err
 		}
 	}

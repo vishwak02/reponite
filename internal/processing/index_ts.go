@@ -32,7 +32,7 @@ func IndexDir(w Indexer, repo, ref, dir string, normVer int) error {
 func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOptions) error {
 	ig := loadIgnore(dir, opt.Excludes)
 	scipIdx, scipLocal := loadSCIP(dir)
-	var files []ParsedFile
+	pool := newParsePool()
 	var skipped []SkippedFile
 	hasGo := false
 	manifests := map[string][]byte{} // module-manifest files (go.mod, package.json, ...) by rel path
@@ -68,7 +68,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if IsDataFile(rel) {
 			if b, readErr := os.ReadFile(path); readErr == nil {
 				if pf, ok := dataFile(filepath.ToSlash(rel), string(b)); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -81,7 +81,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			if src, readErr := os.ReadFile(path); readErr == nil {
 				manifests[rel] = src
 				if pf, ok := projectFile(rel, string(src)); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -89,7 +89,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if IsProjectFile(rel) && !IsROSParamFile(path) {
 			if src, readErr := os.ReadFile(path); readErr == nil {
 				if pf, ok := projectFile(rel, string(src)); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -104,7 +104,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 				return readErr
 			}
 			if pf, ok := rosFile(rel, string(src)); ok {
-				files = append(files, pf)
+				pool.add(pf)
 			}
 			return nil
 		}
@@ -112,14 +112,14 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		// resolve remapping. Not tree-sitter parsed, so it comes before dispatch.
 		if IsROSLaunchFile(path) {
 			if b, readErr := os.ReadFile(path); readErr == nil {
-				files = append(files, launchFile(rel, string(b)))
+				pool.add(launchFile(rel, string(b)))
 			}
 			return nil
 		}
 		if IsROSParamFile(path) {
 			if b, readErr := os.ReadFile(path); readErr == nil {
 				if pf, ok := paramFile(rel, string(b)); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -129,7 +129,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if query.IsSFCPath(rel) {
 			if b, readErr := os.ReadFile(path); readErr == nil {
 				if pf, ok := sfcFile(rel, string(b), normVer); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -137,7 +137,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		// Robot Framework suites and keyword libraries (robot.go).
 		if IsRobotFile(rel) {
 			if b, readErr := os.ReadFile(path); readErr == nil && len(b) <= maxContentFileBytes {
-				files = append(files, robotFile(filepath.ToSlash(rel), string(b)))
+				pool.add(robotFile(filepath.ToSlash(rel), string(b)))
 			}
 			return nil
 		}
@@ -145,7 +145,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if IsContentFile(rel) {
 			if b, readErr := os.ReadFile(path); readErr == nil {
 				if pf, ok := contentFile(filepath.ToSlash(rel), string(b)); ok {
-					files = append(files, pf)
+					pool.add(pf)
 				}
 			}
 			return nil
@@ -157,24 +157,34 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if !ok {
 			return nil
 		}
-		root, spans, parseErr := parseFileRules(src, ext, rules)
-		if parseErr != nil {
-			return parseErr
-		}
-		if root == nil {
-			return nil // no grammar bound for this extension; skip
-		}
 		if rules.Name == "go" {
 			hasGo = true
 		}
-		files = append(files, ParsedFile{
-			Path: rel, Content: string(src), Lang: rules.Name,
-			Symbols: Extract(root, rules, normVer), Spans: spans, Imports: Imports(root, rules),
-			IsTest: IsTestPath(rel), Types: CppTypeFacts(root, rules),
-			SCIP: scipFor(scipIdx, scipLocal, rel, spans),
+		pool.submit(func() (ParsedFile, bool, error) {
+			root, spans, parseErr := parseFileRules(src, ext, rules)
+			if parseErr != nil || root == nil {
+				return ParsedFile{}, false, parseErr // nil root: no grammar bound for this extension
+			}
+			defer releaseAST(root)
+			syms := Extract(root, rules, normVer)
+			sealSymbols(repo, rules.Name, normVer, syms)
+			return ParsedFile{
+				Path: rel, Lang: rules.Name,
+				Symbols: syms, Spans: spans, Imports: Imports(root, rules),
+				IsTest: IsTestPath(rel), Types: CppTypeFacts(root, rules),
+				SCIP: scipFor(scipIdx, scipLocal, rel, spans),
+				Load: func() (string, error) {
+					b, err := os.ReadFile(path)
+					return string(b), err
+				},
+			}, true, nil
 		})
 		return nil
 	})
+	files, perr := pool.wait()
+	if err == nil {
+		err = perr
+	}
 	if err != nil {
 		return err
 	}
@@ -322,6 +332,7 @@ func ParseEditedSymbols(path, src string, normVer int) []query.EditedSymbol {
 			return nil
 		}
 		syms, lang = Extract(root, rules, normVer), rules.Name
+		releaseAST(root)
 	}
 	var out []query.EditedSymbol
 	for _, s := range syms {
@@ -338,11 +349,12 @@ func parseFileRules(src []byte, ext string, r LangRules) (content.AST, []query.S
 	if lang == nil {
 		return nil, nil, nil // no grammar bound; caller skips
 	}
-	root, err := parseRoot(src, lang)
+	tree, err := parseTree(src, lang)
 	if err != nil {
 		return nil, nil, err
 	}
-	return tsNode{n: root, src: src}, spansFor(root, src, r), nil
+	root := tree.RootNode()
+	return tsNode{n: root, src: src, tree: tree}, spansFor(root, src, r), nil
 }
 
 // spansFor returns 1-based line ranges for each declaration, mirroring Extract:
