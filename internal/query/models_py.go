@@ -267,6 +267,9 @@ type pyRepo struct {
 }
 
 func (r *pyRepo) lookup(c *pyCls, name string) *pyCls {
+	if _, ext := pyExternalBase[name]; ext && strings.Contains(name, ".") {
+		return nil // models.Model is the framework's, whatever the repo names "Model"
+	}
 	name = lastDot(name)
 	cs := r.classes[name]
 	for _, x := range cs {
@@ -515,7 +518,7 @@ func djangoModel(repo string, c *pyCls, r *pyRepo) DataModel {
 	}
 	indexed := map[string]bool{}
 	if v := c.meta["indexes"]; v != "" {
-		for _, mm := range regexp.MustCompile(`fields\s*=\s*\[\s*["'](\w+)["']`).FindAllStringSubmatch(v, -1) {
+		for _, mm := range regexp.MustCompile(`fields\s*=\s*\[\s*["']-?(\w+)["']`).FindAllStringSubmatch(v, -1) {
 			indexed[mm[1]] = true
 		}
 	}

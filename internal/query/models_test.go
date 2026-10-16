@@ -664,3 +664,13 @@ export class Order {
 	check("ts", "User", nil, []string{"findMany"})
 	check("go", "Item", []string{"Create"}, []string{"Find"})
 }
+
+func TestFrameworkBaseIsNotShadowedByRepoClass(t *testing.T) {
+	other := "class Model:\n    pass\n"
+	src := "from django.db import models\n\nclass Box(models.Model):\n    code = models.CharField(max_length=9)\n    class Meta:\n        indexes = [models.Index(fields=[\"-code\"])]\n"
+	ms, _ := detectModels("w", []File{{Path: "lib/model.py", Content: other}, {Path: "boxes/models.py", Content: src}})
+	b := modelByName(t, ms, "Box")
+	if b.Kind != KindTable || b.Table != "boxes_box" || !fieldByName(t, b, "code").Index {
+		t.Errorf("models.Model must not resolve to a repo class named Model; Meta.indexes descending: %+v", b)
+	}
+}
