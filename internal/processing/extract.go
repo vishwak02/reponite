@@ -230,7 +230,12 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 	seen := map[QualifiedCall]bool{}
 	var out []QualifiedCall
 	for _, call := range descendantsAny(body, r.CallTypes) {
-		ids := calleeIdents(call, r)
+		var ids []string
+		if containsStr(jsxElementTypes, call.Type()) {
+			ids = jsxTag(call)
+		} else {
+			ids = calleeIdents(call, r)
+		}
 		if len(ids) == 0 {
 			continue
 		}
@@ -245,6 +250,29 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		out = append(out, qc)
 	}
 	return out
+}
+
+// jsxTag returns the identifiers of a JSX element's tag when it names a
+// component: `<CartItem>` -> [CartItem], `<Form.Field>` -> [Form, Field]. An
+// intrinsic element (`<div>`, `<motion.div>` — lowercase first segment) or a
+// fragment renders no repo code and yields nil. Only the tag is read: the
+// attributes' identifiers (`onClick={save}`) are values, not the callee.
+func jsxTag(el content.AST) []string {
+	for _, c := range el.Children() {
+		if !c.IsNamed() {
+			continue
+		}
+		switch c.Type() {
+		case "identifier", "member_expression", "nested_identifier":
+			ids := identLeaves(c, []string{"identifier", "property_identifier"})
+			if len(ids) == 0 || ids[0] == "" || ids[0][0] < 'A' || ids[0][0] > 'Z' {
+				return nil
+			}
+			return ids
+		}
+		return nil // the first named child is the tag; anything else is a fragment/namespace
+	}
+	return nil
 }
 
 // calleeIdents returns the callee-name identifier leaves of a call's callee

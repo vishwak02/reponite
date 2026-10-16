@@ -387,5 +387,39 @@ func moduleInRepo(module string, dirs map[string]bool) bool {
 			return true
 		}
 	}
-	return m != module && strings.HasPrefix(module, "@/") // an explicit repo alias with no matching dir yet
+	if m != module && strings.HasPrefix(module, "@/") {
+		return true // an explicit repo alias with no matching dir yet
+	}
+	return aliasInRepo(module, dirs)
+}
+
+// aliasInRepo: a tsconfig/bundler path alias whose root we cannot see
+// (`@app/components/Button`, `$lib/Counter.svelte`, `~/store/cart`) names repo
+// code when, with the alias segment dropped, the remaining path's directory
+// is one of the repo's directories. A component import through an alias is
+// how most apps import their own components; calling it external dropped
+// every such render edge.
+func aliasInRepo(module string, dirs map[string]bool) bool {
+	segs := strings.Split(module, "/")
+	if len(segs) < 2 || !(strings.HasPrefix(segs[0], "@") || strings.HasPrefix(segs[0], "$") || segs[0] == "~" || segs[0] == "#") {
+		return false
+	}
+	rest := segs[1:]
+	if segs[0] == "$lib" {
+		rest = append([]string{"lib"}, rest...) // SvelteKit's $lib is src/lib
+	}
+	if len(rest) < 2 {
+		return false // @scope/pkg: a package, never a repo directory
+	}
+	dir := strings.Join(rest[:len(rest)-1], "/")
+	full := strings.Join(rest, "/")
+	if i := strings.LastIndexByte(full, '.'); i > strings.LastIndexByte(full, '/') {
+		full = full[:i]
+	}
+	for d := range dirs {
+		if d == dir || strings.HasSuffix(d, "/"+dir) || d == full || strings.HasSuffix(d, "/"+full) {
+			return true
+		}
+	}
+	return false
 }
