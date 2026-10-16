@@ -298,3 +298,23 @@ func TestConfigDynamicKeyNotFlagged(t *testing.T) {
 		t.Errorf("dynamic key: %+v", keys)
 	}
 }
+
+// A Go key read through a named string constant resolves to the constant's
+// value, across files of the same package; an identifier that is not a
+// constant is not guessed.
+func TestConfigGoEnvThroughConstant(t *testing.T) {
+	s := dataStore{filesStore{files: map[string][]File{"a": {
+		{Path: "cmd/app/env.go", Content: "package main\n\nconst storeEnv = \"APP_STORE_DIR\"\n\nconst (\n\trefsEnv string = \"APP_REFS\" // pins\n)\n"},
+		{Path: "cmd/app/main.go", Content: "package main\n\nimport \"os\"\n\nfunc main() {\n\t_ = os.Getenv(storeEnv)\n\t_, _ = os.LookupEnv(refsEnv)\n\t_ = os.Getenv(dynamic)\n}\n"},
+	}}}}
+	got := map[string]bool{}
+	for _, k := range collectConfig(s, FleetRepo, "v1") {
+		got[k.Key] = true
+	}
+	if !got["APP_STORE_DIR"] || !got["APP_REFS"] {
+		t.Errorf("constant-named env keys not resolved: %v", got)
+	}
+	if got["dynamic"] {
+		t.Errorf("a non-constant identifier must not become a key: %v", got)
+	}
+}

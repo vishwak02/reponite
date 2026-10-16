@@ -20,8 +20,8 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version", "--version", "-v":
-		fmt.Printf("reponite %s (norm_ver=%d, go_target=%s)\n",
-			version.Version, version.NormVer, version.GoTarget)
+		fmt.Printf("reponite %s (norm_ver=%d, index_ver=%d, go_target=%s)\n",
+			version.Version, version.NormVer, version.IndexVer, version.GoTarget)
 	case "help", "-h", "--help":
 		usage()
 	case "demo":

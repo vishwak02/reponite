@@ -112,5 +112,15 @@ types. Put the before/after numbers in the PR body.
 - Open an [issue](https://github.com/vishwak02/reponite/issues) first for anything
   large or invariant-adjacent.
 
+## Releasing
+
+1. Rename `## [Unreleased]` in `CHANGELOG.md` to `## [X.Y.Z] - YYYY-MM-DD` and start a new
+   empty `## [Unreleased]` above it; commit.
+2. Tag and push: `git tag vX.Y.Z && git push origin main vX.Y.Z`.
+3. The `release` workflow builds `reponite-{linux,darwin}-{amd64,arm64}`, writes
+   `SHA256SUMS`, and publishes the release with the changelog section as its notes.
+4. Check the release page lists five files, then `install.sh` with
+   `REPONITE_VERSION=vX.Y.Z` on one machine.
+
 By contributing you agree your work is licensed under the project's
 [Apache-2.0](LICENSE) license.

@@ -471,7 +471,11 @@ var (
 	jsEnvDestruct = regexp.MustCompile(`\{([^}]*)\}\s*=\s*process\.env\b`)
 	jsCommander   = regexp.MustCompile(`\.(?:option|requiredOption)\s*\(\s*['"]([^'"]*--[^'"]*)['"]`)
 
-	goEnvCall   = regexp.MustCompile(`\bos\.(Getenv|LookupEnv)\(\s*"([\w.-]+)"\s*\)`)
+	goEnvCall = regexp.MustCompile(`\bos\.(Getenv|LookupEnv)\(\s*"([\w.-]+)"\s*\)`)
+	// os.Getenv(name) with an identifier: resolved through the package's string constants.
+	goEnvIdent = regexp.MustCompile(`\bos\.(Getenv|LookupEnv)\(\s*([A-Za-z_]\w*)\s*\)`)
+	// `const name = "value"` and `name = "value"` inside a const block (typed or not).
+	goStrConst  = regexp.MustCompile(`(?m)^\s*(?:const\s+)?([A-Za-z_]\w*)(?:\s+string)?\s*=\s*"([A-Za-z_][\w.-]*)"\s*(?://.*)?$`)
 	goTagEnv    = regexp.MustCompile("`[^`]*\\b(env|envconfig)\\s*:\\s*\"([\\w.-]+)[^\"]*\"[^`]*`")
 	goTagDef    = regexp.MustCompile(`\b(?:envDefault|default)\s*:\s*"([^"]*)"`)
 	goViperGet  = regexp.MustCompile(`\bviper\.(Get\w*|IsSet)\(\s*"([\w.-]+)"\s*\)`)
@@ -503,6 +507,10 @@ type cfgScan struct {
 	syms  map[string]SymbolRef
 	reads []ConfigRead
 	sets  []ConfigSet
+	// goConsts maps a Go package directory to its string constants, so a key
+	// read through a named constant (os.Getenv(storeDirEnv)) resolves to the
+	// constant's value instead of vanishing.
+	goConsts map[string]map[string]string
 }
 
 func (c *cfgScan) read(f File, pos int, kind, key, def string, hasDef bool, via string) {
@@ -544,7 +552,18 @@ func unquoteVal(v string) string {
 
 // scanConfig reads one repo's files for configuration reads and sets.
 func scanConfig(repo string, files []File, syms map[string]SymbolRef) ([]ConfigRead, []ConfigSet) {
-	c := &cfgScan{repo: repo, syms: syms}
+	c := &cfgScan{repo: repo, syms: syms, goConsts: map[string]map[string]string{}}
+	for _, f := range files {
+		if strings.HasSuffix(f.Path, ".go") {
+			dir := path.Dir(f.Path)
+			for _, m := range goStrConst.FindAllStringSubmatch(f.Content, -1) {
+				if c.goConsts[dir] == nil {
+					c.goConsts[dir] = map[string]string{}
+				}
+				c.goConsts[dir][m[1]] = m[2]
+			}
+		}
+	}
 	for _, f := range files {
 		base := strings.ToLower(path.Base(f.Path))
 		ext := strings.ToLower(path.Ext(f.Path))
@@ -923,6 +942,13 @@ func (c *cfgScan) golang(f File) {
 	src := f.Content
 	for _, m := range goEnvCall.FindAllStringSubmatchIndex(src, -1) {
 		c.read(f, m[0], CfgEnv, src[m[4]:m[5]], "", false, "os."+src[m[2]:m[3]])
+	}
+	consts := c.goConsts[path.Dir(f.Path)]
+	for _, m := range goEnvIdent.FindAllStringSubmatchIndex(src, -1) {
+		name := src[m[4]:m[5]]
+		if v, ok := consts[name]; ok {
+			c.read(f, m[0], CfgEnv, v, "", false, "os."+src[m[2]:m[3]]+" via const "+name)
+		}
 	}
 	for _, m := range goTagEnv.FindAllStringSubmatchIndex(src, -1) {
 		tag := src[m[0]:m[1]]

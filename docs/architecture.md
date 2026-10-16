@@ -4,13 +4,15 @@ A concise overview of how Reponite is designed. For decisions and rationale see
 [the ADRs](adr/); for the agent-facing feature designs see
 [agent-features.md](agent-features.md).
 
-## Thesis
+## What it is
 
-Structural + semantic code search is a commodity. Reponite matches that and then
-owns the dimension nothing else does: it indexes **many refs of many repos** as
-content-addressed, deduplicated snapshots, and answers whether a symbol still
-**exists**, kept its **shape**, and kept its **behavior** across all of them —
-each answer carrying a confidence, never overclaiming.
+Reponite indexes **many refs of many repos** as content-addressed, deduplicated
+snapshots. On top of that index it answers structural questions (where, who
+calls, what happens when), cross-boundary questions (HTTP client → route, ROS
+publisher → subscriber, base class → implementation, repo → repo), and change
+questions: whether a symbol still **exists**, kept its **shape**, and kept its
+**behavior** at every indexed ref — each answer carrying its evidence and a
+confidence, never overclaiming.
 
 ## Design principles
 
@@ -63,8 +65,8 @@ carried along by a callee — a distinction only the three-hash model makes chea
 
 Reponite is the single retrieval interface for an agent, exposing the cheapest
 rung that answers a question: **grep** (trigram-prefiltered literal/regex, each
-hit fused with its enclosing symbol) → **structural** → **semantic** → **intent**
-→ **compat**. Semantic ranking sits behind the `SemanticRanker` seam: the pure
+hit fused with its enclosing symbol) → **structural** (names, callers, callees,
+traces) → **semantic** (keyword or embedding ranking) → **compat**. Semantic ranking sits behind the `SemanticRanker` seam: the pure
 term/IDF ranker is the default, and a build-tagged neural adapter can replace it,
 with every result naming the ranker that produced it (ADR-020). See
 [agent-features.md](agent-features.md).
@@ -121,28 +123,25 @@ adapters are build-tagged and verified in CI:
 
 | Job | Build | Verifies |
 |-----|-------|----------|
-| `core` | default | the pure packages (205 tests) + the `neural` adapter, which is standard-library only |
+| `core` | default | the pure packages + the `neural` adapter, which is standard-library only |
 | `sqlite` | `-tags sqlite` | the SQLite `Store` adapter, including its migrations |
 | `treesitter` | `-tags treesitter` | tree-sitter → `content.AST`, extractor, `IndexDir` |
 | `mcp` | `-tags "sqlite mcp"` | the MCP server builds against the SDK |
 | `e2e` | `-tags "sqlite treesitter"` | index a real repo across two refs, assert a verdict |
 
-## Status
+## Known limits
 
-Every item on the original roadmap has shipped: the three-hash core and the four
-verdicts, root cause (including stack-trace seeding), the editing brief,
-cross-repo impact through all three resolution tiers with per-caller contract
-skew, the retrieval ladder (grep → structural → semantic → compat) with an
-optional neural ranker, the ROS communication graph, verify-edit, index-time
-exclusion, the persistent fleet registry, and nine languages.
-
-Known limitations, all reported in the output rather than hidden:
+Each is reported in the output rather than hidden:
 
 - Cross-repo **behavior** propagation is out of scope — impact answers *who
   calls*, not *does it still behave the same* over there (§8.4).
-- RPC/HTTP/queue calls between services are invisible; this is source-call-graph
-  impact (§8B.5). The ROS graph is the one runtime-edge exception.
-- ROS launch-file/namespace remapping is not resolved, and a non-literal topic
-  name is counted as unresolved rather than guessed (§8D.4).
-- SCIP's *relationship* graph (implementations, overrides) is not consumed yet —
-  only definitions and references.
+- Cross-service edges are inferred from source idioms: HTTP client calls are
+  linked to routes by path (`routes`, `trace`), ROS endpoints by name; RPC,
+  queues and dynamically built URLs or topic names are counted as unresolved.
+- ROS launch remapping is resolved where a launch file covers the endpoint's
+  package; `<include>` directives are not expanded, and a remap whose target
+  keeps an unexpanded substitution is reported, not applied (§8D.4). A remap on
+  a node whose source is not indexed is listed as a launch-declared binding
+  with unknown direction.
+- SCIP's *relationship* graph (implementations, overrides) is not consumed —
+  only definitions and references; `impls` reads class hierarchies from source.

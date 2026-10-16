@@ -1,4 +1,6 @@
 name: release
+# Push a tag vX.Y.Z to build the four binaries, publish them with a SHA256SUMS file, and use
+# the CHANGELOG.md section "## [X.Y.Z]" as the release notes.
 on:
   push:
     tags: ['v*']
@@ -7,6 +9,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -15,13 +18,17 @@ jobs:
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-          - os: macos-13
+          # Intel macOS is built on an Apple-silicon runner: clang targets x86_64 for the
+          # cgo parts, so the job does not wait on an Intel runner image.
+          - os: macos-latest
             goos: darwin
             goarch: amd64
+            cc: clang -arch x86_64
           - os: macos-latest
             goos: darwin
             goarch: arm64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     env:
       GOFLAGS: -mod=mod
     steps:
@@ -29,13 +36,44 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 'stable' # go/types resolver pulls a current golang.org/x/tools
-      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java github.com/smacker/go-tree-sitter/c github.com/smacker/go-tree-sitter/cpp github.com/smacker/go-tree-sitter/rust github.com/mark3labs/mcp-go github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
+      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java github.com/smacker/go-tree-sitter/c github.com/smacker/go-tree-sitter/cpp github.com/smacker/go-tree-sitter/rust github.com/smacker/go-tree-sitter/bash github.com/mark3labs/mcp-go github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
       - name: build
         env:
           CGO_ENABLED: '1'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -tags "sqlite treesitter mcp neural" -ldflags "-X github.com/vishwak02/reponite/internal/version.Version=${{ github.ref_name }}" -o "reponite-${{ matrix.goos }}-${{ matrix.goarch }}" ./cmd/reponite
+          MATRIX_CC: ${{ matrix.cc }}
+        run: |
+          if [ -n "$MATRIX_CC" ]; then export CC="$MATRIX_CC"; fi
+          go build -tags "sqlite treesitter mcp neural" -ldflags "-X github.com/vishwak02/reponite/internal/version.Version=${{ github.ref_name }}" -o "reponite-${{ matrix.goos }}-${{ matrix.goarch }}" ./cmd/reponite
+      - name: smoke test
+        if: matrix.cc == ''
+        run: ./reponite-${{ matrix.goos }}-${{ matrix.goarch }} version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reponite-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: reponite-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: cd dist && sha256sum reponite-* > SHA256SUMS && cat SHA256SUMS
+      - name: release notes from CHANGELOG.md
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v v="$ver" 'index($0, "## [" v "]") == 1 {on=1; next} on && /^## \[/ {exit} on {print}' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          cat notes.md
       - uses: softprops/action-gh-release@v2
         with:
-          files: reponite-${{ matrix.goos }}-${{ matrix.goarch }}
+          body_path: notes.md
+          files: |
+            dist/reponite-*
+            dist/SHA256SUMS

@@ -28,10 +28,27 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 - JSON files (≤ 256 KB, lockfiles excepted) and `.rviz` files are stored as content-only
   files, so grep and search see them too. Re-index to pick them up.
 
+- **`config`: keys read through a named constant.** A Go `os.Getenv(name)` /
+  `os.LookupEnv(name)` whose argument is a string constant of the same package resolves to
+  the constant's value.
+- `reponite version` prints the index ruleset (`index_ver`).
+
 #### Changed
 
 - The `topics` note now says that an empty producer list means none was found in the
   indexed code, not that none exists.
+
+### Documentation and releases
+
+- New [docs/INSTALL.md](docs/INSTALL.md) (requirements, release binaries, building from
+  source, agent setup, data locations, upgrading, uninstalling, troubleshooting) and
+  [docs/USER_GUIDE.md](docs/USER_GUIDE.md) (concepts, every command, configuration, FAQ).
+  The README is now a short overview pointing at them; package docs describe what exists.
+- Releases build all four binaries again: Intel macOS is cross-built on an Apple-silicon
+  runner instead of waiting on an Intel runner (v0.2.0 shipped without `darwin-amd64`).
+  Each release publishes `SHA256SUMS` and takes its notes from this changelog.
+- `install.sh` verifies the download against `SHA256SUMS`, accepts `REPONITE_VERSION`,
+  creates `REPONITE_BINDIR` when needed and warns when it is not on `PATH`.
 
 ### History, errors and tests
 
