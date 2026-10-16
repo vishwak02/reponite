@@ -9,6 +9,26 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### History, errors and tests
+
+#### Added
+
+- **`why <symbol> [ref]`** (MCP `reponite_why`): the commits that changed a symbol's
+  lines or signature (`git log -L` on its range at each indexed ref's commit, pickaxe
+  fallback; moves between files followed through older refs), newest first, with date,
+  author, subject, body excerpt, PR/issue/ticket ids, kind, and the first indexed ref
+  containing each; plus the symbol's compat history across refs. Read-only git.
+- **`errors ["<message>"|Type|status]`** (MCP `reponite_errors`): logsite generalised to
+  errors — raise/throw, error values and sentinels, panics, error logs, HTTP error
+  responses — ranked against a pasted message (placeholders filled), a type or a status,
+  with one hop of callers and the handlers that catch them (by type, base class,
+  errors.Is/As, framework handlers, client-side status checks). No argument: a per-repo
+  error catalogue.
+- **`tests <symbol> [ref]`** (MCP `reponite_tests`): tests exercising a symbol through
+  the call graph (≤ N hops), HTTP requests to its route, or test-file references, the
+  framework per file, and the command that runs only those tests.
+- `--format text` and `--budget` on all three.
+
 ### Production answers (devel)
 
 #### Added

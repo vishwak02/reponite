@@ -166,6 +166,10 @@ func Why(s Store, hp HistoryProvider, repo, ref, symbol string, budget int) WhyR
 		}
 	}
 	sort.SliceStable(refs, func(i, j int) bool {
+		// A working-tree index has no commit time: it is "now", so last.
+		if (refs[i].time == 0) != (refs[j].time == 0) {
+			return refs[j].time == 0
+		}
 		if refs[i].time != refs[j].time {
 			return refs[i].time < refs[j].time
 		}

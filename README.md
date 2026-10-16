@@ -504,6 +504,86 @@ aren't contract breaks.
 
 </details>
 
+<details>
+<summary><b>Why is this code like this? — <code>why</code></b></summary>
+
+```sh
+reponite why Cart.add_item v2.3.0 --budget 1500 --format text
+```
+
+The commits that changed the symbol's lines or signature — `git log -L` on its line range at
+each indexed ref's commit, read straight from the object store (no checkout) — newest first,
+each with date, author, subject, a body excerpt (trailers dropped), the PR/issue numbers and
+ticket ids in the message, a `kind` (`introduced`, `moved`, `signature` = the declaration line
+changed, `body`), and `first_in`: the earliest indexed ref (release) that contains it. When an
+older indexed ref has the symbol before its apparent introduction, the symbol moved, and the
+history continues from that ref's own file and range. The symbol's compat history across the
+indexed refs (in commit order) comes with it.
+
+```text
+why shop.Cart.add_item  (shop@v2.3.0 shop/cart.py:40-47)
+2026-06-17 3f2a91c0de body       feat: bulk add (#882)  [ada +3/-1 first_in=v2.3.0]
+2024-07-02 a81d03b7e2 introduced feat: cart (#520)  [bo +4/-0 first_in=v2.0.0]
+compat: v2.0.0:present → v2.3.0:behavior_changed
+```
+
+A ref indexed from a working tree has no commit, so it gets the compat history only (index it
+with `--git`). Budgeted: past `--budget`, `truncated: true` and `next` say how to get the rest.
+
+</details>
+
+<details>
+<summary><b>Where does this error come from, and who handles it? — <code>errors</code></b></summary>
+
+```sh
+reponite errors 'Order 991 not found'      # the message a user saw, placeholders filled
+reponite errors OrderNotFound              # a type
+reponite errors 404 --refs api=v3,web=v5   # an HTTP status, across backend and frontend
+reponite errors                            # the error catalogue per repo
+```
+
+Producers: `raise`/`throw`, error values (`errors.New`, `fmt.Errorf`, sentinels and every
+`return` of them, `new XError(…)`, `Err(…)`), panics, error-level logs (`logger.error`,
+`console.error`, `ROS_ERROR`), and HTTP error responses (`Response(status=4xx)`,
+`JsonResponse`, `abort(404)`, `res.status(4xx).json`, `http.Error`, gin/echo,
+`ResponseStatusException`) — with the message template, the HTTP status (literal, named
+constant, a class's `status_code`, or the framework's own exception types), the enclosing
+function as a handle, and one hop of callers. A message is matched like `logsite` (printf,
+`{}`/f-strings, `${}`, concatenation); a DRF-style `default_detail` links to every bare raise
+of its class. Handlers: `except`/`catch` naming the type or one of its base classes (class
+hierarchy read from the code), JS `catch` narrowed by `instanceof`, `errors.Is/As`, `recover`,
+DRF `EXCEPTION_HANDLER`, FastAPI/Flask exception handlers, Django `process_exception`,
+Express error middleware, Nest `@Catch`, Spring `@ExceptionHandler`, React error boundaries,
+and frontend status checks / response interceptors for HTTP errors. `on_path` marks a handler
+in the producing function or a direct caller. Python, JS/TS, Go, C/C++, Java, Rust.
+
+</details>
+
+<details>
+<summary><b>Which tests cover this, and how do I run just those? — <code>tests</code></b></summary>
+
+```sh
+reponite tests add_item --depth 3 --format text
+```
+
+```text
+tests shop.add_item  (shop@HEAD)
+d1 pytest    shop/tests/test_cart.py:10 TestCart.test_add [call_graph]
+d1 pytest    shop/tests/test_api.py:14 test_orders [http]
+d2 pytest    shop/tests/test_cart.py:5 test_checkout [call_graph] via shop.checkout
+run (pytest, 3): pytest shop/tests/test_cart.py::TestCart::test_add shop/tests/test_api.py::test_orders shop/tests/test_cart.py::test_checkout
+```
+
+Tests reach a symbol through the call graph (≤ `--depth` hops), through an HTTP request the
+test sends to the route serving it (`client.get("/api/orders")` → the view; see `routes`), or
+by naming it in a test file (JS/TS `it()`/`test()` blocks, gtest `TEST(Suite, Name)`, mocks).
+The framework is detected per file — pytest (incl. `conftest.py`), unittest, Django, go test,
+jest, vitest, mocha, playwright, gtest, catch2, rostest (from the `.test` launch file naming
+the script), cargo, junit — and each framework gets one command selecting exactly those tests.
+gtest/catch2 binaries are not resolved (CMake is not indexed): the command names the source.
+
+</details>
+
 ---
 
 ## AI agents (MCP)
@@ -536,6 +616,9 @@ Then the agent has 17 tools:
 | `reponite_topics` | ROS publisher ↔ subscriber graph |
 | `reponite_repos` | What's indexed and where |
 | `reponite_refs` | A repo's indexed refs |
+| `reponite_why` | The commits (and PRs) that made a symbol what it is |
+| `reponite_errors` | Where an error message/type/status comes from, and who catches it |
+| `reponite_tests` | Tests exercising a symbol + the command to run just those |
 
 Every response is **token-budgeted** and carries a `_meta` envelope with confidence,
 freshness, and provenance — so the agent knows how far to trust each answer instead of
@@ -696,6 +779,9 @@ reponite <command> [arguments] [flags]
 | `brief <symbol> [ref]` | Token-budgeted bundle for editing a symbol |
 | `usages <symbol>` | Every call site, with call-graph confirmation |
 | `topics [name]` | ROS publisher ↔ subscriber / service / action graph |
+| `why <symbol> [ref]` | Commits that changed it (git log -L per indexed ref), PR/issue, first ref shipping each, compat history |
+| `errors ["<message>"\|Type\|status] [ref]` | Producers of an error and the handlers that catch it; no argument = error catalogue |
+| `tests <symbol> [ref]` | Tests exercising it (call graph, HTTP, references), framework, and the command to run just those |
 
 ### Changing code safely
 
