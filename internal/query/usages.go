@@ -79,8 +79,8 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 	// counts as a call, not a definition.
 	defRe := regexp.MustCompile(`\b(func|def|fn|function)\b\s+(\([^)]*\)\s*)?` + regexp.QuoteMeta(base) + `\s*[(<]`)
 	for _, m := range g.Matches {
-		if defRe.MatchString(m.Text) {
-			continue
+		if defRe.MatchString(m.Text) || ProjectFileKind(m.Path) != "" {
+			continue // its own definition, or prose/build text in a README or manifest
 		}
 		u := Usage{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: strings.TrimSpace(m.Text), In: m.Symbol}
 		if set := callers[m.Repo]; set != nil && m.Symbol != "" {
