@@ -115,39 +115,39 @@ func litLang(l string) string {
 
 var (
 	// producers
-	pyRaise       = regexp.MustCompile(`^\s*raise\s+([A-Za-z_][\w.]*)`)
-	pyHTTPResp    = regexp.MustCompile(`\b(Response|JsonResponse|JSONResponse|HttpResponse\w*|abort|make_response|PlainTextResponse|HTMLResponse)\s*\(`)
-	pyLogErr      = regexp.MustCompile(`\b(?:\w*log(?:ger)?|logging|LOGGER|LOG)\.(error|exception|critical|fatal)\s*\(|\brospy\.log(?:err|fatal)\w*\s*\(`)
-	jsThrow       = regexp.MustCompile(`\bthrow\s+(?:new\s+)?([A-Za-z_$][\w$.]*)\s*\(`)
-	jsReject      = regexp.MustCompile(`\b(?:Promise\.)?reject\(\s*new\s+([A-Za-z_$][\w$.]*)\s*\(`)
-	jsStatus      = regexp.MustCompile(`\b(?:res|response|reply|ctx|resp)\.(?:status|code)\(\s*(\d{3})\s*\)|\bstatus\s*:\s*(\d{3})\b|\bctx\.throw\(\s*(\d{3})`)
-	jsLogErr      = regexp.MustCompile(`\b(?:console|logger|log|this\.logger)\.error\s*\(`)
-	newErrType    = regexp.MustCompile(`\bnew\s+([A-Z][\w$.]*(?:Error|Exception|Fault))\s*\(`)
-	goErrNew      = regexp.MustCompile(`\b(errors\.New|fmt\.Errorf|errors\.Errorf|errors\.Wrapf?|status\.Errorf|status\.Error|echo\.NewHTTPError|fiber\.NewError)\s*\(`)
-	goSentinel    = regexp.MustCompile(`^\s*(?:var\s+)?(Err\w*|err\w+)\s*=\s*(?:errors\.New|fmt\.Errorf)`)
-	goPanic       = regexp.MustCompile(`\bpanic\s*\(`)
-	goLogErr      = regexp.MustCompile(`\b(?:log|klog|logger|zap|slog|l)\.(?:Fatal|Fatalf|Panic|Panicf|Error|Errorf|Errorw)\s*\(`)
-	goHTTPErr     = regexp.MustCompile(`\bhttp\.Error\s*\(|\.(?:JSON|AbortWithStatusJSON|AbortWithStatus|String|NoContent|WriteHeader)\(\s*(?:http\.(Status\w+)|(\d{3}))`)
-	grpcCode      = regexp.MustCompile(`codes\.(\w+)`)
-	cppThrow      = regexp.MustCompile(`\bthrow\s+([A-Za-z_][\w:]*)\s*[({]`)
-	rosLogErr     = regexp.MustCompile(`\b(ROS_(?:ERROR|FATAL)\w*|RCLCPP_(?:ERROR|FATAL)\w*|ROS_ERROR_STREAM\w*)\s*\(`)
-	javaThrow     = regexp.MustCompile(`\bthrow\s+new\s+([\w.]+)\s*\(`)
-	javaRespStat  = regexp.MustCompile(`ResponseStatusException\(\s*HttpStatus\.(\w+)|ResponseEntity\.status\(\s*HttpStatus\.(\w+)|ResponseEntity\.(badRequest|notFound|unprocessableEntity|internalServerError)\(`)
-	javaLogErr    = regexp.MustCompile(`\b(?:log|logger|LOG|LOGGER)\.error\s*\(`)
-	rustPanic     = regexp.MustCompile(`\b(panic|bail|anyhow|unimplemented)!\s*\(|\.expect\(\s*"`)
-	rustErr       = regexp.MustCompile(`\bErr\(\s*([A-Z]\w*(?:::\w+)*)`)
-	rustLogErr    = regexp.MustCompile(`\b(?:log::|tracing::)?error!\s*\(`)
-	statusKwarg   = regexp.MustCompile(`\bstatus(?:_code)?\s*[=:]\s*(?:status\.)?(?:HTTP_)?(\d{3})|\bHTTP_(\d{3})_\w+|\babort\(\s*(\d{3})|\berrorhandler\(\s*(\d{3})`)
-	httpNamed     = regexp.MustCompile(`\b(?:http\.Status|HttpStatus\.|HTTPStatus\.)(\w+)`)
-	dictKey       = regexp.MustCompile(`["'](\w+)["']\s*:`)
-	pyDefault     = regexp.MustCompile(`^\s*(default_detail|default_message|message|detail)\s*=\s*(?:_|gettext_lazy|gettext)?\(?\s*[rbuf]*["']`)
-	pyStatusAttr  = regexp.MustCompile(`^\s*(?:status_code|code|http_status)\s*=\s*(?:status\.HTTP_)?(\d{3})`)
+	pyRaise      = regexp.MustCompile(`^\s*raise\s+([A-Za-z_][\w.]*)`)
+	pyHTTPResp   = regexp.MustCompile(`\b(Response|JsonResponse|JSONResponse|HttpResponse\w*|abort|make_response|PlainTextResponse|HTMLResponse)\s*\(`)
+	pyLogErr     = regexp.MustCompile(`\b(?:\w*log(?:ger)?|logging|LOGGER|LOG)\.(error|exception|critical|fatal)\s*\(|\brospy\.log(?:err|fatal)\w*\s*\(`)
+	jsThrow      = regexp.MustCompile(`\bthrow\s+(?:new\s+)?([A-Za-z_$][\w$.]*)\s*\(`)
+	jsReject     = regexp.MustCompile(`\b(?:Promise\.)?reject\(\s*new\s+([A-Za-z_$][\w$.]*)\s*\(`)
+	jsStatus     = regexp.MustCompile(`\b(?:res|response|reply|ctx|resp)\.(?:status|code)\(\s*(\d{3})\s*\)|\bstatus\s*:\s*(\d{3})\b|\bctx\.throw\(\s*(\d{3})`)
+	jsLogErr     = regexp.MustCompile(`\b(?:console|logger|log|this\.logger)\.error\s*\(`)
+	newErrType   = regexp.MustCompile(`\bnew\s+([A-Z][\w$.]*(?:Error|Exception|Fault))\s*\(`)
+	goErrNew     = regexp.MustCompile(`\b(errors\.New|fmt\.Errorf|errors\.Errorf|errors\.Wrapf?|status\.Errorf|status\.Error|echo\.NewHTTPError|fiber\.NewError)\s*\(`)
+	goSentinel   = regexp.MustCompile(`^\s*(?:var\s+)?(Err\w*|err\w+)\s*=\s*(?:errors\.New|fmt\.Errorf)`)
+	goPanic      = regexp.MustCompile(`\bpanic\s*\(`)
+	goLogErr     = regexp.MustCompile(`\b(?:log|klog|logger|zap|slog|l)\.(?:Fatal|Fatalf|Panic|Panicf|Error|Errorf|Errorw)\s*\(`)
+	goHTTPErr    = regexp.MustCompile(`\bhttp\.Error\s*\(|\.(?:JSON|AbortWithStatusJSON|AbortWithStatus|String|NoContent|WriteHeader)\(\s*(?:http\.(Status\w+)|(\d{3}))`)
+	grpcCode     = regexp.MustCompile(`codes\.(\w+)`)
+	cppThrow     = regexp.MustCompile(`\bthrow\s+([A-Za-z_][\w:]*)\s*[({]`)
+	rosLogErr    = regexp.MustCompile(`\b(ROS_(?:ERROR|FATAL)\w*|RCLCPP_(?:ERROR|FATAL)\w*|ROS_ERROR_STREAM\w*)\s*\(`)
+	javaThrow    = regexp.MustCompile(`\bthrow\s+new\s+([\w.]+)\s*\(`)
+	javaRespStat = regexp.MustCompile(`ResponseStatusException\(\s*HttpStatus\.(\w+)|ResponseEntity\.status\(\s*HttpStatus\.(\w+)|ResponseEntity\.(badRequest|notFound|unprocessableEntity|internalServerError)\(`)
+	javaLogErr   = regexp.MustCompile(`\b(?:log|logger|LOG|LOGGER)\.error\s*\(`)
+	rustPanic    = regexp.MustCompile(`\b(panic|bail|anyhow|unimplemented)!\s*\(|\.expect\(\s*"`)
+	rustErr      = regexp.MustCompile(`\bErr\(\s*([A-Z]\w*(?:::\w+)*)`)
+	rustLogErr   = regexp.MustCompile(`\b(?:log::|tracing::)?error!\s*\(`)
+	statusKwarg  = regexp.MustCompile(`\bstatus(?:_code)?\s*[=:]\s*(?:status\.)?(?:HTTP_)?(\d{3})|\bHTTP_(\d{3})_\w+|\babort\(\s*(\d{3})|\berrorhandler\(\s*(\d{3})`)
+	httpNamed    = regexp.MustCompile(`\b(?:http\.Status|HttpStatus\.|HTTPStatus\.)(\w+)`)
+	dictKey      = regexp.MustCompile(`["'](\w+)["']\s*:`)
+	pyDefault    = regexp.MustCompile(`^\s*(default_detail|default_message|message|detail)\s*=\s*(?:_|gettext_lazy|gettext)?\(?\s*[rbuf]*["']`)
+	pyStatusAttr = regexp.MustCompile(`^\s*(?:status_code|code|http_status)\s*=\s*(?:status\.HTTP_)?(\d{3})`)
 
 	// type definitions
-	pyErrClass   = regexp.MustCompile(`^\s*class\s+(\w+)\s*\(([^)]*)\)\s*:`)
-	jsClass   = regexp.MustCompile(`\bclass\s+(\w+)\s+extends\s+([\w$.]+)`)
-	cppClass  = regexp.MustCompile(`^\s*(?:class|struct)\s+(?:\w+\s+)?(\w+)\s*(?:final\s*)?:\s*([^{;]+)`)
-	javaClass = regexp.MustCompile(`\bclass\s+(\w+)\s+extends\s+([\w.]+)`)
+	pyErrClass = regexp.MustCompile(`^\s*class\s+(\w+)\s*\(([^)]*)\)\s*:`)
+	jsClass    = regexp.MustCompile(`\bclass\s+(\w+)\s+extends\s+([\w$.]+)`)
+	cppClass   = regexp.MustCompile(`^\s*(?:class|struct)\s+(?:\w+\s+)?(\w+)\s*(?:final\s*)?:\s*([^{;]+)`)
+	javaClass  = regexp.MustCompile(`\bclass\s+(\w+)\s+extends\s+([\w.]+)`)
 
 	// handlers
 	pyExcept    = regexp.MustCompile(`^\s*except\s*(?:\(([^)]*)\)|([\w.]+))?(?:\s+as\s+\w+)?\s*:`)
@@ -757,7 +757,6 @@ func Errors(s Store, repo, ref, q string, budget int) ErrorsResult {
 	}
 	return res
 }
-
 
 func matchRank(m string) int {
 	switch m {

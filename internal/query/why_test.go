@@ -81,7 +81,7 @@ func (w whyStore) SymbolAt(repo, sym, ref string) (SymbolRef, bool) {
 	return s, ok
 }
 func (w whyStore) SymbolsAt(repo, ref string) map[string]SymbolRef { return w.syms[ref] }
-func (w whyStore) Files(repo, ref string) []File                 { return w.files[ref] }
+func (w whyStore) Files(repo, ref string) []File                   { return w.files[ref] }
 func (w whyStore) Manifest(repo, ref string) (content.Manifest, bool) {
 	return content.Manifest{Ref: ref, Commit: w.man[ref]}, true
 }
