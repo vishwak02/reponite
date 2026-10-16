@@ -31,7 +31,7 @@ type ErrorSite struct {
 	Line       int
 	In         string // enclosing symbol (bare)
 	Handle     string // enclosing symbol's qualified id (drill-in for brief/context), when resolvable
-	Kind       string // raise | throw | error_value | panic | log_error | http_response | error_class
+	Kind       string // raise | throw | error_value | returns (a Go sentinel) | panic | log_error | http_response | error_class
 	Type       string // exception class / error constructor / sentinel; "" when none
 	Status     int    // HTTP status when known (literal, named constant, or the type's known status)
 	Message    string // the message template as written ("" when none)
@@ -115,33 +115,34 @@ func litLang(l string) string {
 
 var (
 	// producers
-	pyRaise      = regexp.MustCompile(`^\s*raise\s+([A-Za-z_][\w.]*)`)
-	pyHTTPResp   = regexp.MustCompile(`\b(Response|JsonResponse|JSONResponse|HttpResponse\w*|abort|make_response|PlainTextResponse|HTMLResponse)\s*\(`)
-	pyLogErr     = regexp.MustCompile(`\b(?:\w*log(?:ger)?|logging|LOGGER|LOG)\.(error|exception|critical|fatal)\s*\(|\brospy\.log(?:err|fatal)\w*\s*\(`)
-	jsThrow      = regexp.MustCompile(`\bthrow\s+(?:new\s+)?([A-Za-z_$][\w$.]*)\s*\(`)
-	jsReject     = regexp.MustCompile(`\b(?:Promise\.)?reject\(\s*new\s+([A-Za-z_$][\w$.]*)\s*\(`)
-	jsStatus     = regexp.MustCompile(`\b(?:res|response|reply|ctx|resp)\.(?:status|code)\(\s*(\d{3})\s*\)|\bstatus\s*:\s*(\d{3})\b|\bctx\.throw\(\s*(\d{3})`)
-	jsLogErr     = regexp.MustCompile(`\b(?:console|logger|log|this\.logger)\.error\s*\(`)
-	newErrType   = regexp.MustCompile(`\bnew\s+([A-Z][\w$.]*(?:Error|Exception|Fault))\s*\(`)
-	goErrNew     = regexp.MustCompile(`\b(errors\.New|fmt\.Errorf|errors\.Errorf|errors\.Wrapf?|status\.Errorf|status\.Error|echo\.NewHTTPError|fiber\.NewError)\s*\(`)
-	goSentinel   = regexp.MustCompile(`^\s*(?:var\s+)?(Err\w*|err\w+)\s*=\s*(?:errors\.New|fmt\.Errorf)`)
-	goPanic      = regexp.MustCompile(`\bpanic\s*\(`)
-	goLogErr     = regexp.MustCompile(`\b(?:log|klog|logger|zap|slog|l)\.(?:Fatal|Fatalf|Panic|Panicf|Error|Errorf|Errorw)\s*\(`)
-	goHTTPErr    = regexp.MustCompile(`\bhttp\.Error\s*\(|\.(?:JSON|AbortWithStatusJSON|AbortWithStatus|String|NoContent|WriteHeader)\(\s*(?:http\.(Status\w+)|(\d{3}))`)
-	grpcCode     = regexp.MustCompile(`codes\.(\w+)`)
-	cppThrow     = regexp.MustCompile(`\bthrow\s+([A-Za-z_][\w:]*)\s*[({]`)
-	rosLogErr    = regexp.MustCompile(`\b(ROS_(?:ERROR|FATAL)\w*|RCLCPP_(?:ERROR|FATAL)\w*|ROS_ERROR_STREAM\w*)\s*\(`)
-	javaThrow    = regexp.MustCompile(`\bthrow\s+new\s+([\w.]+)\s*\(`)
-	javaRespStat = regexp.MustCompile(`ResponseStatusException\(\s*HttpStatus\.(\w+)|ResponseEntity\.status\(\s*HttpStatus\.(\w+)|ResponseEntity\.(badRequest|notFound|unprocessableEntity|internalServerError)\(`)
-	javaLogErr   = regexp.MustCompile(`\b(?:log|logger|LOG|LOGGER)\.error\s*\(`)
-	rustPanic    = regexp.MustCompile(`\b(panic|bail|anyhow|unimplemented)!\s*\(|\.expect\(\s*"`)
-	rustErr      = regexp.MustCompile(`\bErr\(\s*([A-Z]\w*(?:::\w+)*)`)
-	rustLogErr   = regexp.MustCompile(`\b(?:log::|tracing::)?error!\s*\(`)
-	statusKwarg  = regexp.MustCompile(`\bstatus(?:_code)?\s*[=:]\s*(?:status\.)?(?:HTTP_)?(\d{3})|\bHTTP_(\d{3})_\w+|\babort\(\s*(\d{3})|\berrorhandler\(\s*(\d{3})`)
-	httpNamed    = regexp.MustCompile(`\b(?:http\.Status|HttpStatus\.|HTTPStatus\.)(\w+)`)
-	dictKey      = regexp.MustCompile(`["'](\w+)["']\s*:`)
-	pyDefault    = regexp.MustCompile(`^\s*(default_detail|default_message|message|detail)\s*=\s*(?:_|gettext_lazy|gettext)?\(?\s*[rbuf]*["']`)
-	pyStatusAttr = regexp.MustCompile(`^\s*(?:status_code|code|http_status)\s*=\s*(?:status\.HTTP_)?(\d{3})`)
+	pyRaise       = regexp.MustCompile(`^\s*raise\s+([A-Za-z_][\w.]*)`)
+	pyHTTPResp    = regexp.MustCompile(`\b(Response|JsonResponse|JSONResponse|HttpResponse\w*|abort|make_response|PlainTextResponse|HTMLResponse)\s*\(`)
+	pyLogErr      = regexp.MustCompile(`\b(?:\w*log(?:ger)?|logging|LOGGER|LOG)\.(error|exception|critical|fatal)\s*\(|\brospy\.log(?:err|fatal)\w*\s*\(`)
+	jsThrow       = regexp.MustCompile(`\bthrow\s+(?:new\s+)?([A-Za-z_$][\w$.]*)\s*\(`)
+	jsReject      = regexp.MustCompile(`\b(?:Promise\.)?reject\(\s*new\s+([A-Za-z_$][\w$.]*)\s*\(`)
+	jsStatus      = regexp.MustCompile(`\b(?:res|response|reply|ctx|resp)\.(?:status|code)\(\s*(\d{3})\s*\)|\bstatus\s*:\s*(\d{3})\b|\bctx\.throw\(\s*(\d{3})`)
+	jsLogErr      = regexp.MustCompile(`\b(?:console|logger|log|this\.logger)\.error\s*\(`)
+	newErrType    = regexp.MustCompile(`\bnew\s+([A-Z][\w$.]*(?:Error|Exception|Fault))\s*\(`)
+	goErrNew      = regexp.MustCompile(`\b(errors\.New|fmt\.Errorf|errors\.Errorf|errors\.Wrapf?|status\.Errorf|status\.Error|echo\.NewHTTPError|fiber\.NewError)\s*\(`)
+	goSentinel    = regexp.MustCompile(`^\s*(?:var\s+)?(Err\w*|err\w+)\s*=\s*(?:errors\.New|fmt\.Errorf)`)
+	goPanic       = regexp.MustCompile(`\bpanic\s*\(`)
+	goRetSentinel = regexp.MustCompile(`\breturn\b.*?\b(Err[A-Z]\w*)\b`)
+	goLogErr      = regexp.MustCompile(`\b(?:log|klog|logger|zap|slog|l)\.(?:Fatal|Fatalf|Panic|Panicf|Error|Errorf|Errorw)\s*\(`)
+	goHTTPErr     = regexp.MustCompile(`\bhttp\.Error\s*\(|\.(?:JSON|AbortWithStatusJSON|AbortWithStatus|String|NoContent|WriteHeader)\(\s*(?:http\.(Status\w+)|(\d{3}))`)
+	grpcCode      = regexp.MustCompile(`codes\.(\w+)`)
+	cppThrow      = regexp.MustCompile(`\bthrow\s+([A-Za-z_][\w:]*)\s*[({]`)
+	rosLogErr     = regexp.MustCompile(`\b(ROS_(?:ERROR|FATAL)\w*|RCLCPP_(?:ERROR|FATAL)\w*|ROS_ERROR_STREAM\w*)\s*\(`)
+	javaThrow     = regexp.MustCompile(`\bthrow\s+new\s+([\w.]+)\s*\(`)
+	javaRespStat  = regexp.MustCompile(`ResponseStatusException\(\s*HttpStatus\.(\w+)|ResponseEntity\.status\(\s*HttpStatus\.(\w+)|ResponseEntity\.(badRequest|notFound|unprocessableEntity|internalServerError)\(`)
+	javaLogErr    = regexp.MustCompile(`\b(?:log|logger|LOG|LOGGER)\.error\s*\(`)
+	rustPanic     = regexp.MustCompile(`\b(panic|bail|anyhow|unimplemented)!\s*\(|\.expect\(\s*"`)
+	rustErr       = regexp.MustCompile(`\bErr\(\s*([A-Z]\w*(?:::\w+)*)`)
+	rustLogErr    = regexp.MustCompile(`\b(?:log::|tracing::)?error!\s*\(`)
+	statusKwarg   = regexp.MustCompile(`\bstatus(?:_code)?\s*[=:]\s*(?:status\.)?(?:HTTP_)?(\d{3})|\bHTTP_(\d{3})_\w+|\babort\(\s*(\d{3})|\berrorhandler\(\s*(\d{3})`)
+	httpNamed     = regexp.MustCompile(`\b(?:http\.Status|HttpStatus\.|HTTPStatus\.)(\w+)`)
+	dictKey       = regexp.MustCompile(`["'](\w+)["']\s*:`)
+	pyDefault     = regexp.MustCompile(`^\s*(default_detail|default_message|message|detail)\s*=\s*(?:_|gettext_lazy|gettext)?\(?\s*[rbuf]*["']`)
+	pyStatusAttr  = regexp.MustCompile(`^\s*(?:status_code|code|http_status)\s*=\s*(?:status\.HTTP_)?(\d{3})`)
 
 	// type definitions
 	pyErrClass = regexp.MustCompile(`^\s*class\s+(\w+)\s*\(([^)]*)\)\s*:`)
@@ -233,6 +234,24 @@ func scanErrors(s Store, repo, ref string) *errScan {
 			scanErrorFile(sc, rp, f, lang)
 		}
 	}
+	// A site raising a class declared with a status (DRF status_code) or
+	// deriving from one gets that status.
+	for i := range sc.sites {
+		x := &sc.sites[i]
+		if x.Status != 0 || x.Type == "" {
+			continue
+		}
+		for _, t := range append([]string{errTypeBase(x.Type)}, sc.ancestors(x.Repo, errTypeBase(x.Type))...) {
+			if et := sc.types[x.Repo+"\x00"+t]; et != nil && et.Status != 0 {
+				x.Status = et.Status
+				break
+			}
+			if st := knownTypeStatus[t]; st != 0 {
+				x.Status = st
+				break
+			}
+		}
+	}
 	// A function named by DRF's EXCEPTION_HANDLER handles every API exception.
 	for i := range sc.handlers {
 		h := &sc.handlers[i]
@@ -294,8 +313,14 @@ func scanErrorFile(sc *errScan, repo string, f File, lang string) {
 			stmt, parts := statement(lines, i)
 			var lits []string
 			for _, p := range parts {
-				l, _ := stringLiterals(p, ll)
-				lits = append(lits, l...)
+				l, cols := stringLiterals(p, ll)
+				for k, lit := range l {
+					// A subscript key (args["type"]) is not a message.
+					if c := cols[k]; c > 0 && p[c-1] == '[' {
+						continue
+					}
+					lits = append(lits, lit)
+				}
 			}
 			keys := map[string]bool{}
 			for _, m := range dictKey.FindAllStringSubmatch(stmt, -1) {
@@ -308,6 +333,7 @@ func scanErrorFile(sc *errScan, repo string, f File, lang string) {
 				}
 				msg = append(msg, l)
 			}
+			lits = msg // dict keys ("detail", "error") are structure, not message
 			st := 0
 			if m := statusKwarg.FindStringSubmatch(stmt); m != nil {
 				for _, g := range m[1:] {
@@ -372,7 +398,7 @@ func scanErrorFile(sc *errScan, repo string, f File, lang string) {
 		}
 		switch lang {
 		case "py":
-			if m := pyRaise.FindStringSubmatch(code); m != nil && m[1] != "from" {
+			if m := pyRaise.FindStringSubmatch(code); m != nil && isTypeName(m[1]) {
 				site("raise", m[1])
 			} else if strings.Contains(code, "(") && pyHTTPResp.MatchString(code) {
 				m := pyHTTPResp.FindStringSubmatch(code)
@@ -484,6 +510,8 @@ func scanErrorFile(sc *errScan, repo string, f File, lang string) {
 				site("error_value", goErrNew.FindStringSubmatch(code)[1])
 			case goHTTPErr.MatchString(code):
 				site("http_response", "")
+			case goRetSentinel.MatchString(code):
+				site("returns", goRetSentinel.FindStringSubmatch(code)[1])
 			case goPanic.MatchString(code):
 				site("panic", "panic")
 			case goLogErr.MatchString(code):
@@ -673,20 +701,46 @@ func Errors(s Store, repo, ref, q string, budget int) ErrorsResult {
 				continue
 			}
 		}
-		if x.Kind == "error_class" {
+		// A class's default message or a package-level sentinel stands for
+		// every place that raises/returns it.
+		if x.Kind == "error_class" || x.lang == "go" && x.In == "" && x.Type != "" {
 			byType[x.Repo+"\x00"+x.Type] = true
 		}
 		matched = append(matched, x)
 	}
 	// A matched default message (DRF default_detail) means every bare raise of
-	// that class produces it.
+	// that class produces it; a matched sentinel, every return of it.
 	if len(byType) > 0 {
+		listed := map[string]bool{}
+		for _, x := range matched {
+			listed[fmt.Sprintf("%s\x00%s\x00%d", x.Repo, x.Path, x.Line)] = true
+		}
 		for _, x := range sc.sites {
+			if listed[fmt.Sprintf("%s\x00%s\x00%d", x.Repo, x.Path, x.Line)] {
+				continue
+			}
 			if x.Kind != "error_class" && x.Type != "" && byType[x.Repo+"\x00"+errTypeBase(x.Type)] && x.Message == "" {
 				x.Match = "default_message"
 				matched = append(matched, x)
 			}
 		}
+	}
+	// A template matching only a fragment of what the best one matched is a
+	// coincidence ("does not exist"), not another producer.
+	best := 0
+	for _, x := range matched {
+		if x.Match == "message" && x.Fixed > best {
+			best = x.Fixed
+		}
+	}
+	if best >= 12 {
+		kept := matched[:0]
+		for _, x := range matched {
+			if x.Match != "message" || 2*x.Fixed >= best {
+				kept = append(kept, x)
+			}
+		}
+		matched = kept
 	}
 	switch {
 	case status > 0:
@@ -773,7 +827,7 @@ func matchRank(m string) int {
 func siteScore(x ErrorSite) int {
 	sc := 2 * x.Fixed
 	switch x.Kind {
-	case "raise", "throw", "http_response", "error_value", "panic", "error_class":
+	case "raise", "throw", "http_response", "error_value", "panic", "error_class", "returns":
 		sc += 3
 	}
 	return sc
@@ -796,7 +850,7 @@ func matchMessage(x ErrorSite, msg string) int {
 	ll := litLang(x.lang)
 	for _, c := range cands {
 		re, fixed, longest := formatPattern(c, ll)
-		if re == nil || fixed < 4 || !strings.Contains(msg, longest) {
+		if re == nil || fixed < 6 || !strings.Contains(msg, longest) {
 			continue
 		}
 		if re.MatchString(msg) && fixed > best {
@@ -998,6 +1052,11 @@ func errorCatalogue(sc *errScan, res ErrorsResult, budget int) ErrorsResult {
 		if isErrName(t.Type) {
 			return true
 		}
+		for _, b := range sc.ancestors(t.Repo, t.Type) {
+			if isErrName(b) {
+				return true
+			}
+		}
 		for _, b := range t.Bases {
 			if isErrName(errTypeBase(b)) {
 				return true
@@ -1007,7 +1066,7 @@ func errorCatalogue(sc *errScan, res ErrorsResult, budget int) ErrorsResult {
 	}
 	var types []ErrorType
 	for _, t := range sc.types {
-		if t.Produced == 0 && t.Handled == 0 && !(t.Defined != "" && errish(t)) {
+		if !errish(t) || t.Produced == 0 && t.Handled == 0 && t.Defined == "" {
 			continue
 		}
 		if t.Produced == 0 && t.Defined == "" {
@@ -1080,6 +1139,17 @@ func errorCatalogue(sc *errScan, res ErrorsResult, budget int) ErrorsResult {
 }
 
 func isErrName(n string) bool {
-	return strings.Contains(n, "Error") || strings.Contains(n, "Exception") || strings.HasSuffix(n, "Exc") ||
-		strings.HasPrefix(n, "Err") || strings.Contains(n, "Fault") || strings.Contains(n, "Failure")
+	for _, suf := range []string{"Error", "Exception", "Exc", "Fault", "Failure", "Err"} {
+		if strings.HasSuffix(n, suf) {
+			return true
+		}
+	}
+	// Go sentinels: ErrNotFound.
+	return len(n) > 3 && strings.HasPrefix(n, "Err") && n[3] >= 'A' && n[3] <= 'Z'
+}
+
+// isTypeName: `raise X` names a class, not a re-raised variable (`raise e`,
+// `raise exc`): a dotted name or one starting upper-case.
+func isTypeName(n string) bool {
+	return n != "" && (strings.Contains(n, ".") || n[0] >= 'A' && n[0] <= 'Z')
 }

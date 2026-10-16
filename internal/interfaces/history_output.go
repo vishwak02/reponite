@@ -129,3 +129,157 @@ func writeTail(b *strings.Builder, note string, m query.Meta) {
 		fmt.Fprintf(b, "warning: %s\n", w)
 	}
 }
+
+type errSiteDTO struct {
+	Repo      string   `json:"repo"`
+	Path      string   `json:"path"`
+	Line      int      `json:"line"`
+	In        string   `json:"in,omitempty"`
+	Handle    string   `json:"handle,omitempty"`
+	Kind      string   `json:"kind"`
+	Type      string   `json:"type,omitempty"`
+	Status    int      `json:"status,omitempty"`
+	Message   string   `json:"message,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Match     string   `json:"match,omitempty"`
+	Fixed     int      `json:"fixed,omitempty"`
+	Test      bool     `json:"test,omitempty"`
+	Callers   []string `json:"callers,omitempty"`
+	MoreCalls int      `json:"more_callers,omitempty"`
+}
+
+type errHandlerDTO struct {
+	Repo   string   `json:"repo"`
+	Path   string   `json:"path"`
+	Line   int      `json:"line"`
+	In     string   `json:"in,omitempty"`
+	Kind   string   `json:"kind"`
+	Types  []string `json:"types,omitempty"`
+	Match  string   `json:"match"`
+	OnPath bool     `json:"on_path,omitempty"`
+	Text   string   `json:"text"`
+	Test   bool     `json:"test,omitempty"`
+}
+
+type errTypeDTO struct {
+	Repo     string   `json:"repo"`
+	Type     string   `json:"type"`
+	Bases    []string `json:"bases,omitempty"`
+	Defined  string   `json:"defined,omitempty"`
+	Status   int      `json:"status,omitempty"`
+	Default  string   `json:"default_message,omitempty"`
+	Produced int      `json:"produced"`
+	Handled  int      `json:"handled"`
+}
+
+type errorsDTO struct {
+	Query     string          `json:"query,omitempty"`
+	Mode      string          `json:"mode"`
+	Sites     []errSiteDTO    `json:"producers"`
+	Handlers  []errHandlerDTO `json:"handlers,omitempty"`
+	Types     []errTypeDTO    `json:"types,omitempty"`
+	Total     int             `json:"total"`
+	Truncated bool            `json:"truncated"`
+	Next      string          `json:"next,omitempty"`
+	Note      string          `json:"note,omitempty"`
+	Meta      metaDTO         `json:"_meta"`
+}
+
+// ErrorsJSON renders error producers/handlers, or the catalogue.
+func ErrorsJSON(r query.ErrorsResult) (string, error) {
+	dto := errorsDTO{Query: r.Query, Mode: r.Mode, Sites: []errSiteDTO{}, Total: r.Total, Truncated: r.Truncated,
+		Next: r.Next, Note: r.Note, Meta: metaOf(r.Meta)}
+	for _, x := range r.Sites {
+		dto.Sites = append(dto.Sites, errSiteDTO{Repo: x.Repo, Path: x.Path, Line: x.Line, In: x.In, Handle: x.Handle,
+			Kind: x.Kind, Type: x.Type, Status: x.Status, Message: x.Message, Text: x.Text, Match: x.Match, Fixed: x.Fixed,
+			Test: x.Test, Callers: x.Callers, MoreCalls: x.MoreCalls})
+	}
+	for _, h := range r.Handlers {
+		dto.Handlers = append(dto.Handlers, errHandlerDTO{Repo: h.Repo, Path: h.Path, Line: h.Line, In: h.In, Kind: h.Kind,
+			Types: h.Types, Match: h.Match, OnPath: h.OnPath, Text: h.Text, Test: h.Test})
+	}
+	for _, t := range r.Types {
+		dto.Types = append(dto.Types, errTypeDTO{Repo: t.Repo, Type: t.Type, Bases: t.Bases, Defined: t.Defined,
+			Status: t.Status, Default: t.Default, Produced: t.Produced, Handled: t.Handled})
+	}
+	return marshal(dto)
+}
+
+// ErrorsText is the terse rendering of ErrorsJSON.
+func ErrorsText(r query.ErrorsResult) string {
+	var b strings.Builder
+	if r.Mode == "catalogue" {
+		b.WriteString("error catalogue\n")
+		repo := ""
+		for _, t := range r.Types {
+			if t.Repo != repo {
+				repo = t.Repo
+				fmt.Fprintf(&b, "[%s] types\n", repo)
+			}
+			extra := ""
+			if t.Status > 0 {
+				extra += fmt.Sprintf(" HTTP %d", t.Status)
+			}
+			if len(t.Bases) > 0 {
+				extra += " < " + strings.Join(t.Bases, ",")
+			}
+			if t.Default != "" {
+				extra += fmt.Sprintf(" %q", t.Default)
+			}
+			fmt.Fprintf(&b, "  %s%s  produced=%d handled=%d %s\n", t.Type, extra, t.Produced, t.Handled, t.Defined)
+		}
+		repo = ""
+		for _, x := range r.Sites {
+			if x.Repo != repo {
+				repo = x.Repo
+				fmt.Fprintf(&b, "[%s] messages\n", repo)
+			}
+			fmt.Fprintf(&b, "  %s:%d %s %s %q\n", x.Path, x.Line, x.Kind, errTypeLabel(x), x.Message)
+		}
+	} else {
+		fmt.Fprintf(&b, "errors %q (%s)\n", r.Query, r.Mode)
+		for _, x := range r.Sites {
+			fmt.Fprintf(&b, "%s %s:%d in %s  %s %s  [%s]\n", x.Repo, x.Path, x.Line, orDash(x.Handle, x.In), x.Kind, errTypeLabel(x), x.Match)
+			if x.Message != "" {
+				fmt.Fprintf(&b, "    msg: %q\n", x.Message)
+			}
+			if len(x.Callers) > 0 {
+				more := ""
+				if x.MoreCalls > 0 {
+					more = fmt.Sprintf(" +%d", x.MoreCalls)
+				}
+				fmt.Fprintf(&b, "    called by: %s%s\n", strings.Join(x.Callers, ", "), more)
+			}
+		}
+		for _, h := range r.Handlers {
+			on := ""
+			if h.OnPath {
+				on = " on_path"
+			}
+			fmt.Fprintf(&b, "handled: %s %s:%d in %s  %s %v [%s%s]  %s\n", h.Repo, h.Path, h.Line, orDash(h.In, ""), h.Kind, h.Types, h.Match, on, h.Text)
+		}
+	}
+	if r.Truncated {
+		fmt.Fprintf(&b, "truncated: %s\n", r.Next)
+	}
+	writeTail(&b, r.Note, r.Meta)
+	return b.String()
+}
+
+func errTypeLabel(x query.ErrorSite) string {
+	s := x.Type
+	if x.Status > 0 {
+		s = strings.TrimSpace(fmt.Sprintf("%s HTTP %d", s, x.Status))
+	}
+	return s
+}
+
+func orDash(a, b string) string {
+	if a != "" {
+		return a
+	}
+	if b != "" {
+		return b
+	}
+	return "-"
+}

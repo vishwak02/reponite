@@ -67,6 +67,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdRefs(args)
 	case "why":
 		cmdWhy(args)
+	case "errors":
+		cmdErrors(args)
 	default:
 		notImplemented(cmd)
 	}

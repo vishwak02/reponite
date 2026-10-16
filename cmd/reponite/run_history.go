@@ -65,3 +65,38 @@ func cmdWhy(args []string) {
 	res := query.Why(f, newHistoryProvider(dirs), repo, ref, pos[0], budget)
 	emit(text, func() string { return interfaces.WhyText(res) }, func() (string, error) { return interfaces.WhyJSON(res) })
 }
+
+// cmdErrors: where an error message/type/status comes from and who handles
+// it; with no argument, the error catalogue.
+func cmdErrors(args []string) {
+	var budget int
+	var local bool
+	var repoFlag string
+	var ff formatFlag
+	var rf refFlags
+	pos := parseCmd("errors", "errors [\"<message>\" | Type | status] [ref] [--repo R] [--ref R] [--refs repo=ref,...] [--budget N] [--format text] [--no-tests] [--local]", args, func(fs *flag.FlagSet) {
+		fs.IntVar(&budget, "budget", 0, fmt.Sprintf("token budget (0 = default ~%d)", query.DefaultErrorsBudget))
+		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
+		fs.StringVar(&repoFlag, "repo", "", "scope to one repo (default: fleet-wide)")
+		ff.register(fs)
+		rf.register(fs)
+		registerNoTests(fs)
+	})
+	text := ff.text()
+	if len(pos) >= 2 {
+		rf.ref = pos[1]
+	}
+	f := openFleet(local)
+	defer f.Close()
+	s, cov := f.view(rf.ref, rf.pins)
+	scope := query.FleetRepo
+	if repoFlag != "" {
+		if !containsName(f.Names, repoFlag) {
+			fail(fmt.Errorf("--repo %s is not in the fleet (%v)", repoFlag, f.Names))
+		}
+		scope = repoFlag
+	}
+	res := query.Errors(s, scope, rf.ref, arg(pos, 0, ""), budget)
+	res.Note = joinNote(res.Note, cov)
+	emit(text, func() string { return interfaces.ErrorsText(res) }, func() (string, error) { return interfaces.ErrorsJSON(res) })
+}
