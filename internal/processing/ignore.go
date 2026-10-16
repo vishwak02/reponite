@@ -24,6 +24,14 @@ var DefaultIgnorePatterns = []string{
 	"node_modules/",
 	".git/",
 	"testdata/",
+	// minified and bundled assets: generated, often third-party, one enormous line
+	// each — they bury search, errors and grep results under noise
+	"*.min.js",
+	"*.min.css",
+	"*.bundle.js",
+	"*-bundle.js",
+	"*.chunk.js",
+	"*.js.map",
 }
 
 // IndexOptions carries caller-supplied indexing settings.

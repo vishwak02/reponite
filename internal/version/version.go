@@ -38,7 +38,9 @@ const (
 	//      workflows) and schema/configuration files (.sql/.proto/.prisma,
 	//      .env*, .properties, .circleci, .gitlab-ci.yml) are stored as
 	//      content-only files, for `map`, `explain`, `models` and `config`.
-	IndexVer = 6
+	//   7: minified/bundled assets (*.min.js, *-bundle.js, *.chunk.js, …) are
+	//      excluded by default.
+	IndexVer = 7
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

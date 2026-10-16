@@ -93,3 +93,18 @@ func TestIgnoreExcludeFlagPatterns(t *testing.T) {
 		t.Error("external/** must not match a similarly-named file")
 	}
 }
+
+func TestIgnoreMinifiedAndBundledAssets(t *testing.T) {
+	ig := NewIgnore("", nil)
+	for _, p := range []string{"web/static/swagger-ui-bundle.js", "app.min.js", "dist/main.bundle.js",
+		"build/static/js/2.abc123.chunk.js", "theme.min.css", "app.js.map"} {
+		if !ig.Excluded(p, false) {
+			t.Errorf("%s should be excluded by default", p)
+		}
+	}
+	for _, p := range []string{"src/minimap.js", "src/bundler.ts", "src/app.js", "src/chunked_upload.py"} {
+		if ig.Excluded(p, false) {
+			t.Errorf("%s must still be indexed", p)
+		}
+	}
+}
