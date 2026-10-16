@@ -483,7 +483,7 @@ func (c *uiCtx) ensureAPI() {
 // mounted by a router serves list/create on its collection path and
 // retrieve/update/partial_update/destroy on its detail path.
 func routeHandler(r Route, method string) string {
-	h := r.Handler
+	h := strings.TrimSuffix(r.Handler, ".as_view")
 	if r.Framework != "django" || r.Method != "*" || !strings.Contains(h, "ViewSet") && !strings.Contains(h, "Viewset") {
 		return h
 	}

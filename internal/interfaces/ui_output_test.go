@@ -44,7 +44,7 @@ export default function CartPage() {
 		t.Fatalf("tree: %s", out)
 	}
 	out, _ = ts.Call("reponite_ui", map[string]string{"target": "CartPage", "format": "text"})
-	if !strings.Contains(out, `button "Save" click → save`) || !strings.Contains(out, "POST /api/orders → OrdersView.as_view (api:shop/urls.py:2)") {
+	if !strings.Contains(out, `button "Save" click → save`) || !strings.Contains(out, "POST /api/orders → OrdersView (api:shop/urls.py:2)") {
 		t.Fatalf("text: %s", out)
 	}
 	out, _ = ts.Call("reponite_ui", map[string]string{"target": "CartPage", "uses": "true"})
