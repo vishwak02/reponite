@@ -61,8 +61,19 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	var files []ParsedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
-		if ig.Excluded(f.Name, false) || strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.") {
-			return nil // ignore set + dot-dirs/dot-files, mirroring IndexDir
+		if ig.Excluded(f.Name, false) || (strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.")) && !IsDataDotPath(f.Name) {
+			return nil // ignore set + dot-dirs/dot-files (bar .env/CI files), mirroring IndexDir
+		}
+		if IsDataFile(f.Name) {
+			if f.Size > maxDataFileBytes {
+				return nil
+			}
+			if src, cerr := f.Contents(); cerr == nil {
+				if pf, ok := dataFile(f.Name, src); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
 		}
 		if IsManifestFile(f.Name) {
 			if src, err := f.Contents(); err == nil {
