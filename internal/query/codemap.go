@@ -190,7 +190,7 @@ func Map(s Store, repo, ref string, budget int) MapResult {
 			res.Truncated = true
 		}
 	}
-	res.Next = mapNext(res, budget)
+	res.Next = withRef(mapNext(res, budget), ref)
 	return res
 }
 
@@ -731,6 +731,13 @@ func inheritedPurpose(m string, files []File, byMod map[string][]*File) (string,
 // hubs ranks non-test symbols by distinct resolved non-test callers +
 // in-repo callees.
 func hubs(syms map[string]SymbolRef, snap RefSnapshot, idx *spanIndex) []Hub {
+	return hubsIn(syms, syms, snap, idx)
+}
+
+// hubsIn ranks the symbols of scope (a directory's, or all) by their edges in
+// the whole ref's graph; all classifies callers as test code or not.
+func hubsIn(scope, all map[string]SymbolRef, snap RefSnapshot, idx *spanIndex) []Hub {
+	syms := all
 	in := map[string]map[string]bool{}
 	out := map[string]int{}
 	for caller, cs := range snap.Callees {
@@ -752,7 +759,7 @@ func hubs(syms map[string]SymbolRef, snap RefSnapshot, idx *spanIndex) []Hub {
 		out[caller] = len(seen)
 	}
 	var hs []Hub
-	for q, sym := range syms {
+	for q, sym := range scope {
 		if IsTestSymbol(sym, q) {
 			continue
 		}
@@ -860,6 +867,7 @@ func FleetMap(s Store, ref string, budget int) FleetMapResult {
 		res.Next = append(res.Next, "reponite map --repo "+res.Repos[0].Repo+"   (one repo in depth: entry points, modules, hubs, dependencies)")
 	}
 	res.Next = append(res.Next, "reponite routes | reponite topics | reponite ximpact <symbol>   (every instance of a link kind)")
+	res.Next = withRef(res.Next, ref)
 	return res
 }
 

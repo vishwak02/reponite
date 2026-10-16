@@ -191,3 +191,38 @@ func TestDocSummaryAndSourceFacts(t *testing.T) {
 		t.Errorf("rst summary = %q", mr.Summary)
 	}
 }
+
+// A viewset routed through a router: its standard actions are reached via the
+// class (create on the collection route only), a custom @action only by its
+// own route, and a helper method by none.
+func TestExplainViewsetReach(t *testing.T) {
+	m := storage.NewMem()
+	urls := "from rest_framework import routers\nrouter = routers.DefaultRouter()\nrouter.register(r\"orders\", views.OrderViewSet)\nurlpatterns = [\n    path(\"api/\", include(router.urls)),\n]\n"
+	views := "class OrderViewSet(viewsets.ModelViewSet):\n    def create(self, request):\n        return self.helper()\n\n    @action(detail=False, methods=[\"post\"])\n    def export(self, request):\n        pass\n\n    def helper(self):\n        pass\n"
+	m.PutFile("shop", "HEAD", query.File{Path: "shop/urls.py", Content: urls})
+	m.PutFile("shop", "HEAD", query.File{Path: "shop/views.py", Content: views, Symbols: []query.SymbolSpan{
+		{Name: "OrderViewSet", StartLine: 1, EndLine: 10}, {Name: "create", StartLine: 2, EndLine: 3}, {Name: "export", StartLine: 5, EndLine: 7}, {Name: "helper", StartLine: 9, EndLine: 10}}})
+	for _, q := range []string{"shop.OrderViewSet", "shop.OrderViewSet.create", "shop.OrderViewSet.export", "shop.OrderViewSet.helper"} {
+		m.Put("shop", "HEAD", q, rec(q, q))
+	}
+	reach := func(q string) []string {
+		r := query.Explain(m, "HEAD", q, query.ExplainOptions{})
+		var out []string
+		for _, x := range r.Symbol.ReachedBy {
+			out = append(out, x.Detail)
+		}
+		return out
+	}
+	if got := reach("shop.OrderViewSet.create"); len(got) != 1 || !strings.Contains(got[0], "api/orders/ ") || !strings.Contains(got[0], "via its class") {
+		t.Errorf("create reached by %v", got)
+	}
+	if got := reach("shop.OrderViewSet.export"); len(got) != 1 || !strings.Contains(got[0], "POST /api/orders/export/") {
+		t.Errorf("export reached by %v", got)
+	}
+	if got := reach("shop.OrderViewSet.helper"); len(got) != 0 {
+		t.Errorf("a helper is not reached by a route: %v", got)
+	}
+	if got := reach("shop.OrderViewSet"); len(got) < 2 {
+		t.Errorf("the viewset class is reached by its routes: %v", got)
+	}
+}

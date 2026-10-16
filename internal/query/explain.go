@@ -179,6 +179,9 @@ type ExplainOptions struct {
 // they serve the detail route (true) or the collection route (false).
 var viewsetActions = map[string]bool{"list": false, "create": false, "retrieve": true, "update": true, "partial_update": true, "destroy": true}
 
+// httpVerbs are class-based view methods named after the HTTP method they serve.
+var httpVerbs = map[string]bool{"get": true, "post": true, "put": true, "patch": true, "delete": true, "head": true, "options": true}
+
 var (
 	reRouteTarget = regexp.MustCompile(`(?i)^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ANY|\*)\s+(\S+)$`)
 	reLineSuffix  = regexp.MustCompile(`^(.*):(\d+)$`)
@@ -187,6 +190,15 @@ var (
 // Explain resolves target (symbol | path[:line] | directory | "METHOD /route")
 // and assembles its understanding bundle.
 func Explain(s Store, ref, target string, opt ExplainOptions) ExplainResult {
+	r := explainTarget(s, ref, target, opt)
+	r.Next = withRef(r.Next, ref)
+	if r.Symbol != nil {
+		r.Symbol.Edit = hintRef(r.Symbol.Edit, ref)
+	}
+	return r
+}
+
+func explainTarget(s Store, ref, target string, opt ExplainOptions) ExplainResult {
 	budget := opt.Budget
 	if budget <= 0 {
 		budget = DefaultExplainBudget
@@ -279,6 +291,31 @@ func Explain(s Store, ref, target string, opt ExplainOptions) ExplainResult {
 	res.Symbol = explainSymbol(s, rp, ref, qid, files, newSpanIndex(files), budget, &res)
 	res.Next = symbolNext(res.Symbol)
 	return res
+}
+
+// withRef adds a non-default ref to the drill-in commands of a hint list, so
+// following a hint reads the same ref the answer was read at.
+func withRef(hints []string, ref string) []string {
+	for i, h := range hints {
+		hints[i] = hintRef(h, ref)
+	}
+	return hints
+}
+
+func hintRef(h, ref string) string {
+	if ref == "" || ref == "HEAD" {
+		return h
+	}
+	for _, c := range []string{"reponite explain ", "reponite map", "reponite brief "} {
+		if strings.HasPrefix(h, c) {
+			cmd, rest, _ := strings.Cut(h, "   (")
+			if rest != "" {
+				rest = "   (" + rest
+			}
+			return cmd + " " + ref + rest
+		}
+	}
+	return h
 }
 
 func scopeOf(opt ExplainOptions) string {
@@ -530,6 +567,11 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(base) + `\b`)
 	var out []Reach
 	rr := RoutesWith(s, FleetRepo, ref, "", 1<<30, RoutesOptions{})
+	type hit struct {
+		l   RouteLink
+		via string
+	}
+	var direct, viaClass []hit
 	for _, l := range rr.Links {
 		r := l.Route
 		if r.Repo != repo {
@@ -538,23 +580,27 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 		h := strings.TrimSuffix(strings.Split(r.Handler, "(")[0], ".as_view")
 		segs := strings.Split(h, ".")
 		last := segs[len(segs)-1]
-		match := last == base && (len(segs) < 2 || class == "" || segs[len(segs)-2] == class || kind == "class")
-		via := ""
-		if !match && class != "" && last == class {
-			// A class-based view/viewset routed as a whole: its standard
-			// action methods serve the collection or the detail route.
+		switch {
+		case last == base && (len(segs) < 2 || class == "" || segs[len(segs)-2] == class || kind == "class"):
+			direct = append(direct, hit{l, ""})
+		case r.Handler == "" && word.MatchString(lineAtFile(s, repo, ref, r.Path, r.Line)):
+			direct = append(direct, hit{l, ""})
+		case class != "" && last == class:
+			// A class-based view/viewset routed as a whole: only its standard
+			// action and HTTP-verb methods are reached through the class.
 			detail := strings.HasSuffix(strings.TrimSuffix(r.Pattern, "/"), "{}")
-			if act, std := viewsetActions[base]; !std || act == detail {
-				match, via = true, " (via its class "+class+")"
+			if act, std := viewsetActions[base]; std && act == detail ||
+				httpVerbs[base] && (r.Method == "*" || strings.EqualFold(r.Method, base)) {
+				viaClass = append(viaClass, hit{l, " (via its class " + class + ")"})
 			}
 		}
-		if !match && r.Handler == "" {
-			match = word.MatchString(lineAtFile(s, repo, ref, r.Path, r.Line))
-		}
-		if !match {
-			continue
-		}
-		d := fmt.Sprintf("%s /%s [%s]%s", r.Method, strings.TrimPrefix(r.Pattern, "/"), r.Framework, via)
+	}
+	if len(direct) > 0 {
+		viaClass = nil // a method with its own route is not also reached through its class
+	}
+	for _, x := range append(direct, viaClass...) {
+		r, l := x.l.Route, x.l
+		d := fmt.Sprintf("%s /%s [%s]%s", r.Method, strings.TrimPrefix(r.Pattern, "/"), r.Framework, x.via)
 		out = append(out, Reach{Kind: "route", Detail: d, Repo: r.Repo, Path: r.Path, Line: r.Line})
 		for i, c := range l.Clients {
 			if i == 3 {
@@ -941,13 +987,14 @@ func explainDir(s Store, repo, ref, dir string, files []File, budget int, res *E
 		res.Truncated = true
 	}
 	idx := newSpanIndex(files)
+	all := s.SymbolsAt(repo, ref)
 	syms := map[string]SymbolRef{}
-	for q, r := range s.SymbolsAt(repo, ref) {
+	for q, r := range all {
 		if l, ok := idx.locate(q); ok && (dir == "" || strings.HasPrefix(l.Path, dir+"/")) {
 			syms[q] = r
 		}
 	}
-	for _, h := range hubs(syms, s.Snapshot(repo, ref), idx) {
+	for _, h := range hubsIn(syms, all, s.Snapshot(repo, ref), idx) {
 		c := estTokens(h.Symbol+h.Path) + 8
 		if spent+c > budget || len(ed.Hubs) >= 10 {
 			break

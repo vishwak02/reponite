@@ -240,6 +240,54 @@ Content is addressed by hash, so **identical code across refs is stored once**. 
 Every command below prints JSON, so it pipes cleanly into `jq` or a script.
 
 <details open>
+<summary><b>Orientation — <code>map</code>, <code>explain</code>, <code>guide</code></b></summary>
+
+The first calls on a codebase you have never seen. Both read any indexed ref, take
+`--budget <tokens>` (default ~3000) and `--format text`, and end with `truncated` plus
+`next` drill-in commands instead of cutting silently.
+
+```sh
+reponite map --repo shop 2.1.0 --format text   # one repo in depth
+reponite map                                   # the fleet: every repo + cross-repo links
+reponite explain orders.Load                   # a symbol
+reponite explain web/src/App.tsx               # a file  (or path:line, or a directory)
+reponite explain "GET /api/orders"             # a route: handler + every client calling it
+reponite guide                                 # which command answers which question
+```
+
+- **`map`** reports the README summary line; languages with file and symbol counts;
+  **entry points** — `main` functions, CLI commands and subcommands (argparse, click,
+  typer, fire, cobra, urfave/cli, clap, commander/yargs, console scripts, npm `bin`), HTTP
+  servers with their route count per framework, web UI roots (React, Vue, Angular) and
+  page routes (React Router, Vue Router, Angular, Next.js), ROS nodes, launch files and
+  pluginlib/component plugins, CMake/Cargo build targets, Dockerfile `CMD`/`ENTRYPOINT`,
+  docker-compose services, CI jobs (GitHub Actions, GitLab CI, Jenkins), package.json
+  scripts and Make targets; **modules** with the one-line purpose their own docs state
+  (package manifest description, README, Go package doc, Python `__init__` docstring, Rust
+  `//!`, Java `package-info`, Django app name, `@file`/`@module`) — never an invented one;
+  **hubs**, the symbols with the most resolved call edges; and the **declared external
+  dependencies** from go.mod, package.json, requirements*.txt, pyproject.toml, Pipfile,
+  setup.cfg, package.xml, CMakeLists.txt, Cargo.toml and pom.xml (the repo's own packages
+  removed). Without `--repo` it lists every indexed repo and the links the index already
+  knows between them: HTTP client → route, ROS topic, import-resolved reference, declared
+  dependency.
+- **`explain`** resolves whatever handle you hold. A **symbol**: kind, signature,
+  decorators, doc comment, location, body (trimmed to the budget), direct callers and
+  callees with `resolution_method` + `confidence`, the HTTP route / ROS topic / UI event
+  (`onClick={…}`, `@click`, `(click)`) that reaches it, the tests referencing it, and the
+  `brief` command for editing it. A **file**: its symbols, imports, role, entry points,
+  routes and topics, and which files call into it and which it calls. A **directory**: its
+  purpose, files and most connected symbols. A **route**: the server handler and every
+  client call that reaches it. A name defined in several repos returns the candidates.
+- **`guide`** prints the decision table an AI agent should follow; MCP serves the same
+  table as the `reponite_guide` tool, prompt and resource.
+
+READMEs, Dockerfiles, Makefiles, manifests and CI workflows are stored at index time
+(IndexVer 6); a ref indexed earlier maps without them and `map` says so.
+
+</details>
+
+<details open>
 <summary><b>Search — four rungs, cheapest first</b></summary>
 
 Pick the cheapest rung that answers your question.
@@ -515,10 +563,14 @@ your code **without opening source files** — spending a fraction of the tokens
 reponite setup .    # register with Claude Desktop, Claude Code, Cursor, Windsurf…
 ```
 
-Then the agent has 17 tools:
+Then the agent has these tools (each description says when to use it; the `reponite_guide`
+prompt/resource gives the order):
 
 | Tool | What the agent gets |
 |---|---|
+| `reponite_map` | First call: entry points, modules, hubs, dependencies; fleet links |
+| `reponite_explain` | Understand one symbol / file / directory / route |
+| `reponite_guide` | Which tool answers which question |
 | `reponite_investigate` | One cited dossier answering “how does X work?” |
 | `reponite_search` | Symbols by name, fleet-wide |
 | `reponite_semsearch` | Symbols by keyword ranking (semantic with an embeddings endpoint) |
@@ -688,6 +740,9 @@ reponite <command> [arguments] [flags]
 
 | Command | Description |
 |---|---|
+| `map [ref] [--repo R]` | Orientation: entry points, modules, hubs, dependencies (no `--repo`: the fleet + cross-repo links) |
+| `explain <symbol\|path[:line]\|dir\|"METHOD /route"> [ref]` | Understand one thing: doc, body, callers/callees, routes/topics/UI events, tests |
+| `guide` | The decision table: which command answers which question |
 | `investigate <question…>` | One cited dossier answering a plain-language question |
 | `search <substring>` | Find symbols by name |
 | `semsearch <query>` | Rank symbols by keyword similarity (semantic only with an embeddings endpoint) |

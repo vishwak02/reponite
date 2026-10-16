@@ -298,7 +298,11 @@ func symbolText(b *strings.Builder, s *query.ExplainSymbol) {
 			if t.Calls {
 				how = "calls"
 			}
-			fmt.Fprintf(b, "- %s %s %s\n", t.In, how, loc(t.Path, t.Line))
+			who := t.In
+			if who == "" {
+				who = "(top level)"
+			}
+			fmt.Fprintf(b, "- %s %s %s\n", who, how, loc(t.Path, t.Line))
 		}
 	}
 	if s.Body != "" {
