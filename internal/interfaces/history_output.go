@@ -283,3 +283,71 @@ func orDash(a, b string) string {
 	}
 	return "-"
 }
+
+type testHitDTO struct {
+	Repo      string   `json:"repo"`
+	Path      string   `json:"path"`
+	Line      int      `json:"line"`
+	Name      string   `json:"name"`
+	Handle    string   `json:"handle,omitempty"`
+	Framework string   `json:"framework"`
+	Depth     int      `json:"depth"`
+	Via       []string `json:"via,omitempty"`
+	How       string   `json:"how"`
+	Command   string   `json:"command"`
+}
+
+type testRunDTO struct {
+	Repo      string `json:"repo"`
+	Framework string `json:"framework"`
+	Tests     int    `json:"tests"`
+	Command   string `json:"command"`
+}
+
+type testsDTO struct {
+	Symbol    string       `json:"symbol"`
+	Repo      string       `json:"repo"`
+	Ref       string       `json:"ref"`
+	Tests     []testHitDTO `json:"tests"`
+	Commands  []testRunDTO `json:"commands"`
+	Total     int          `json:"total"`
+	Truncated bool         `json:"truncated"`
+	Next      string       `json:"next,omitempty"`
+	Note      string       `json:"note,omitempty"`
+	Meta      metaDTO      `json:"_meta"`
+}
+
+// TestsJSON renders the tests exercising a symbol and how to run them.
+func TestsJSON(r query.TestsResult) (string, error) {
+	dto := testsDTO{Symbol: r.Symbol, Repo: r.Repo, Ref: r.Ref, Tests: []testHitDTO{}, Commands: []testRunDTO{},
+		Total: r.Total, Truncated: r.Truncated, Next: r.Next, Note: r.Note, Meta: metaOf(r.Meta)}
+	for _, h := range r.Tests {
+		dto.Tests = append(dto.Tests, testHitDTO{Repo: h.Repo, Path: h.Path, Line: h.Line, Name: h.Name, Handle: h.Handle,
+			Framework: h.Framework, Depth: h.Depth, Via: h.Via, How: h.How, Command: h.Command})
+	}
+	for _, c := range r.Commands {
+		dto.Commands = append(dto.Commands, testRunDTO{Repo: c.Repo, Framework: c.Framework, Tests: c.Tests, Command: c.Command})
+	}
+	return marshal(dto)
+}
+
+// TestsText is the terse rendering of TestsJSON.
+func TestsText(r query.TestsResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "tests %s  (%s@%s)\n", r.Symbol, r.Repo, r.Ref)
+	for _, h := range r.Tests {
+		via := ""
+		if len(h.Via) > 0 {
+			via = " via " + strings.Join(h.Via, " → ")
+		}
+		fmt.Fprintf(&b, "d%d %-9s %s:%d %s [%s]%s\n", h.Depth, h.Framework, h.Path, h.Line, h.Name, h.How, via)
+	}
+	for _, c := range r.Commands {
+		fmt.Fprintf(&b, "run (%s, %d): %s\n", c.Framework, c.Tests, c.Command)
+	}
+	if r.Truncated {
+		fmt.Fprintf(&b, "truncated: %s\n", r.Next)
+	}
+	writeTail(&b, r.Note, r.Meta)
+	return b.String()
+}

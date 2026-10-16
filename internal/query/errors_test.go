@@ -16,7 +16,13 @@ func (g graphStore) SymbolsAt(repo, ref string) map[string]SymbolRef {
 	out := map[string]SymbolRef{}
 	for _, f := range g.files[repo] {
 		for _, sp := range f.Symbols {
-			out[pkgFromPath(f.Path)+"."+sp.Name] = SymbolRef{Present: true, IsTest: IsTestPath(f.Path)}
+			name := sp.Name
+			for _, o := range f.Symbols { // a method is qualified by its class
+				if o != sp && o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine {
+					name = o.Name + "." + sp.Name
+				}
+			}
+			out[pkgFromPath(f.Path)+"."+name] = SymbolRef{Present: true, IsTest: IsTestPath(f.Path)}
 		}
 	}
 	return out

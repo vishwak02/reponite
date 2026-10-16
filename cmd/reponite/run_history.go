@@ -100,3 +100,27 @@ func cmdErrors(args []string) {
 	res.Note = joinNote(res.Note, cov)
 	emit(text, func() string { return interfaces.ErrorsText(res) }, func() (string, error) { return interfaces.ErrorsJSON(res) })
 }
+
+// cmdTests: which tests exercise a symbol and the command running just them.
+func cmdTests(args []string) {
+	var budget, depth int
+	var local bool
+	var repoFlag string
+	var ff formatFlag
+	pos := parseCmd("tests", "tests <symbol | Class::method> [ref] [--depth N] [--repo R] [--budget N] [--format text] [--local]", args, func(fs *flag.FlagSet) {
+		fs.IntVar(&depth, "depth", query.DefaultTestDepth, "max call hops between a test and the symbol")
+		fs.IntVar(&budget, "budget", 0, fmt.Sprintf("token budget (0 = default ~%d)", query.DefaultTestsBudget))
+		fs.BoolVar(&local, "local", false, "only consider this repo, not the registered fleet")
+		fs.StringVar(&repoFlag, "repo", "", "the repo defining the symbol (default: this repo, else the one fleet repo that has it)")
+		ff.register(fs)
+	})
+	if len(pos) < 1 {
+		fail(fmt.Errorf("usage: reponite tests <symbol> [ref] [--depth N]"))
+	}
+	text := ff.text()
+	f := openFleet(local)
+	defer f.Close()
+	ref := arg(pos, 1, "HEAD")
+	res := query.Tests(f, f.repoFor(pos[0], ref, repoFlag), ref, pos[0], depth, budget)
+	emit(text, func() string { return interfaces.TestsText(res) }, func() (string, error) { return interfaces.TestsJSON(res) })
+}
