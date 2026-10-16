@@ -13,6 +13,16 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Added
 
+- **`trace <entry> [ref]`** (MCP `reponite_trace`): "what happens when …" as one compact
+  tree. The entry is a symbol, `"VERB /path"`, `path:line`, a CLI command (Django management
+  commands, click/typer, argparse, cobra, commander, `case "name":` dispatch) or a ROS topic;
+  the walk goes down (or `--direction up`) across repos, crossing client → route handler
+  (Django/DRF method dispatch and framework hooks, FastAPI/Flask, Express, Go), publish →
+  subscriber callback, base method → implementations (C++, Python, TS/JS, Java) and imports of
+  other indexed repos. Nodes carry side effects (HTTP out with its route, DB/ORM, publish,
+  file writes, subprocesses, log lines, raised errors), edges their resolution method and
+  confidence; repeated subtrees collapse, cycles are marked, `--depth`/`--budget` cuts are
+  reported with a `next` hint; `--format text` renders an indented tree.
 - **`topics` resolves names read from parameters.** A publisher/subscriber/service
   whose name is a variable, a config-struct member or an inline param read is traced
   to the parameter (`get_ros_param`, `param()`, `getParam`, `declare_parameter`,

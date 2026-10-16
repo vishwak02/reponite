@@ -155,6 +155,20 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
 		mcp.WithString("ref", mcp.Description("default HEAD"))))
+	add(mcp.NewTool("reponite_trace",
+		mcp.WithDescription("\"What happens when …?\" in ONE call: the call tree below an entry (or, with direction=up, how execution gets there), fleet-wide, crossing the boundaries a call graph can't see — a client HTTP call into the server route handler (Django/DRF class views dispatched by method, with the hooks they override; FastAPI/Flask/Express/Go), a ROS publish into the subscribers' callbacks, a base/interface method into its implementations in any repo, an import into another indexed repo. Every node carries its side effects read from its body (HTTP out with the route it hits, DB/ORM reads/writes, publish/emit, file writes, subprocesses, log lines, raised errors), every edge its resolution_method + confidence, and the walk says where and why it stopped (depth, budget, cycle, repeat, ambiguous). entry: a symbol (any spelling, Class::method), \"POST /api/orders\", path/file.ts:42, a CLI command name, or a ROS topic (force with route:/topic:/cli:/symbol:). Use it before reading files to understand a feature end to end, then open nodes with brief/context by their handle."),
+		mcp.WithString("entry", mcp.Required(), mcp.Description("symbol, \"VERB /path\", path:line, CLI command, or topic")),
+		mcp.WithString("direction", mcp.Description("down (default): what it sets off; up: who/what reaches it")),
+		mcp.WithString("depth", mcp.Description("levels to walk (default 5)")),
+		mcp.WithString("budget", mcp.Description("token budget of the text rendering (default 2000); a cut is reported with a next hint")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse indented tree (cheapest), default JSON`)),
+		mcp.WithString("repo", mcp.Description("the repo defining the entry symbol (default: every repo that has it)")),
+		mcp.WithString("skip", mcp.Description("extra library/handle prefixes to treat as noise, comma-separated")),
+		mcp.WithString("gateway", mcp.Description("reverse-proxy gateway config file(s), Caddy JSON, comma-separated")),
+		mcp.WithString("upstream", mcp.Description("which repo serves a gateway upstream, host:port=repo,...")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("tests", mcp.Description(`"true" to walk into test code (default excluded)`))))
 	add(mcp.NewTool("reponite_refs",
 		mcp.WithDescription("List indexed refs for the repo."),
 		mcp.WithString("repo", mcp.Description("target repo (defaults to current)"))))

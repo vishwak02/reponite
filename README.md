@@ -491,6 +491,52 @@ reported under `unresolved_endpoints` (`param:status_topic (unresolved)`), and a
 </details>
 
 <details>
+<summary><b>Trace — "what happens when …", end to end</b></summary>
+
+`trace` walks the call graph from an entry DOWN (what it sets off) or UP (how execution gets
+there) as one compact tree, across repos and across the boundaries a call graph cannot see:
+a client HTTP call into the route handler that serves it (Django/DRF class views dispatched by
+HTTP method, with the framework hooks and serializer methods they override; FastAPI, Flask,
+Express, Go), a ROS publish into the subscribers' callbacks, a base/interface method into its
+implementations in any repo (C++, Python, TypeScript/JavaScript, Java class heads), and an
+import into another indexed repo's module. Each node lists the **side effects** its body
+performs — HTTP calls out (with the route they reach), DB/ORM reads and writes (Django ORM,
+SQLAlchemy, raw SQL, GORM, Prisma, TypeORM/repository calls), publish/emit, file writes,
+subprocesses, log lines, raised errors — and each edge its `resolution_method` + confidence.
+
+```sh
+reponite trace createOrder                      # a symbol (any spelling, Class::method too)
+reponite trace "POST /api/orders" --format text # an HTTP route: starts at the server handler
+reponite trace src/pages/Cart.tsx:42            # the function enclosing a call site
+reponite trace /cmd_vel                         # a ROS topic: starts at the subscribers' callbacks
+reponite trace "manage.py import_orders"        # a CLI command: its registered handler
+reponite trace OrderView.post --direction up    # who reaches this, up to the UI calling it
+```
+
+```text
+- src/api.createOrder  @web:src/api/orders.ts:1
+    ! http L1 POST /api/orders/ → shop:* api/orders/ → views.OrderView
+  - [route] POST /api/orders/ → views.OrderView  ⟵http route-match 0.60  @shop:shop/urls.py:4  (django)
+    - shop.OrderView.post  ⟵handler http-method-dispatch 0.75  @shop/views.py:5
+        ! raise L7 ValidationError "empty order"
+        ! db/write L8 order = Order.objects.create(total=request.data["total"])
+        ! log L9 logger.info "created order %s"
+      - shop.notify  ⟵call name-resolved 0.90  @shop/events.py:1
+          ! exec L2 subprocess.run(["notify-send", str(order.id)])
+```
+
+Breadth-first under `--depth` (default 5) and `--budget` tokens (default 2000, measured on the
+text rendering), so a cut drops the deepest detail first. Repeated subtrees are expanded once
+(`stop: repeat`, `same: <handle>`), cycles are marked, an ambiguous call is resolved by the
+caller's import or receiver when they decide it and otherwise listed with its candidates, and
+standard/library calls are named under `ext`, never walked (`--skip prefix,…` adds prefixes).
+The result says where the walk stopped and why (`stops`, `truncated`, `next`). A framework's
+own behavior (an inherited DRF `create()`) is inferred and labeled so; an unrecognized
+framework is reported as such rather than guessed.
+
+</details>
+
+<details>
 <summary><b>CI gate — fail the build on an API break</b></summary>
 
 ```sh
@@ -534,6 +580,7 @@ Then the agent has 17 tools:
 | `reponite_rootcause_trace` | Same, seeded from a stack trace |
 | `reponite_ximpact` | Fleet callers + per-caller contract skew |
 | `reponite_topics` | ROS publisher ↔ subscriber graph |
+| `reponite_trace` | “What happens when …”: call tree across HTTP/topic/impl boundaries, with side effects |
 | `reponite_repos` | What's indexed and where |
 | `reponite_refs` | A repo's indexed refs |
 
@@ -696,6 +743,7 @@ reponite <command> [arguments] [flags]
 | `brief <symbol> [ref]` | Token-budgeted bundle for editing a symbol |
 | `usages <symbol>` | Every call site, with call-graph confirmation |
 | `topics [name]` | ROS publisher ↔ subscriber / service / action graph |
+| `trace <entry> [ref]` | Call tree from a symbol, `"VERB /route"`, `path:line`, CLI command or topic, with side effects. `--direction up`, `--depth`, `--budget`, `--format text` |
 
 ### Changing code safely
 
