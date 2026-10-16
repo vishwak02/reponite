@@ -290,3 +290,11 @@ func TestConfigDetailAndBudget(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigDynamicKeyNotFlagged(t *testing.T) {
+	s := dataStore{filesStore{files: map[string][]File{"a": {{Path: "a/boot.py", Content: "import os\nfor i in range(3):\n    t = os.environ.get(f\"TOKEN_{i}\")\n"}}}}}
+	keys := collectConfig(s, FleetRepo, "v1")
+	if len(keys) != 1 || keys[0].Key != "TOKEN_*" || keys[0].Status != "" {
+		t.Errorf("dynamic key: %+v", keys)
+	}
+}

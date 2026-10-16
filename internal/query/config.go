@@ -412,6 +412,10 @@ func classifyKey(k *ConfigKey) {
 	case CfgFlag:
 		return // a flag is defined where it is read; being passed is optional
 	}
+	if strings.Contains(k.Key, "*") {
+		k.Note = "name built at runtime (* varies)"
+		return
+	}
 	switch {
 	case k.NReads > 0 && k.NSets == 0:
 		if k.Kind == CfgSetting && frameworkSettings[k.Key] {
@@ -490,7 +494,8 @@ var (
 
 	launchEnvRead = regexp.MustCompile(`\$\((env|optenv)\s+([A-Za-z_]\w*)(?:\s+([^)]*))?\)`)
 	launchEnvSet  = regexp.MustCompile(`<env\s+name\s*=\s*"([\w.-]+)"\s+value\s*=\s*"([^"]*)"`)
-	ciExprEnv     = regexp.MustCompile(`\$\{\{\s*(?:env|vars)\.([A-Za-z_]\w*)\s*\}\}`)
+	ciExprEnv     = regexp.MustCompile(`\$\{\{\s*env\.([A-Za-z_]\w*)\s*\}\}`)
+	dynKeyPart    = regexp.MustCompile(`\$?\{[^}]*\}`)
 )
 
 type cfgScan struct {
@@ -504,6 +509,9 @@ func (c *cfgScan) read(f File, pos int, kind, key, def string, hasDef bool, via 
 	if key == "" {
 		return
 	}
+	// A name built at runtime (f"TOKEN_{i}", "${prefix}_URL"): keep its
+	// shape, the fixed parts, with * for what varies.
+	key = dynKeyPart.ReplaceAllString(key, "*")
 	line := lineOf(f.Content, pos)
 	in, h := enclosingHandle(f, line, c.syms)
 	c.reads = append(c.reads, ConfigRead{Kind: kind, Key: key, Repo: c.repo, Path: f.Path, Line: line, In: in, Handle: h,

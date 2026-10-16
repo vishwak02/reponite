@@ -534,6 +534,8 @@ Then the agent has 17 tools:
 | `reponite_rootcause_trace` | Same, seeded from a stack trace |
 | `reponite_ximpact` | Fleet callers + per-caller contract skew |
 | `reponite_topics` | ROS publisher ↔ subscriber graph |
+| `reponite_models` | Data models: fields, relations, serializers, routes, readers and writers |
+| `reponite_config` | Config keys read (with defaults) vs set; read-never-set / set-never-read |
 | `reponite_repos` | What's indexed and where |
 | `reponite_refs` | A repo's indexed refs |
 
@@ -696,6 +698,8 @@ reponite <command> [arguments] [flags]
 | `brief <symbol> [ref]` | Token-budgeted bundle for editing a symbol |
 | `usages <symbol>` | Every call site, with call-graph confirmation |
 | `topics [name]` | ROS publisher ↔ subscriber / service / action graph |
+| `models [model] [ref]` | Data layer: an ER summary, or one model's fields, relations, serializers, routes, readers and writers |
+| `config [key] [ref]` | Configuration surface: env/flags/settings/feature flags/ROS params read vs set |
 
 ### Changing code safely
 
@@ -733,6 +737,52 @@ Every command accepts `--help`. Fleet-wide commands accept `--local`.
 - **`REPONITE_REFS=repo=ref,…`** pins repos to the refs a deployed system runs (standing in
   for the default `HEAD`; an explicit ref is read as asked). Answers report the ref actually
   read — the pin's label in `_meta.ref`, and per repo in `_meta.refs` for fleet-wide answers.
+
+### Data models and configuration
+
+`models` answers "what does this backend store, and who touches it?" without reading the
+models package by hand. With no argument it is an ER summary — every model with its table,
+field count and relations, tables first, then by how connected each one is. With a model (class
+or table name, `repo:Name` to pick a repo) it lists the fields (type, null/default/unique/index/pk,
+inherited ones marked), relations **both ways**, the serializers that expose it, the API routes
+whose handler touches it (from `routes`), and the code that **writes** and **reads** it: ORM call
+sites (manager/session/repository/client calls and their chained operation — `filter().update()`
+is a write), related managers and instance saves at lower confidence, and raw SQL naming its
+table anywhere in the fleet. Every site carries `file:line` and a handle for `brief`/`context`.
+
+| Family | Recognized |
+|---|---|
+| Python | Django models (abstract bases, mixins, multi-table parents, `Meta.db_table`), DRF serializers, SQLAlchemy (declarative, 2.0 `Mapped`, Flask-SQLAlchemy), SQLModel, Pydantic and dataclasses (as schemas) |
+| TypeScript/JavaScript | TypeORM, MikroORM, sequelize-typescript entities; Prisma client calls |
+| Schema files | Prisma `.prisma`, SQL DDL (`CREATE`/`ALTER`/`DROP TABLE`, indexes) replayed across migration files in order, protobuf messages (wire schemas) |
+| Go | GORM structs (tags, embedded `gorm.Model`, `TableName()`) |
+
+`config` is the configuration surface: every environment variable, CLI flag, settings key,
+feature flag and ROS parameter the code reads — with the default it falls back to — joined to
+where the repo sets it: `.env` files, docker-compose `environment`, Kubernetes/Helm `env`,
+Dockerfile `ENV`/`ARG`, CI workflow `env`, launch `<env>`/`<param>`/`<rosparam>`, settings
+modules, `.properties`, shell `export`, code that writes the environment, and `--flags` passed in
+scripts. Keys **read but never set** and **set but never read** are listed first — the usual answer
+to "my config change did not take effect". Reads are recognized in Python (`os.getenv`/`os.environ`,
+django-environ, decouple, pydantic `BaseSettings`, Django `settings.X`, argparse/click/typer),
+JS/TS (`process.env`, `import.meta.env`, commander), Go (`os.Getenv`, `env`/`envconfig` tags,
+viper, `flag`/cobra), C/C++ (`getenv`), Rust (`std::env`, clap), Java (`System.getenv`, `@Value`)
+and shell (`${VAR:-default}`).
+
+```bash
+reponite models --format text                 # ER summary, fleet-wide
+reponite models Order 2.4.0 --budget 6000     # one model at a tag
+reponite config --kind env --no-tests         # env vars only, test code hidden
+reponite config DATABASE_URL --format text    # every read and set of one key
+```
+
+Both take `[ref]`, `--ref`/`--refs`/`REPONITE_REFS`, `--repo`, `--no-tests`, `--budget N` (a cut
+answer says `truncated` and how to get the rest) and `--format text`. Detection is by framework
+idiom, so it is medium confidence and says what it recognizes; a model reached only through a
+variable of unknown type, or a value set outside the indexed repos (a secret store, a deploy
+tool), is not seen. Schema and configuration files (`.sql`, `.proto`, `.prisma`, `.env*`,
+`Dockerfile`, `.properties`, CI workflow YAML) are indexed from ruleset 6; refs indexed earlier
+are flagged in `_meta.warnings`.
 
 ### Languages
 

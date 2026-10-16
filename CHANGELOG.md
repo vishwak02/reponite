@@ -13,6 +13,26 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Added
 
+- **`models [model] [ref]`** and MCP **`reponite_models`**: the data layer. An ER summary
+  (tables first, ranked by connectedness), or one model's fields, relations both ways,
+  serializers, the routes whose handler touches it, and its writers and readers (ORM call
+  sites with the chained operation, related managers, raw SQL naming the table fleet-wide),
+  token-budgeted with `truncated`/`next`. Django, DRF, SQLAlchemy/SQLModel, Pydantic,
+  dataclasses, TypeORM/MikroORM/sequelize-typescript, Prisma, GORM, SQL DDL across
+  migrations, protobuf.
+- **`config [key] [ref]`** and MCP **`reponite_config`**: every env var, CLI flag, settings
+  key, feature flag and ROS parameter read (with its default) joined to where it is set
+  (.env, compose, k8s/Helm, Dockerfile, CI, launch files, settings modules, .properties,
+  exports, flags passed in scripts); keys read-never-set and set-never-read flagged.
+- `--format text` on both.
+
+#### Changed
+
+- **Index ruleset 6**: `.sql`, `.proto`, `.prisma`, `.env*`, `Dockerfile`, `.properties` and
+  CI workflow YAML (`.github/workflows`, `.circleci`, `.gitlab-ci.yml`; ≤ 256 KB) are stored.
+
+#### Added
+
 - **`topics` resolves names read from parameters.** A publisher/subscriber/service
   whose name is a variable, a config-struct member or an inline param read is traced
   to the parameter (`get_ros_param`, `param()`, `getParam`, `declare_parameter`,

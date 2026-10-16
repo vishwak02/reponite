@@ -450,7 +450,7 @@ func inheritPy(ms []DataModel, byClass map[*pyCls]*DataModel, r *pyRepo) {
 					}
 				}
 				for _, rel := range bm.Relations {
-					if rel.Kind != "parent" {
+					if rel.Kind != "parent" && !hasRelField(m.Relations, rel.Field) {
 						m.Relations = append(m.Relations, rel)
 					}
 				}
@@ -860,7 +860,7 @@ func schemaModel(repo string, c *pyCls, cat string) (DataModel, bool) {
 			continue
 		}
 		typ, null := unwrapAnn(ann)
-		f := DataField{Name: name, Type: typ, Null: null, Line: s.line}
+		f := DataField{Name: name, Type: strings.Trim(typ, `"'`), Null: null, Line: s.line}
 		if val != "" {
 			f.Default = val
 			if callee, pos, kw, ok := pyCall(val); ok && (lastDot(callee) == "Field" || lastDot(callee) == "field") {
@@ -899,3 +899,12 @@ var pyBuiltinType = map[string]bool{"Any": true, "Dict": true, "List": true, "Op
 	"UUID": true, "Decimal": true, "Path": true, "Enum": true, "Json": true, "EmailStr": true, "HttpUrl": true, "AnyUrl": true,
 	"SecretStr": true, "Callable": true, "Type": true, "Mapping": true, "PositiveInt": true, "IPvAnyAddress": true,
 	"datetime": true, "date": true, "time": true, "timedelta": true, "Annotated": true, "Set": true, "Tuple": true}
+
+func hasRelField(rs []DataRelation, field string) bool {
+	for _, r := range rs {
+		if r.Field == field {
+			return true
+		}
+	}
+	return false
+}

@@ -204,7 +204,11 @@ func ModelsText(r query.ModelsResult) string {
 	}
 	for _, d := range r.Details {
 		m := d.Model
-		fmt.Fprintf(&b, "\n%s %s (%s %s) %s:%s:%d", m.Kind, m.Name, m.Framework, m.Table, m.Repo, m.Path, m.Line)
+		fw := m.Framework
+		if m.Table != "" {
+			fw += " " + m.Table
+		}
+		fmt.Fprintf(&b, "\n%s %s (%s) %s:%s:%d", m.Kind, m.Name, fw, m.Repo, m.Path, m.Line)
 		if m.Handle != "" {
 			fmt.Fprintf(&b, "  #%s", m.Handle)
 		}
