@@ -780,12 +780,16 @@ func Errors(s Store, repo, ref, q string, budget int) ErrorsResult {
 	spent := 30
 	snaps := map[string]RefSnapshot{}
 	syms := map[string]map[string]SymbolRef{}
+	idx := map[string]baseIndex{}
 	for _, x := range matched {
 		if _, ok := snaps[x.Repo]; !ok {
 			snaps[x.Repo] = s.Snapshot(x.Repo, ref)
 			syms[x.Repo] = s.SymbolsAt(x.Repo, ref)
 		}
-		x.Handle = siteHandle(syms[x.Repo], x.Path, x.In)
+		if idx[x.Repo] == nil {
+			idx[x.Repo] = baseIndexOf(syms[x.Repo])
+		}
+		x.Handle = siteHandleIn(idx[x.Repo], x.Path, x.In)
 		if x.Handle != "" {
 			callers := callersOf(snaps[x.Repo], x.Handle)
 			if len(callers) > 5 {
@@ -871,27 +875,39 @@ func matchMessage(x ErrorSite, msg string) int {
 // siteHandle resolves the enclosing symbol of a site to a stored id: the
 // symbol in the file's package with that bare name (a unique one).
 func siteHandle(syms map[string]SymbolRef, path, in string) string {
+	return siteHandleIn(baseIndexOf(syms), path, in)
+}
+
+// baseIndex maps a bare symbol name to the qualified ids defining it, so a
+// lookup by name is a map read rather than a scan of every symbol. Build it
+// once per answer and reuse it for every site.
+type baseIndex map[string][]string
+
+func baseIndexOf(syms map[string]SymbolRef) baseIndex {
+	idx := baseIndex{}
+	for k := range syms {
+		b := baseName(k)
+		idx[b] = append(idx[b], k)
+	}
+	return idx
+}
+
+func siteHandleIn(idx baseIndex, path, in string) string {
 	if in == "" {
 		return ""
 	}
 	pkg := pkgFromPath(path)
 	var cands []string
-	for k := range syms {
-		if baseName(k) != in {
-			continue
-		}
+	for _, k := range idx[in] {
 		if pkg == "" && !strings.Contains(k, "/") || pkg != "" && strings.HasPrefix(k, pkg+".") {
 			cands = append(cands, k)
 		}
 	}
-	if len(cands) == 1 {
-		return cands[0]
+	if len(cands) == 0 {
+		return ""
 	}
 	sort.Strings(cands)
-	if len(cands) > 1 {
-		return cands[0]
-	}
-	return ""
+	return cands[0]
 }
 
 func callersOf(snap RefSnapshot, qid string) []string {

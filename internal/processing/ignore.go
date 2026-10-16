@@ -57,6 +57,9 @@ type IndexSummary struct {
 	Files     int
 	TestFiles int
 	TopDirs   []DirCount
+	// Skipped are source files not parsed: too large to be hand-written, or
+	// binary (sourceguard.go).
+	Skipped []SkippedFile
 }
 
 // Ignore is an ordered list of gitignore-style patterns; the LAST matching

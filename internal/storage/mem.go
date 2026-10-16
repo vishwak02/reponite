@@ -155,6 +155,8 @@ func (m *Mem) SetModulePath(repo, modulePath string) error {
 	m.repos[repo] = struct{}{}
 	if modulePath != "" {
 		m.modules[repo] = modulePath
+	} else {
+		delete(m.modules, repo) // no repo-level module: forget one recorded earlier
 	}
 	return nil
 }

@@ -144,6 +144,37 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	}
 	inRepo := func(module string) bool { return moduleInRepo(module, dirs) }
 
+	// A call resolves only to a definition its language can call: a Python
+	// logger.info() must never land on a shell function info() elsewhere in the
+	// repo just because the bare name is unique. Each caller language gets its
+	// own view of the definitions (built once per language present).
+	type langView struct {
+		nodeSet map[string]bool
+		byBase  map[string][]string
+	}
+	views := map[string]langView{}
+	viewFor := func(lang string) langView {
+		fam := langFamily(lang)
+		if v, ok := views[fam]; ok {
+			return v
+		}
+		v := langView{nodeSet: map[string]bool{}, byBase: map[string][]string{}}
+		for _, q := range order {
+			if canCall(fam, langFamily(byQID[q].lang)) {
+				v.nodeSet[q] = true
+			}
+		}
+		for base, qs := range byBase {
+			for _, q := range qs {
+				if v.nodeSet[q] {
+					v.byBase[base] = append(v.byBase[base], q)
+				}
+			}
+		}
+		views[fam] = v
+		return v
+	}
+
 	nodes := make([]Node, 0, len(order))
 	var edges []Edge
 	resolved := make(map[string][]query.Callee, len(order))
@@ -152,6 +183,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
 		var callees []query.Callee
 		x.callerTest = x.isTest[qid]
+		v := viewFor(c.lang)
+		x.nodeSet, x.byBase = v.nodeSet, v.byBase
+		nodeSet, byBase := v.nodeSet, v.byBase
 		if len(c.sym.CallSites) > 0 {
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {

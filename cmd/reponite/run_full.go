@@ -255,10 +255,10 @@ func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeF
 	if err != nil {
 		fail(err)
 	}
+	var missing []string
 	for _, p := range pins {
 		if p.RepoDir == "" {
-			fmt.Fprintf(os.Stderr, "reponite: submodule %s (%s) pinned at %s: commit not available locally (git submodule update --init %s) — not indexed\n",
-				p.Name, p.Path, shortHash(p.Commit), p.Path)
+			missing = append(missing, p.Path+"@"+shortHash(p.Commit))
 			continue
 		}
 		sub := repoName(p.RepoDir)
@@ -272,6 +272,17 @@ func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeF
 			processing.IndexOptions{Excludes: excludes, Report: printIndexSummary}, force)
 		registerRepo(sub, p.RepoDir, sst.ModulePath(sub))
 		sst.Close()
+	}
+	// One line for every submodule whose pinned commit is not on this machine:
+	// a monorepo with dozens of uninitialized submodules otherwise buries the
+	// index result under a screen of identical warnings.
+	if n := len(missing); n > 0 {
+		shown := missing
+		if n > 8 {
+			shown = append(append([]string{}, missing[:8]...), fmt.Sprintf("+%d more", n-8))
+		}
+		fmt.Fprintf(os.Stderr, "reponite: %d submodule(s) not indexed — their pinned commits are not on this machine (git submodule update --init --recursive): %s\n",
+			n, strings.Join(shown, ", "))
 	}
 }
 
@@ -301,6 +312,17 @@ func printIndexSummary(sum processing.IndexSummary) {
 		shown++
 	}
 	fmt.Println()
+	if n := len(sum.Skipped); n > 0 {
+		fmt.Printf("  %d file(s) not parsed (too large to be source, or binary):", n)
+		for i, s := range sum.Skipped {
+			if i == 5 {
+				fmt.Printf(" (+%d more)", n-5)
+				break
+			}
+			fmt.Printf(" %s [%s]", s.Path, s.Reason)
+		}
+		fmt.Println()
+	}
 }
 
 func shortHash(h string) string {

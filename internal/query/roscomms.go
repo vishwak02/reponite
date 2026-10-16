@@ -235,6 +235,19 @@ func lastSegment(s string) string {
 }
 
 // commLang classifies a path as a ROS client-library language, or "" if neither.
+// commWords are substrings every comm idiom contains; a file with none of
+// them has no endpoint, and is skipped without running the per-line regexes.
+var commWords = []string{"advertise", "subscribe", "Publisher", "Subscriber", "create_", "Service", "serviceClient", "ActionServer", "ActionClient", "subscription"}
+
+func mayHaveComms(content string) bool {
+	for _, w := range commWords {
+		if strings.Contains(content, w) {
+			return true
+		}
+	}
+	return false
+}
+
 func commLang(path string) string {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx", ".h", ".c":
@@ -253,7 +266,7 @@ func commLang(path string) string {
 // files. Pure: it reads only the passed content and spans.
 func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoint, unresolved int) {
 	lang := commLang(path)
-	if lang == "" {
+	if lang == "" || !mayHaveComms(content) {
 		return nil, 0
 	}
 	var callbackTypes map[string]string // lazily built: only when a C++ endpoint needs it

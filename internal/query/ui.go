@@ -109,6 +109,20 @@ type uiCtx struct {
 	routeOf  map[string][]UIRoute    // repo\x00path\x00line -> routes it reaches
 	byBase   map[string]map[string][]string
 	reach    map[string][]UIAPICall // memo: repo\x00qid -> calls reachable from it
+	snaps    map[string]RefSnapshot // memo: repo -> its call graph at ref (read once, walked many times)
+}
+
+// snapshot is the repo's call graph at the context's ref, read once.
+func (c *uiCtx) snapshot(repo string) RefSnapshot {
+	if c.snaps == nil {
+		c.snaps = map[string]RefSnapshot{}
+	}
+	if v, ok := c.snaps[repo]; ok {
+		return v
+	}
+	v := c.s.Snapshot(repo, c.ref)
+	c.snaps[repo] = v
+	return v
 }
 
 func newUICtx(s Store, repo, ref string, opt UIOptions) *uiCtx {
@@ -615,7 +629,7 @@ func (c *uiCtx) basesOf(repo string) map[string][]string {
 		return m
 	}
 	m := map[string][]string{}
-	for qid := range c.s.Snapshot(repo, c.ref).Symbols {
+	for qid := range c.snapshot(repo).Symbols {
 		b := qid[strings.LastIndexByte(qid, '.')+1:]
 		m[b] = append(m[b], qid)
 	}
@@ -648,7 +662,7 @@ func (c *uiCtx) reachable(repo, qid string) []UIAPICall {
 		return v
 	}
 	c.reach[key] = nil // cycle guard
-	snap := c.s.Snapshot(repo, c.ref)
+	snap := c.snapshot(repo)
 	type node struct {
 		q   string
 		via []string

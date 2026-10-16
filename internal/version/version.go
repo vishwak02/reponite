@@ -43,7 +43,12 @@ const (
 	//   8: JSON data files (up to 256 KB, lockfiles excepted) and rviz
 	//      configs are stored as content-only files, so `errors` finds names
 	//      defined in JSON catalogues and `topics` reads rviz displays/tools.
-	IndexVer = 8
+	//   9: content files get sections as symbols (Markdown/rST headings,
+	//      YAML/JSON keys and named list entries, TOML/INI tables, Dockerfile
+	//      stages, Makefile targets); Markdown, rST, TOML/INI, templates, Salt,
+	//      Jsonnet and XML are stored; oversized, binary and minified source
+	//      is skipped and reported; Robot Framework suites and keywords.
+	IndexVer = 9
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

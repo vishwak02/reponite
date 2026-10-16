@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Route is one server endpoint definition.
@@ -256,13 +257,21 @@ func normURL(u string) string {
 	return strings.Join(segs, "/")
 }
 
+// segCache memoizes segments: matching compares every client call with every
+// route, so the same few hundred URLs are split thousands of times.
+var segCache sync.Map
+
 func segments(u string) []string {
+	if v, ok := segCache.Load(u); ok {
+		return v.([]string)
+	}
 	var out []string
 	for _, s := range strings.Split(normURL(u), "/") {
 		if s != "" {
 			out = append(out, s)
 		}
 	}
+	segCache.Store(u, out)
 	return out
 }
 

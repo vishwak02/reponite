@@ -85,3 +85,33 @@ func TestUsagesUnconfirmedLexical(t *testing.T) {
 		}
 	}
 }
+
+// A call written without parentheses — a shell function, a JSX element — is
+// still a usage when the call graph has the caller: it is found in the
+// caller's body and confirmed.
+func TestUsagesWithoutParentheses(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "scripts/deploy.sh",
+		Content: "check_repo() {\n  git status\n}\ndeploy() {\n  check_repo \"io\"\n  echo done\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "check_repo", StartLine: 1, EndLine: 3}, {Name: "deploy", StartLine: 4, EndLine: 7}},
+	})
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "web/Home.tsx",
+		Content: "export function Home() {\n  return (\n    <Layout model={m} />\n  );\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "Home", StartLine: 1, EndLine: 5}},
+	})
+	m.Put("r", "HEAD", "scripts.deploy", storage.SymbolRecord{
+		Callees: []query.Callee{{Name: "scripts.check_repo", ResolutionMethod: "name-resolved", Confidence: 0.9}}})
+	m.Put("r", "HEAD", "scripts.check_repo", storage.SymbolRecord{})
+	m.Put("r", "HEAD", "web.Home", storage.SymbolRecord{
+		Callees: []query.Callee{{Name: "web.Layout", ResolutionMethod: "name-resolved", Confidence: 0.9}}})
+	m.Put("r", "HEAD", "web.Layout", storage.SymbolRecord{})
+
+	if res := query.Usages(m, "r", "HEAD", "scripts.check_repo"); res.Total != 1 || res.Usages[0].Line != 5 || !res.Usages[0].Confirmed {
+		t.Errorf("shell call: %+v", res.Usages)
+	}
+	if res := query.Usages(m, "r", "HEAD", "web.Layout"); res.Total != 1 || res.Usages[0].Line != 3 || res.Usages[0].In != "Home" {
+		t.Errorf("JSX element: %+v", res.Usages)
+	}
+}

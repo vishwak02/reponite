@@ -22,6 +22,11 @@ func IsExportedName(lang, base string) bool {
 		return false
 	}
 	switch lang {
+	case "yaml", "json", "rviz", "markdown", "rst", "toml", "ini", "template", "sls", "jsonnet", "xml",
+		"project", "dockerfile", "dotenv", "properties":
+		// Sections of configuration, data and docs (contentsections.go) are not
+		// an API: a PR gate must not fail because a README heading moved.
+		return false
 	case "go":
 		// Go: exported iff the first rune is an uppercase letter.
 		r, _ := utf8.DecodeRuneInString(base)

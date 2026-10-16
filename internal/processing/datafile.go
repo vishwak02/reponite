@@ -115,6 +115,8 @@ func dataFile(p, content string) (ParsedFile, bool) {
 	lang := dataLang(p)
 	pf := ParsedFile{Path: p, Content: content, Lang: lang, IsTest: IsTestPath(p)}
 	switch lang {
+	case "dockerfile":
+		pf.Symbols, pf.Spans = sectionSymbols(p, content)
 	case "sql":
 		for _, m := range sqlCreateSpan.FindAllStringSubmatchIndex(content, -1) {
 			name := strings.Trim(content[m[4]:m[5]], "\"`[]")

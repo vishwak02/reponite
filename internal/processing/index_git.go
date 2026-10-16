@@ -61,6 +61,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	ig := NewIgnore(ignoreContent, opt.Excludes)
 
 	var files []ParsedFile
+	var skipped []SkippedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
 		dotted := strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.")
@@ -135,6 +136,17 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			return nil
 		}
+		if IsRobotFile(f.Name) {
+			// Robot Framework suites and keyword libraries: tests and keywords as symbols.
+			if f.Size > maxContentFileBytes {
+				skipped = append(skipped, SkippedFile{f.Name, "larger than a hand-written suite"})
+				return nil
+			}
+			if src, cerr := f.Contents(); cerr == nil {
+				files = append(files, robotFile(f.Name, src))
+			}
+			return nil
+		}
 		if IsContentFile(f.Name) {
 			// JSON catalogues and rviz configs: content-only, for errors/topics/grep
 			if f.Size > maxContentFileBytes {
@@ -151,9 +163,21 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 		if _, known := RulesForExt(ext); !known && ext != "" {
 			return nil // an unsupported extension: never read its blob
 		}
+		if why := skipSourceReason(f.Name, f.Size, nil); why != "" {
+			if ext != "" {
+				skipped = append(skipped, SkippedFile{f.Name, why})
+			}
+			return nil // never read a blob too large to be source
+		}
 		src, err := f.Contents()
 		if err != nil {
 			return err
+		}
+		if why := skipSourceReason(f.Name, int64(len(src)), []byte(src)); why != "" {
+			if ext != "" || strings.HasPrefix(src, "#!") {
+				skipped = append(skipped, SkippedFile{f.Name, why})
+			}
+			return nil
 		}
 		rules, ext, ok := RulesForSource(ext, []byte(src))
 		if !ok {
@@ -192,7 +216,12 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	if err := indexFiles(w, repo, ref, normVer, files, nil, opt.Peers); err != nil {
 		return "", err
 	}
-	if mod, ok := DetectModulePath(manifests); ok {
+	if opt.Report != nil {
+		opt.Report(summarize(files, skipped))
+	}
+	if mod, ok := DetectModulePath(manifests); ok || len(manifests) > 0 {
+		// A tree with manifests but no single repo-level one (a workspace)
+		// clears an identity an earlier index recorded.
 		if err := w.SetModulePath(repo, mod); err != nil {
 			return "", err
 		}

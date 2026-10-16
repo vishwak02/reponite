@@ -23,6 +23,37 @@ var manifestNames = []string{"go.mod", "package.json", "pyproject.toml", "pom.xm
 // (a monorepo with nested modules), the root-most (fewest path segments) wins,
 // so the path names the repo as a whole. Returns ("", false) if none parse.
 func DetectModulePath(files map[string][]byte) (string, bool) {
+	// Below the root, a manifest names the repo only when it is the ONLY
+	// manifest of any kind at its depth: several packages side by side — of one
+	// ecosystem or several (a ROS package next to a web UI next to a Python
+	// tool) — make a workspace, and no one of them is the repo's identity.
+	minDepth, atMin := -1, 0
+	for path := range files {
+		if !isManifestName(filepath.Base(path)) {
+			continue
+		}
+		d := strings.Count(filepath.ToSlash(path), "/")
+		switch {
+		case minDepth == -1 || d < minDepth:
+			minDepth, atMin = d, 1
+		case d == minDepth:
+			atMin++
+		}
+	}
+	if minDepth > 0 && atMin > 1 {
+		return "", false
+	}
+	// A manifest at the root names the repo whatever the ecosystem order: a
+	// root pyproject.toml beats a frontend/package.json or a tools/x/go.mod.
+	if minDepth == 0 {
+		for _, base := range manifestNames {
+			if content, ok := files[base]; ok {
+				if mod, ok := parseModule(base, content); ok {
+					return mod, true
+				}
+			}
+		}
+	}
 	for _, base := range manifestNames {
 		if content, ok := rootMost(files, base); ok {
 			if mod, ok := parseModule(base, content); ok {
@@ -198,6 +229,15 @@ func IsManifestFile(path string) bool {
 	base := filepath.Base(path)
 	for _, m := range manifestNames {
 		if base == m {
+			return true
+		}
+	}
+	return false
+}
+
+func isManifestName(base string) bool {
+	for _, n := range manifestNames {
+		if n == base {
 			return true
 		}
 	}

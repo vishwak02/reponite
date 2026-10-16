@@ -26,6 +26,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite"
 
@@ -45,6 +46,19 @@ type Store struct {
 	path  string           // on-disk path (":memory:" for tests), for the dashboard DB view
 	names map[string]int64 // interned-name cache
 	refs  map[[2]string]int64
+	// symsMu guards syms, the decoded SymbolsAt answer per ref. A query such
+	// as trace resolves hundreds of names against the same ref; decoding the
+	// whole ref from SQLite for each was most of its time. Every write drops
+	// the cache.
+	symsMu sync.Mutex
+	syms   map[int64]map[string]query.SymbolRef
+}
+
+// invalidate drops cached reads; called by every write.
+func (s *Store) invalidate() {
+	s.symsMu.Lock()
+	s.syms = nil
+	s.symsMu.Unlock()
 }
 
 const schema = `
@@ -325,6 +339,7 @@ func (s *Store) withTx(fn func(tx *sql.Tx) error) error {
 
 // AddRef records/updates a ref's commit and manifest hash.
 func (s *Store) AddRef(repo, ref, commit, manifestHash string) error {
+	s.invalidate()
 	return s.withTx(func(tx *sql.Tx) error {
 		id, err := s.refID(tx, repo, ref)
 		if err != nil {
@@ -337,6 +352,7 @@ func (s *Store) AddRef(repo, ref, commit, manifestHash string) error {
 
 // SetIndexVersion stamps the ruleset a ref was indexed under.
 func (s *Store) SetIndexVersion(repo, ref string, v int) error {
+	s.invalidate()
 	return s.withTx(func(tx *sql.Tx) error {
 		id, err := s.refID(tx, repo, ref)
 		if err != nil {
@@ -374,6 +390,7 @@ func (s *Store) RefByCommit(repo, commit string, indexVer int) (string, bool) {
 // commit): its per-ref rows are copied — integers pointing at shared records —
 // so the new label costs a few kilobytes and no re-parse.
 func (s *Store) AliasRef(repo, from, to string) error {
+	s.invalidate()
 	src, ok := s.lookupRef(repo, from)
 	if !ok {
 		return fmt.Errorf("%s@%s is not indexed", repo, from)
@@ -407,6 +424,7 @@ func (s *Store) AliasRef(repo, from, to string) error {
 // reindex replaces rather than accumulates, then reclaims shared rows no ref
 // points at any more (content-addressed rows are kept while any ref uses them).
 func (s *Store) ClearRef(repo, ref string) error {
+	s.invalidate()
 	id, ok := s.lookupRef(repo, ref)
 	if !ok {
 		return nil
@@ -441,6 +459,7 @@ func gc(tx *sql.Tx) error {
 
 // Put stores a symbol at a ref (its record + its callee-edge set).
 func (s *Store) Put(repo, ref, name string, rec storage.SymbolRecord) error {
+	s.invalidate()
 	return s.withTx(func(tx *sql.Tx) error { return s.put(tx, repo, ref, name, rec) })
 }
 
@@ -506,6 +525,7 @@ func (s *Store) edgeSet(tx *sql.Tx, callees []query.Callee) (int64, error) {
 
 // PutFile stores a file and its symbol spans at a ref.
 func (s *Store) PutFile(repo, ref string, f query.File) error {
+	s.invalidate()
 	return s.withTx(func(tx *sql.Tx) error { return s.putFile(tx, repo, ref, f) })
 }
 
@@ -561,6 +581,7 @@ func (s *Store) putFile(tx *sql.Tx, repo, ref string, f query.File) error {
 
 // PutManifest stores a ref's manifest (blobs + identity).
 func (s *Store) PutManifest(repo, ref string, man content.Manifest) error {
+	s.invalidate()
 	if err := s.AddRef(repo, ref, man.Commit, string(man.Hash())); err != nil {
 		return err
 	}
@@ -583,6 +604,7 @@ func (s *Store) PutManifest(repo, ref string, man content.Manifest) error {
 
 // PutExternalRefs replaces a ref's cross-repo dependency edges (§8B).
 func (s *Store) PutExternalRefs(repo, ref string, refs []query.ExternalRef) error {
+	s.invalidate()
 	return s.withTx(func(tx *sql.Tx) error { return s.putExternalRefs(tx, repo, ref, refs) })
 }
 
@@ -619,6 +641,7 @@ func (s *Store) putExternalRefs(tx *sql.Tx, repo, ref string, refs []query.Exter
 
 // PutMonikers replaces a ref's symbol -> SCIP moniker map (§8B.4).
 func (s *Store) PutMonikers(repo, ref string, mons map[string]string) error {
+	s.invalidate()
 	return s.withTx(func(tx *sql.Tx) error { return s.putMonikers(tx, repo, ref, mons) })
 }
 
@@ -647,8 +670,11 @@ func (s *Store) putMonikers(tx *sql.Tx, repo, ref string, mons map[string]string
 
 // SetModulePath records repo's module/package identity (§8B.2).
 func (s *Store) SetModulePath(repo, modulePath string) error {
+	s.invalidate()
 	if modulePath == "" {
-		return nil
+		// No repo-level module (a workspace): forget one recorded earlier.
+		_, err := s.db.Exec(`DELETE FROM repo_modules WHERE repo=?`, repo)
+		return err
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO repo_modules(repo, module_path) VALUES(?,?)
@@ -710,11 +736,37 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 }
 
 func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
-	out := map[string]query.SymbolRef{}
 	rid, ok := s.lookupRef(repo, ref)
 	if !ok {
+		return map[string]query.SymbolRef{}
+	}
+	s.symsMu.Lock()
+	cached, hit := s.syms[rid]
+	s.symsMu.Unlock()
+	if hit {
+		// A copy: callers may add to or delete from the map they get.
+		out := make(map[string]query.SymbolRef, len(cached))
+		for k, v := range cached {
+			out[k] = v
+		}
 		return out
 	}
+	out := s.symbolsAt(rid)
+	s.symsMu.Lock()
+	if s.syms == nil {
+		s.syms = map[int64]map[string]query.SymbolRef{}
+	}
+	s.syms[rid] = out
+	s.symsMu.Unlock()
+	cp := make(map[string]query.SymbolRef, len(out))
+	for k, v := range out {
+		cp[k] = v
+	}
+	return cp
+}
+
+func (s *Store) symbolsAt(rid int64) map[string]query.SymbolRef {
+	out := map[string]query.SymbolRef{}
 	rows, err := s.db.Query(`SELECT n.s, `+symCols+` FROM ref_syms r
 		JOIN syms s ON s.id = r.sym_id JOIN names n ON n.id = r.name_id WHERE r.ref_id=?`, rid)
 	if err != nil {

@@ -33,6 +33,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	ig := loadIgnore(dir, opt.Excludes)
 	scipIdx, scipLocal := loadSCIP(dir)
 	var files []ParsedFile
+	var skipped []SkippedFile
 	hasGo := false
 	manifests := map[string][]byte{} // module-manifest files (go.mod, package.json, ...) by rel path
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
@@ -133,6 +134,13 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
+		// Robot Framework suites and keyword libraries (robot.go).
+		if IsRobotFile(rel) {
+			if b, readErr := os.ReadFile(path); readErr == nil && len(b) <= maxContentFileBytes {
+				files = append(files, robotFile(filepath.ToSlash(rel), string(b)))
+			}
+			return nil
+		}
 		// JSON catalogues and rviz configs: content-only (contentfile.go).
 		if IsContentFile(rel) {
 			if b, readErr := os.ReadFile(path); readErr == nil {
@@ -142,7 +150,10 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
-		src, rules, ext, ok := readSource(path)
+		src, rules, ext, ok, why := readSource(path)
+		if why != "" {
+			skipped = append(skipped, SkippedFile{rel, why})
+		}
 		if !ok {
 			return nil
 		}
@@ -182,17 +193,11 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	// the index unnoticed, inflating it and outranking first-party code in
 	// search — findable today only by accident.
 	if opt.Report != nil {
-		paths := make([]string, 0, len(files))
-		tests := 0
-		for _, f := range files {
-			paths = append(paths, f.Path)
-			if f.IsTest {
-				tests++
-			}
-		}
-		opt.Report(IndexSummary{Files: len(files), TestFiles: tests, TopDirs: DirFootprint(paths, 2)})
+		opt.Report(summarize(files, skipped))
 	}
-	if mod, ok := DetectModulePath(manifests); ok {
+	if mod, ok := DetectModulePath(manifests); ok || len(manifests) > 0 {
+		// A tree with manifests but no single repo-level one (a workspace)
+		// clears an identity an earlier index recorded.
 		return w.SetModulePath(repo, mod)
 	}
 	return nil
@@ -203,32 +208,43 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 // no extension and are usually the most valuable file in a tree to index. Only
 // files with NO extension are peeked, so a known-but-unsupported extension
 // (.yaml, .tf) still costs nothing. ok=false means "skip this file".
-func readSource(path string) (src []byte, rules LangRules, ext string, ok bool) {
+func readSource(path string) (src []byte, rules LangRules, ext string, ok bool, skip string) {
 	ext = filepath.Ext(path)
-	if _, ok = RulesForExt(ext); ok {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return nil, rules, ext, false
-		}
-		rules, ext, ok = RulesForSource(ext, b)
-		return b, rules, ext, ok
+	_, known := RulesForExt(ext)
+	if !known && ext != "" {
+		return nil, rules, ext, false, "" // an unsupported extension, not a script
 	}
-	if ext != "" {
-		return nil, rules, ext, false // an unsupported extension, not a script
+	if st, err := os.Stat(path); err == nil {
+		if why := skipSourceReason(path, st.Size(), nil); why != "" {
+			return nil, rules, ext, false, why // never read a file too large to be source
+		}
 	}
 	b, err := os.ReadFile(path)
-	if err != nil || len(b) < 2 || b[0] != '#' || b[1] != '!' {
-		return nil, rules, ext, false
+	if err != nil {
+		return nil, rules, ext, false, ""
+	}
+	if known {
+		if why := skipSourceReason(path, int64(len(b)), b); why != "" {
+			return nil, rules, ext, false, why
+		}
+		rules, ext, ok = RulesForSource(ext, b)
+		return b, rules, ext, ok, ""
+	}
+	if len(b) < 2 || b[0] != '#' || b[1] != '!' {
+		return nil, rules, ext, false, ""
+	}
+	if why := skipSourceReason(path, int64(len(b)), b); why != "" {
+		return nil, rules, ext, false, why
 	}
 	line := string(b)
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
 		line = line[:i]
 	}
 	if rules, ok = RulesForShebang(line); !ok {
-		return nil, rules, ext, false
+		return nil, rules, ext, false, ""
 	}
 	// Grammar lookup is keyed on extension, so use the language's canonical one.
-	return b, rules, rules.Exts[0], true
+	return b, rules, rules.Exts[0], true, ""
 }
 
 // SCIPFileName is the conventional SCIP index location at a repo root.

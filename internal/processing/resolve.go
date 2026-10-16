@@ -421,3 +421,26 @@ func pickOne(cands []string, x siteIndex) (string, bool) {
 	}
 	return "", false
 }
+
+// langFamily groups languages that call each other's definitions directly:
+// C with C++, JavaScript with TypeScript and single-file components. Content
+// files (sections) form families of their own and are never call targets
+// from code.
+func langFamily(lang string) string {
+	switch lang {
+	case "c", "cpp":
+		return "c"
+	case "javascript", "typescript", "vue", "svelte":
+		return "js"
+	case "", "go":
+		return "go"
+	}
+	return lang
+}
+
+// canCall reports whether code in caller family may resolve a call to a
+// definition in target family by name. Robot Framework calls its own keywords
+// and Python library keywords.
+func canCall(caller, target string) bool {
+	return caller == target || caller == "robot" && target == "python"
+}

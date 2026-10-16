@@ -328,3 +328,36 @@ func TestIndexFilesCapturesTargetSignature(t *testing.T) {
 		t.Fatalf("absent target must capture nothing: %+v", h)
 	}
 }
+
+// A call resolves only within its language family: a shell function info()
+// must not become the target of every logger.info() in Python, while a Robot
+// keyword call does reach a Python library function.
+func TestIndexFilesLanguageGatedResolution(t *testing.T) {
+	m := storage.NewMem()
+	files := []ParsedFile{
+		{Path: "update_workspace.sh", Lang: "shell", Content: "x", Symbols: []Symbol{sym("info", "function", "info()", "echo")}},
+		{Path: "app/run.py", Lang: "python", Content: "x", Symbols: []Symbol{sym("start", "function", "def start()", "logger.info()", "info")}},
+		{Path: "lib/door.py", Lang: "python", Content: "x", Symbols: []Symbol{sym("open_door", "function", "def open_door()", "pass")}},
+		{Path: "tests/door.robot", Lang: "robot", IsTest: true, Content: "x", Symbols: []Symbol{sym("open_door_test", "function", "Open Door Test", "Open Door", "open_door")}},
+		{Path: "ops/deploy.sh", Lang: "shell", Content: "x", Symbols: []Symbol{sym("deploy", "function", "deploy()", "info", "info")}},
+	}
+	if err := IndexFiles(m, "r", "HEAD", 1, files); err != nil {
+		t.Fatal(err)
+	}
+	snap := m.Snapshot("r", "HEAD")
+	callee := func(caller string) query.Callee {
+		if len(snap.Callees[caller]) == 0 {
+			t.Fatalf("no callees for %s; have %v", caller, snap.Callees)
+		}
+		return snap.Callees[caller][0]
+	}
+	if c := callee("app.start"); c.ResolutionMethod != MethodExternal {
+		t.Errorf("python logger.info() resolved across languages: %+v", c)
+	}
+	if c := callee("ops.deploy"); c.Name != "info" || c.ResolutionMethod != MethodResolved {
+		t.Errorf("shell → shell must still resolve: %+v", c)
+	}
+	if c := callee("tests.open_door_test"); c.Name != "lib.open_door" {
+		t.Errorf("robot → python library keyword: %+v", c)
+	}
+}

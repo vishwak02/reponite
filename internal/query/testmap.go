@@ -29,7 +29,7 @@ type TestHit struct {
 	Line       int
 	Name       string   // runnable name: test function, Class.method, Suite.Name, or the it()/test() title
 	Handle     string   // qualified id when the test is a symbol
-	Framework  string   // pytest | unittest | django | go | jest | vitest | mocha | gtest | rostest | cargo | junit | unknown
+	Framework  string   // pytest | unittest | django | go | jest | vitest | mocha | gtest | rostest | robot | cargo | junit | unknown
 	Depth      int      // call hops from the test to the symbol (1 = calls it directly)
 	Via        []string // the call chain below the test, nearest first (Depth > 1)
 	How        string   // call_graph | reference (named in the test file)
@@ -71,6 +71,9 @@ func testFramework(f File, repoFiles map[string]File, launchTypes map[string]str
 	base := filepath.Base(f.Path)
 	if _, ok := launchTypes[base]; ok {
 		return "rostest"
+	}
+	if e := strings.ToLower(filepath.Ext(base)); e == ".robot" || e == ".resource" {
+		return "robot"
 	}
 	c := f.Content
 	switch errLang(f.Path) {
@@ -179,7 +182,18 @@ func Tests(s Store, repo, ref, symbol string, depth, budget int) TestsResult {
 	// its methods. The call graph cannot see this edge; routes can.
 	httpEdge := map[[2]string]bool{}
 	syms := s.SymbolsAt(repo, ref)
+	symIdx := baseIndexOf(syms)
 	for _, l := range RoutesWith(s, repo, ref, "", 100000, RoutesOptions{}).Links {
+		testClient := false
+		for _, c := range l.Clients {
+			if c.Repo == repo && IsTestPath(c.Path) {
+				testClient = true
+				break
+			}
+		}
+		if !testClient {
+			continue // only a test's request makes the route an edge here
+		}
 		var targets []string
 		for _, t := range resolveIn(syms, l.Route.Handler) {
 			targets = append(targets, t)
@@ -193,7 +207,7 @@ func Tests(s Store, repo, ref, symbol string, depth, budget int) TestsResult {
 			if c.Repo != repo || !IsTestPath(c.Path) {
 				continue
 			}
-			caller := siteHandle(syms, c.Path, c.In)
+			caller := siteHandleIn(symIdx, c.Path, c.In)
 			if caller == "" {
 				continue
 			}
@@ -240,6 +254,9 @@ func Tests(s Store, repo, ref, symbol string, depth, budget int) TestsResult {
 				viaHTTP := n.http || httpEdge[[2]string{caller, n.qid}]
 				if IsTestQID(s, repo, ref, caller) {
 					path, span, ok := locateSymbol(files, caller)
+					if ok && isRobotPath(path) && !robotTestCase(byPath[path], span.StartLine) {
+						ok = false // a keyword in a suite file is a helper the walk passes through, not a test
+					}
 					if ok {
 						f := byPath[path]
 						h := TestHit{Repo: repo, Path: path, Line: span.StartLine, Name: testName(f, caller, span.StartLine),
@@ -408,6 +425,13 @@ func testName(f File, qid string, line int) string {
 	if line < 1 || line > len(lines) {
 		return name
 	}
+	if isRobotPath(f.Path) {
+		// Robot runs a test by its written name; the stored one is snake form.
+		if cells := strings.SplitN(strings.TrimSpace(lines[line-1]), "  ", 2); cells[0] != "" {
+			return strings.TrimSpace(cells[0])
+		}
+		return name
+	}
 	switch errLang(f.Path) {
 	case "cpp":
 		for j := line - 1; j >= 0 && j >= line-3; j-- {
@@ -432,6 +456,25 @@ func testName(f File, qid string, line int) string {
 		}
 	}
 	return name
+}
+
+func isRobotPath(p string) bool {
+	e := strings.ToLower(filepath.Ext(p))
+	return e == ".robot" || e == ".resource"
+}
+
+// robotTestCase reports whether line (1-based) of a Robot file lies in a
+// *** Test Cases *** or *** Tasks *** section.
+func robotTestCase(f File, line int) bool {
+	lines := strings.Split(f.Content, "\n")
+	for j := line - 1; j >= 0 && j < len(lines); j-- {
+		t := strings.ToLower(strings.TrimSpace(lines[j]))
+		if strings.HasPrefix(t, "*") {
+			t = strings.Trim(t, "* ")
+			return strings.HasPrefix(t, "test case") || strings.HasPrefix(t, "task")
+		}
+	}
+	return false
 }
 
 func shellQuote(s string) string {
@@ -546,6 +589,12 @@ func testCommand(h TestHit, files map[string]File, launchTypes map[string]string
 			}
 		}
 		return strings.Join(dedupe(cmds), " && ")
+	case "robot":
+		var ts []string
+		for _, x := range hs {
+			ts = append(ts, "--test "+shellQuote(x.Name))
+		}
+		return "robot " + strings.Join(dedupe(ts), " ") + " " + strings.Join(quoteAll(uniqPaths()), " ")
 	case "cargo":
 		return "cargo test " + shellQuote(names(" ", func(x TestHit) string { return x.Name }))
 	case "junit":

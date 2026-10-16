@@ -208,6 +208,7 @@ func scanParamReads(p, content string) []paramRead {
 		return nil
 	}
 	var out []paramRead
+	line, at := 1, 0 // line number of offset at, advanced incrementally (matches come in order)
 	for _, m := range paramCallRe.FindAllStringSubmatchIndex(content, -1) {
 		open := m[1] - 1
 		args, _, ok := splitCallArgs(content, open)
@@ -219,7 +220,8 @@ func scanParamReads(p, content string) []paramRead {
 		if param == "" {
 			continue
 		}
-		line := 1 + strings.Count(content[:m[0]], "\n")
+		line += strings.Count(content[at:m[0]], "\n")
+		at = m[0]
 		if target == "" {
 			// A returning read: the variable is whatever it is assigned to.
 			ls := strings.LastIndex(content[:m[0]], "\n") + 1

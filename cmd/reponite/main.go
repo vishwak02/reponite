@@ -8,12 +8,22 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/pprof"
 
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/version"
 )
 
 func main() {
+	// REPONITE_CPUPROFILE=<file> records a CPU profile of one command (read it
+	// with `go tool pprof`), for finding where a slow answer spends its time.
+	if p := os.Getenv("REPONITE_CPUPROFILE"); p != "" {
+		if f, err := os.Create(p); err == nil {
+			if pprof.StartCPUProfile(f) == nil {
+				defer pprof.StopCPUProfile()
+			}
+		}
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)

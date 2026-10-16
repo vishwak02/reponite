@@ -112,3 +112,38 @@ func TestDetectModulePathMultiPackageWorkspace(t *testing.T) {
 		t.Fatalf("root manifest: got %q %v", mod, ok)
 	}
 }
+
+// A workspace mixing ecosystems below the root (a ROS package, a web UI and a
+// Python tool side by side) names no module either — even when each kind
+// appears only once at that depth.
+func TestDetectModulePathMixedWorkspace(t *testing.T) {
+	files := map[string][]byte{
+		"oks/package.xml":          []byte("<package format=\"2\"><name>oks</name></package>"),
+		"station_ui/package.json":  []byte(`{"name": "station_ui"}`),
+		"tools/cfg/pyproject.toml": []byte("[project]\nname = \"cfg\"\n"),
+	}
+	if mod, ok := DetectModulePath(files); ok {
+		t.Fatalf("mixed workspace claimed module %q", mod)
+	}
+	files["deploy/go.mod"] = []byte("module example.com/deploy\n")
+	if mod, ok := DetectModulePath(files); ok {
+		t.Fatalf("mixed workspace claimed module %q", mod)
+	}
+	only := map[string][]byte{"src/go.mod": []byte("module example.com/app\n")}
+	if mod, ok := DetectModulePath(only); !ok || mod != "example.com/app" {
+		t.Fatalf("a single nested manifest still names the repo: %q %v", mod, ok)
+	}
+}
+
+// A root manifest of a lower-priority ecosystem still beats a nested one of a
+// higher-priority ecosystem: the root names the repo.
+func TestDetectModulePathRootBeatsNestedEcosystem(t *testing.T) {
+	files := map[string][]byte{
+		"pyproject.toml":         []byte("[project]\nname = \"console\"\n"),
+		"frontend/package.json":  []byte(`{"name": "frontend"}`),
+		"tools/generator/go.mod": []byte("module example.com/generator\n"),
+	}
+	if mod, ok := DetectModulePath(files); !ok || mod != "console" {
+		t.Fatalf("root pyproject.toml must name the repo: got %q %v", mod, ok)
+	}
+}

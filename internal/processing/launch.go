@@ -52,5 +52,6 @@ func paramFile(path, content string) (ParsedFile, bool) {
 	if len(content) > maxParamFileBytes {
 		return ParsedFile{}, false
 	}
-	return ParsedFile{Path: path, Content: content, Lang: "yaml", IsTest: IsTestPath(path)}, true
+	syms, spans := sectionSymbols(path, content)
+	return ParsedFile{Path: path, Content: content, Lang: "yaml", IsTest: IsTestPath(path), Symbols: syms, Spans: spans}, true
 }
