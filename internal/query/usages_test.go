@@ -115,3 +115,15 @@ func TestUsagesWithoutParentheses(t *testing.T) {
 		t.Errorf("JSX element: %+v", res.Usages)
 	}
 }
+
+// A shell function called from top-level script code — no enclosing caller
+// symbol, no parentheses — is still a usage; its definition is not.
+func TestUsagesShellTopLevelCommand(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "v1", query.File{Path: "images/entrypoint.sh", Content: "#!/bin/bash\n_main() {\n  echo hi\n}\nif ! _is_sourced; then\n\t_main \"$@\"\nfi\n",
+		Symbols: []query.SymbolSpan{{Name: "_main", StartLine: 2, EndLine: 4}}})
+	res := query.Usages(m, "r", "v1", "_main")
+	if res.Total != 1 || res.Usages[0].Line != 6 {
+		t.Fatalf("usages: %+v", res.Usages)
+	}
+}

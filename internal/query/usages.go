@@ -10,6 +10,7 @@
 package query
 
 import (
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -106,6 +107,7 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 		res.Usages = append(res.Usages, u)
 	}
 	res.Usages = append(res.Usages, callerSiteUsages(s, ref, base, siteCallers, res.Usages)...)
+	res.Usages = append(res.Usages, shellCommandUsages(s, repo, ref, base, defRe, res.Usages)...)
 	sort.SliceStable(res.Usages, func(i, j int) bool {
 		a, b := res.Usages[i], res.Usages[j]
 		if a.Confirmed != b.Confirmed {
@@ -183,4 +185,43 @@ func sortedKeysBool(m map[string]map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// shellCommandUsages finds a shell function called as a command — `name args`
+// with no parentheses, at the start of a command (line start, after ; & | (
+// or a then/do/else/if/while/until/! keyword) — in shell scripts, including
+// top-level script code no caller symbol encloses.
+func shellCommandUsages(s Store, repo, ref, base string, defRe *regexp.Regexp, have []Usage) []Usage {
+	pat := `(^|[;&|({]|\b(then|do|else|if|while|until|time|exec)\s|!\s)\s*` + regexp.QuoteMeta(base) + `(\s|;|&|\||\)|$)`
+	g, err := GrepRepo(s, repo, ref, pat, GrepOptions{Limit: -1})
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, u := range have {
+		seen[u.Repo+"\x00"+u.Path+"\x00"+strconv.Itoa(u.Line)] = true
+	}
+	var out []Usage
+	for _, m := range g.Matches {
+		if !isShellPath(m.Path) || defRe.MatchString(m.Text) || strings.HasPrefix(strings.TrimSpace(m.Text), "#") {
+			continue
+		}
+		k := m.Repo + "\x00" + m.Path + "\x00" + strconv.Itoa(m.Line)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, Usage{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: strings.TrimSpace(m.Text), In: m.Symbol})
+	}
+	return out
+}
+
+func isShellPath(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".sh", ".bash", ".zsh", ".ksh":
+		return true
+	case "":
+		return true // an extension-less script; grep only matched command syntax
+	}
+	return false
 }

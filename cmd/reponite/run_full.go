@@ -426,7 +426,13 @@ func cmdSearch(args []string) {
 	}
 	f := openFleet(local)
 	defer f.Close()
-	printJSON(interfaces.SearchJSON(query.SearchName(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], tests)))
+	hits := query.SearchName(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], tests)
+	if len(hits) == 0 && !tests {
+		if n := len(query.SearchName(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], true)); n > 0 {
+			fmt.Fprintf(os.Stderr, "reponite search: no non-test symbol matches %q; %d test symbol(s) do — add --tests\n", pos[0], n)
+		}
+	}
+	printJSON(interfaces.SearchJSON(hits))
 }
 
 func cmdRootCause(args []string) {
@@ -728,9 +734,11 @@ func cmdTopics(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.CommGraph(s, query.FleetRepo, rf.ref)
+	var res query.CommGraphResult
 	if len(pos) >= 1 {
 		res = query.Topic(s, query.FleetRepo, rf.ref, pos[0])
+	} else {
+		res = query.CommGraph(s, query.FleetRepo, rf.ref)
 	}
 	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.TopicsJSON(res))

@@ -59,6 +59,12 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 			warns = append(warns, fmt.Sprintf("ambiguous %q; using %s (also: %s)", symbol, sym, strings.Join(names[1:], ", ")))
 		}
 	}
+	if !includeTests && IsTestQID(s, repo, ref, sym) {
+		// A test's own neighbours are test code: hiding them would answer
+		// "nothing" about the very symbol asked for.
+		includeTests = true
+	}
+	hidden := 0
 	snap := s.Snapshot(repo, ref)
 	// Non-nil empty slices so absent neighbors marshal as [] not null (consistent
 	// JSON for agents).
@@ -66,6 +72,7 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	edges := []CalleeEdge{}
 	for _, c := range snap.Callees[sym] {
 		if !includeTests && IsTestQID(s, repo, ref, c.Name) {
+			hidden++
 			continue
 		}
 		callees = append(callees, c.Name)
@@ -75,10 +82,11 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	callerEdges := []CallerEdge{}
 	for name, cs := range snap.Callees {
 		isTest := IsTestQID(s, repo, ref, name)
-		if !includeTests && isTest {
-			continue
-		}
 		for _, c := range cs {
+			if c.Name == sym && !includeTests && isTest {
+				hidden++
+				break
+			}
 			if c.Name == sym {
 				callers = append(callers, name)
 				callerEdges = append(callerEdges, CallerEdge{Name: name, IsTest: isTest})
@@ -91,6 +99,9 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	sort.Strings(callees)
 	sort.Slice(edges, func(i, j int) bool { return edges[i].Name < edges[j].Name })
 	meta := NewMeta(s, repo, ref)
+	if hidden > 0 {
+		warns = append(warns, fmt.Sprintf("%d test caller(s)/callee(s) hidden — add --tests to include them", hidden))
+	}
 	meta.Warnings = warns
 	return ContextResult{Symbol: sym, Ref: meta.Ref, Callers: callers, Callees: callees,
 		CallerEdges: callerEdges, CalleeEdges: edges, Meta: meta}

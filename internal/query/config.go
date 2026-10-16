@@ -164,13 +164,15 @@ func configList(res *ConfigResult, keys []ConfigKey, opt ConfigOptions) {
 		return b
 	}
 	// The flagged keys come first in the budget: they are the answer to
-	// "why did my setting not take effect".
+	// "why did my setting not take effect". They take at most 60% of it, so
+	// the key list itself is never crowded out by a long flagged list.
+	flagged := opt.Budget * 3 / 5
 	for _, k := range keep {
 		if k.Status == "" {
 			continue
 		}
 		c := cfgKeyCost(brief(k))
-		if spent+c > opt.Budget {
+		if spent+c > flagged {
 			res.Omitted++
 			continue
 		}
