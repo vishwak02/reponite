@@ -27,6 +27,7 @@ func mcpCommand(args []string) {
 		store = storage.NewMultiStore(stores...)
 	}
 	ts := &interfaces.ToolServer{Store: store, Repo: repos[0], Intent: newIntentProvider(dirs[0]), ParseSymbols: newSymbolParser(), Ranker: semanticRanker()}
+	ts.History = newHistoryProvider(dirs)
 	if err := interfaces.ServeStdio(ts); err != nil {
 		fail(err)
 	}

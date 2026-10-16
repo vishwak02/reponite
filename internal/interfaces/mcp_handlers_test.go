@@ -89,3 +89,31 @@ func TestToolServerFleetSearch(t *testing.T) {
 		t.Fatalf("fleet hits should carry their repo: %s", out)
 	}
 }
+
+func TestToolServerWhyErrorsTests(t *testing.T) {
+	m := storage.NewMem()
+	src := "def charge(order):\n    if not order:\n        raise ValueError(f\"order {order} is empty\")\n"
+	m.Put("r", "HEAD", "shop.charge", storage.SymbolRecord{SignatureHash: "s"})
+	m.Put("r", "HEAD", "shop/tests.test_charge", storage.SymbolRecord{IsTest: true, Callees: []query.Callee{{Name: "shop.charge"}}})
+	m.PutFile("r", "HEAD", query.File{Path: "shop/pay.py", Content: src, Symbols: []query.SymbolSpan{{Name: "charge", StartLine: 1, EndLine: 3}}})
+	m.PutFile("r", "HEAD", query.File{Path: "shop/tests/test_pay.py", Content: "import pytest\ndef test_charge():\n    charge(None)\n",
+		Symbols: []query.SymbolSpan{{Name: "test_charge", StartLine: 2, EndLine: 3}}})
+	ts := &ToolServer{Store: m, Repo: "r"}
+
+	out, err := ts.Call("reponite_why", map[string]string{"symbol": "charge"})
+	if err != nil || !strings.Contains(out, `"compat_history"`) || !strings.Contains(out, "no git history") {
+		t.Fatalf("why: %v %s", err, out)
+	}
+	out, _ = ts.Call("reponite_errors", map[string]string{"query": "order 42 is empty"})
+	if !strings.Contains(out, `"path": "shop/pay.py"`) || !strings.Contains(out, `"line": 3`) {
+		t.Fatalf("errors: %s", out)
+	}
+	out, _ = ts.Call("reponite_errors", map[string]string{"format": "text"})
+	if !strings.HasPrefix(out, "error catalogue") {
+		t.Fatalf("errors catalogue text: %s", out)
+	}
+	out, _ = ts.Call("reponite_tests", map[string]string{"symbol": "charge"})
+	if !strings.Contains(out, "pytest shop/tests/test_pay.py::test_charge") {
+		t.Fatalf("tests: %s", out)
+	}
+}
