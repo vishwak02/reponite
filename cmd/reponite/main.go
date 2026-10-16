@@ -33,9 +33,9 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests":
 		indexBackedCommand(os.Args[1], os.Args[2:])
-	case "init", "impact", "why", "arch",
+	case "init", "impact", "arch",
 		"sync", "status", "gc":
 		planned(os.Args[1])
 	default:
@@ -95,6 +95,9 @@ index-backed (build with `+"`make cli`"+`):
   rootcause-trace <file|-> --from <ref> --to <ref>   seed rootcause from a pasted stack trace
   brief <symbol> [ref] [--budget N]   one bundle to edit a symbol: body + callees/callers + tests + compat
   refs                 list the repo's indexed refs
+  why <symbol> [ref] [--budget N]   the commits that changed it (git log -L per indexed ref) + PR/issue + first ref shipping each + compat history
+  errors ["<message>"|code] [ref]   where an error comes from (raise/throw/errors.New/HTTP 4xx…) and who catches it; no arg = error catalogue
+  tests <symbol> [ref] [--depth N]   which tests exercise it (direct + via callers), framework, and the command to run just those
   mcp [dir...]         serve the tools over MCP (stdio) for an AI agent (no dir = the registered fleet)
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh

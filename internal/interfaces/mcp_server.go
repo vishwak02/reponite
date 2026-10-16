@@ -161,5 +161,30 @@ func ServeStdio(ts *ToolServer) error {
 	add(mcp.NewTool("reponite_repos",
 		mcp.WithDescription("Fleet orientation: every indexed repo with its module path and per-ref stats (symbols, call edges, files). Call this first to learn what's mounted and where a feature might live — search/grep/semsearch then default to fleet-wide.")))
 
+	add(mcp.NewTool("reponite_why",
+		mcp.WithDescription("Why is this code the way it is? The commits that changed a symbol's lines or signature (git log -L on its range at each indexed ref's commit, following moves between files), newest first — date, author, subject, body excerpt, PR/issue numbers, kind (introduced/moved/signature/body), and the earliest indexed ref (release) that contains each change — plus the symbol's compat history across indexed refs. Use before changing code whose intent is unclear, or to find the PR that introduced a behavior. Read-only on the git object store."),
+		mcp.WithString("symbol", mcp.Required(), mcp.Description("symbol, Class.method or Class::method")),
+		mcp.WithString("repo", mcp.Description("repo defining the symbol (default: current, else the one fleet repo that has it)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("budget", mcp.Description("token budget (default 1500); truncated results say how to get the rest")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse rendering (default JSON)`))))
+	add(mcp.NewTool("reponite_errors",
+		mcp.WithDescription("Where does this error come from, and who handles it? Pass the message a user saw (placeholders filled: ids, names), an exception/error type, or an HTTP status (404). Returns the producing sites ranked like logsite — raise/throw, errors.New/fmt.Errorf/sentinels, new XError(…), panics, ROS_ERROR/logger.error, HTTP error responses (DRF/Django/FastAPI/Flask Response(status=4xx), res.status(4xx).json, http.Error, ResponseStatusException) — each with its enclosing function (handle) and one hop of callers, plus the handlers that catch it: except/catch naming the type or a base class, errors.Is/As, recover, DRF EXCEPTION_HANDLER, FastAPI/Flask exception handlers, Express error middleware, Nest @Catch, Spring @ExceptionHandler, frontend status checks and response interceptors. With no query: an error catalogue per repo (types, statuses, messages)."),
+		mcp.WithString("query", mcp.Description("message as seen, a type name, or a status code; empty = catalogue")),
+		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
+		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("no_tests", mcp.Description(`"true" to drop test code`)),
+		mcp.WithString("budget", mcp.Description("token budget (default 2000)")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse rendering (default JSON)`))))
+	add(mcp.NewTool("reponite_tests",
+		mcp.WithDescription("Which tests exercise this symbol, and how do I run just those? Finds tests that call it directly or through up to `depth` callers, tests that send an HTTP request to the route serving it, and test files naming it (JS/TS it()/test() blocks, mocks); detects each file's framework (pytest, unittest, Django, go test, jest, vitest, mocha, gtest, rostest, cargo, junit) and returns the exact command selecting only those tests. Use after editing a symbol to run the relevant tests instead of the whole suite."),
+		mcp.WithString("symbol", mcp.Required(), mcp.Description("symbol, Class.method or Class::method")),
+		mcp.WithString("repo", mcp.Description("repo defining the symbol (default: current, else the one fleet repo that has it)")),
+		mcp.WithString("ref", mcp.Description("default HEAD")),
+		mcp.WithString("depth", mcp.Description("max call hops between a test and the symbol (default 3)")),
+		mcp.WithString("budget", mcp.Description("token budget (default 1500)")),
+		mcp.WithString("format", mcp.Description(`"text" for a terse rendering (default JSON)`))))
+
 	return server.ServeStdio(s)
 }

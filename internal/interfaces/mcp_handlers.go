@@ -27,6 +27,9 @@ type ToolServer struct {
 	// (ADR-020). Injected by the neural build when an endpoint is configured;
 	// nil = the pure term-idf default. Keeps this dispatch layer pure.
 	Ranker query.SemanticRanker
+	// History reads repos' git object stores for reponite_why (nil = no
+	// history; why still answers the compat history).
+	History query.HistoryProvider
 }
 
 // Call dispatches a tool by name; args are string-valued (as MCP delivers them).
@@ -198,7 +201,63 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		return InvestigateJSON(query.InvestigateWith(t.Store, discoverRepo, ref, args["question"], budget, t.Ranker))
 	case "reponite_refs":
 		return RefsJSON(repo, t.Store.Refs(repo))
+	case "reponite_why":
+		r := t.symbolRepo(repo, args["repo"] != "", ref, args["symbol"])
+		if len(query.ResolveSymbol(t.Store, r, ref, args["symbol"])) == 0 {
+			return notFound("symbol", args["symbol"])
+		}
+		budget, _ := strconv.Atoi(args["budget"])
+		res := query.Why(t.Store, t.History, r, ref, args["symbol"], budget)
+		if args["format"] == "text" {
+			return WhyText(res), nil
+		}
+		return WhyJSON(res)
+	case "reponite_errors":
+		budget, _ := strconv.Atoi(args["budget"])
+		var st query.Store = t.Store
+		if args["no_tests"] == "true" {
+			st = &storage.NoTests{Inner: t.Store}
+		}
+		res := query.Errors(st, discoverRepo, ref, args["query"], budget)
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		if args["format"] == "text" {
+			return ErrorsText(res), nil
+		}
+		return ErrorsJSON(res)
+	case "reponite_tests":
+		r := t.symbolRepo(repo, args["repo"] != "", ref, args["symbol"])
+		if len(query.ResolveSymbol(t.Store, r, ref, args["symbol"])) == 0 {
+			return notFound("symbol", args["symbol"])
+		}
+		budget, _ := strconv.Atoi(args["budget"])
+		depth, _ := strconv.Atoi(args["depth"])
+		res := query.Tests(t.Store, r, ref, args["symbol"], depth, budget)
+		if args["format"] == "text" {
+			return TestsText(res), nil
+		}
+		return TestsJSON(res)
 	default:
 		return "", fmt.Errorf("unknown tool %q", tool)
 	}
+}
+
+// symbolRepo is the repo a symbol-scoped tool answers for: the named repo,
+// else the default one when it defines the symbol, else the single fleet
+// repo that does (several = the default; the agent passes repo to choose).
+func (t *ToolServer) symbolRepo(repo string, explicit bool, ref, symbol string) string {
+	if explicit || len(query.ResolveSymbol(t.Store, repo, ref, symbol)) > 0 {
+		return repo
+	}
+	var found []string
+	for _, r := range t.Store.Repos() {
+		if len(query.ResolveSymbol(t.Store, r, ref, symbol)) > 0 {
+			found = append(found, r)
+		}
+	}
+	if len(found) == 1 {
+		return found[0]
+	}
+	return repo
 }
