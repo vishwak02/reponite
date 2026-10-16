@@ -19,6 +19,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 // IndexGitRef indexes the Go files in repoDir's git revision rev (a tag, branch,
@@ -92,6 +94,14 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 			}
 			if src, cerr := f.Contents(); cerr == nil {
 				if pf, ok := paramFile(f.Name, src); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
+		if query.IsSFCPath(f.Name) {
+			if src, cerr := f.Contents(); cerr == nil {
+				if pf, ok := sfcFile(f.Name, src, normVer); ok {
 					files = append(files, pf)
 				}
 			}

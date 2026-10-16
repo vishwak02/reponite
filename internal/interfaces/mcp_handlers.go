@@ -162,6 +162,20 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 			res.Note = res.Note + " — " + coverage()
 		}
 		return RoutesJSON(res)
+	case "reponite_ui":
+		budget, _ := strconv.Atoi(args["budget"])
+		opt, err := LoadGateways(args["gateway"], args["upstream"])
+		if err != nil {
+			return "", err
+		}
+		res := query.UI(t.Store, discoverRepo, ref, args["target"], query.UIOptions{Budget: budget, Uses: args["uses"] == "true", Routes: opt})
+		if discoverRepo == query.FleetRepo {
+			res.Note = res.Note + " — " + coverage()
+		}
+		if args["format"] == "text" {
+			return UIText(res), nil
+		}
+		return UIJSON(res)
 	case "reponite_topics":
 		var res query.CommGraphResult
 		if topic := args["topic"]; topic != "" {

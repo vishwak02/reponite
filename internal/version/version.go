@@ -30,7 +30,11 @@ const (
 	//   5: YAML parameter files (.yaml/.yml up to 256 KB) are stored, so
 	//      `topics` can resolve a topic name read from a parameter through the
 	//      <rosparam> file a launch file loads.
-	IndexVer = 5
+	//   6: JSX elements are component-render call edges (<CartItem/> calls
+	//      CartItem); .vue/.svelte single-file components are indexed (script
+	//      parsed in place, the component a symbol whose callees are the
+	//      components its template renders and the handlers it binds).
+	IndexVer = 6
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

@@ -92,6 +92,16 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 			}
 			return nil
 		}
+		// Vue/Svelte single-file components: script parsed in place, the
+		// component itself a symbol (sfc_ts.go).
+		if query.IsSFCPath(rel) {
+			if b, readErr := os.ReadFile(path); readErr == nil {
+				if pf, ok := sfcFile(rel, string(b), normVer); ok {
+					files = append(files, pf)
+				}
+			}
+			return nil
+		}
 		src, rules, ext, ok := readSource(path)
 		if !ok {
 			return nil
@@ -238,17 +248,28 @@ func loadIgnore(dir string, excludes []string) *Ignore {
 // an old-vs-new parse of the same file yields comparable signature hashes.
 // Returns nil for an unsupported/unparseable extension.
 func ParseEditedSymbols(path, src string, normVer int) []query.EditedSymbol {
-	rules, ext, ok := RulesForSource(filepath.Ext(path), []byte(src))
-	if !ok {
-		return nil
-	}
-	root, _, err := parseFileRules([]byte(src), ext, rules)
-	if err != nil || root == nil {
-		return nil
+	var syms []Symbol
+	lang := ""
+	if query.IsSFCPath(path) {
+		pf, ok := sfcFile(path, src, normVer)
+		if !ok {
+			return nil
+		}
+		syms, lang = pf.Symbols, pf.Lang
+	} else {
+		rules, ext, ok := RulesForSource(filepath.Ext(path), []byte(src))
+		if !ok {
+			return nil
+		}
+		root, _, err := parseFileRules([]byte(src), ext, rules)
+		if err != nil || root == nil {
+			return nil
+		}
+		syms, lang = Extract(root, rules, normVer), rules.Name
 	}
 	var out []query.EditedSymbol
-	for _, s := range Extract(root, rules, normVer) {
-		id := content.SymbolIdentity{Lang: rules.Name, Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
+	for _, s := range syms {
+		id := content.SymbolIdentity{Lang: lang, Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
 		out = append(out, query.EditedSymbol{Name: s.Name, Recv: s.Recv, SignatureHash: content.SignatureHash(normVer, id)})
 	}
 	return out

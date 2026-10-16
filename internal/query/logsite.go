@@ -49,7 +49,7 @@ var (
 	callName   = regexp.MustCompile(`([A-Za-z_][\w]*(?:(?:::|\.|->)[A-Za-z_][\w]*)*)\s*$`)
 	logCall    = regexp.MustCompile(`(?i)(log|ros_|rclcpp_|print|warn|error|info|debug|fatal|critical|trace|console|throw|raise|exception|panic|abort|assert|notice)`)
 	codeExts   = map[string]string{".c": "c", ".h": "c", ".cc": "c", ".cpp": "c", ".cxx": "c", ".hpp": "c", ".hh": "c", ".hxx": "c",
-		".go": "go", ".rs": "c", ".java": "c", ".py": "py", ".js": "js", ".jsx": "js", ".ts": "js", ".tsx": "js", ".mjs": "js", ".sh": "sh"}
+		".go": "go", ".rs": "c", ".java": "c", ".py": "py", ".js": "js", ".jsx": "js", ".ts": "js", ".tsx": "js", ".mjs": "js", ".vue": "js", ".svelte": "js", ".sh": "sh"}
 )
 
 // LogSites finds the code that prints logLine across repo (FleetRepo "*" =

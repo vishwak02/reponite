@@ -33,6 +33,19 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Added
 
+- **`ui [route|component]` / `reponite_ui`: frontend understanding.** No argument lists the
+  app's pages (react-router trees and route objects, vue-router and other route tables with
+  lazy imports and module-federation exposes, Next.js pages/app, SvelteKit, Nuxt) with the
+  component each renders. A route or component returns its budget-bounded component tree with
+  props, state, effects, event handlers and the API calls each handler/effect reaches, linked
+  to the serving route (`button Save → handleSave → POST /api/orders → OrdersView`); `--uses`
+  lists render sites. `--format text`, `--budget`, `truncated`/`next`. `query.UIEdges` exposes
+  the render/handler/API edges for other queries.
+- **Vue and Svelte single-file components are indexed**, and **JSX elements are call edges**
+  (`<CartItem/>` calls `CartItem`), so context/usages see component renders. A path-alias
+  import (`@app/components/X`, `$lib/X.svelte`) whose directory is in the repo is repo code.
+  `routes` reads client calls on a factory-returned client (`getClient().get(…)`) and in
+  `.vue`/`.svelte` files. **IndexVer 6** — reindex frontends.
 - **`topics` resolves names read from parameters.** A publisher/subscriber/service
   whose name is a variable, a config-struct member or an inline param read is traced
   to the parameter (`get_ros_param`, `param()`, `getParam`, `declare_parameter`,

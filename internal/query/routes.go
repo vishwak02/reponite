@@ -76,7 +76,7 @@ var (
 	goHandle     = regexp.MustCompile(`\.(HandleFunc|Handle)\(\s*"(/[^"]*)"`)
 	goVerb       = regexp.MustCompile(`\.(GET|POST|PUT|PATCH|DELETE|Get|Post|Put|Patch|Delete)\(\s*"(/[^"]*)"`)
 	jsFetch      = regexp.MustCompile(`\bfetch\(\s*(.*)`)
-	clientCall   = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\.(get|post|put|patch|delete|head|request)\s*(?:<[^()]*>)?\(\s*(.*)`)
+	clientCall   = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?)\.(get|post|put|patch|delete|head|request)\s*(?:<[^()]*>)?\(\s*(.*)`)
 	jsConst      = regexp.MustCompile(`(?:^|[\s,{(])([A-Za-z_$][\w$]*)\s*[:=]\s*(['"` + "`" + `])([^'"` + "`" + `\n]*/[^'"` + "`" + `\n]*)['"` + "`" + `]`)
 	jsObjStart   = regexp.MustCompile(`^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*\{`)
 	jsMethodOpt  = regexp.MustCompile(`method:\s*['"` + "`" + `](\w+)`)

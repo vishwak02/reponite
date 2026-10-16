@@ -491,6 +491,47 @@ reported under `unresolved_endpoints` (`param:status_topic (unresolved)`), and a
 </details>
 
 <details>
+<summary><b>Frontend — pages, component trees, and the button that calls the API</b></summary>
+
+```sh
+reponite ui                                   # the app's pages: client route -> component (+ handle)
+reponite ui /orders/:id --format text         # that page's component tree, budget-bounded
+reponite ui CartPage --budget 6000            # by component name, handle (dir.Name) or file path
+reponite ui CartItem --uses                   # where a component is rendered, passed or routed to
+```
+
+**Pages** come from react-router (`<Route path element|component|render>` trees with nested
+paths, `createBrowserRouter`/`useRoutes` objects), vue-router and any `{ path, component }`
+route table (lazy `import()` and module-federation `exposes` names resolved), Next.js `pages/`
+and `app/`, SvelteKit `src/routes` and Nuxt `pages/`. Route paths built from constants are
+evaluated; what cannot be is shown as `{EXPR}`, never guessed.
+
+**A tree** expands breadth-first until `--budget` is spent (`truncated` + a `next` command
+for the first subtree left out). Per component: props (TS interface/type, PropTypes,
+`defineProps`, Svelte `export let`/`$props`), state (`useState`/`useReducer`/`useContext`,
+redux selectors and `connect`, zustand/pinia/vuex stores, Vue refs, Svelte runes), effects and
+their deps, and every event binding (`onClick`, `@click`, `on:click`) with the API calls its
+handler reaches — through local helpers, imports, store actions and the call graph — linked
+with `routes` to the server endpoint:
+
+```text
+OrderForm  shop:src/components/OrderForm.tsx:6-19 [src/components.OrderForm]
+  props: onDone: () => void
+  state: qty (useState 1)
+  input change → setQty :14
+  button "Save" click → handleSave :15
+    → handleSave → POST /api/orders → OrdersView (shop:api/shop/urls.py:3)
+  button "Cancel" click → onDone (prop: parent decides) :16
+```
+
+`.vue` and `.svelte` files are indexed (script blocks parsed in place, so lines are the
+file's own), and a JSX element or template tag is a call edge — `context CartPage` lists the
+components it renders, `usages CartItem` where it is rendered. `query.UIEdges` returns the
+same render / handler / API edges as a flat list for other queries.
+
+</details>
+
+<details>
 <summary><b>CI gate — fail the build on an API break</b></summary>
 
 ```sh
@@ -782,6 +823,7 @@ reponite <command> [arguments] [flags]
 | `why <symbol> [ref]` | Commits that changed it (git log -L per indexed ref), PR/issue, first ref shipping each, compat history |
 | `errors ["<message>"\|Type\|status] [ref]` | Producers of an error and the handlers that catch it; no argument = error catalogue |
 | `tests <symbol> [ref]` | Tests exercising it (call graph, HTTP, references), framework, and the command to run just those |
+| `ui [route\|component] [ref]` | Frontend pages, component trees (props/state/effects/handlers → API → server route); `--uses`, `--budget`, `--format text` |
 
 ### Changing code safely
 
@@ -806,7 +848,7 @@ reponite <command> [arguments] [flags]
 
 Every command accepts `--help`. Fleet-wide commands accept `--local`.
 
-- **`--no-tests`** (or `REPONITE_NO_TESTS=1`) on `usages`, `context`, `impls`, `topics`, `routes`,
+- **`--no-tests`** (or `REPONITE_NO_TESTS=1`) on `usages`, `context`, `impls`, `topics`, `routes`, `ui`,
   `compat`, `rootcause`, `grep`, `search` and `semsearch` drops everything classified as test
   code — the same rule the indexer stamps (`test/` dirs, `*_test.*`, `test_*.py`, `mock_*` …) — so
   a test publisher or mock never answers a production question. Off by default; `brief` and
@@ -822,7 +864,7 @@ Every command accepts `--help`. Fleet-wide commands accept `--local`.
 
 ### Languages
 
-Go · Python · JavaScript · TypeScript · Java · C · C++ · Rust · **Shell** — plus **ROS
+Go · Python · JavaScript · TypeScript (JSX/TSX) · **Vue** and **Svelte** single-file components · Java · C · C++ · Rust · **Shell** — plus **ROS
 interface files** (`.msg`, `.srv`, `.action`), where the field list *is* the contract, so
 adding a field is correctly reported as `shape_changed`, and **ROS launch files**
 (`.launch`, `.test`), which supply the runtime topic remapping the source cannot show.

@@ -123,10 +123,17 @@ var JavaScriptRules = LangRules{
 	TypeDecl:    []string{"class_declaration"},
 	NameTypes:   []string{"identifier", "property_identifier"},
 	BodyTypes:   []string{"statement_block"},
-	CallTypes:   []string{"call_expression"},
+	CallTypes:   append([]string{"call_expression"}, jsxElementTypes...),
 	Builtins:    jsBuiltins,
 	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
+
+// jsxElementTypes are the JSX nodes that RENDER a component. `<CartItem …/>` is
+// a call of CartItem as surely as CartItem(props) — React invokes it — so a
+// capitalized (or dotted) tag is an edge in the call graph and context/usages
+// see "CartPage renders CartItem". Intrinsic elements (`<div>`) are not
+// components and produce no edge (jsxTag).
+var jsxElementTypes = []string{"jsx_opening_element", "jsx_self_closing_element"}
 
 var TypeScriptRules = LangRules{
 	Name: "typescript", Exts: []string{".ts", ".tsx"},
@@ -135,7 +142,7 @@ var TypeScriptRules = LangRules{
 	TypeDecl:    []string{"class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
 	NameTypes:   []string{"identifier", "property_identifier", "type_identifier"},
 	BodyTypes:   []string{"statement_block"},
-	CallTypes:   []string{"call_expression"},
+	CallTypes:   append([]string{"call_expression"}, jsxElementTypes...), // .tsx: the tsx grammar; .ts never holds JSX
 	Builtins:    jsBuiltins,
 	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
