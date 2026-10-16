@@ -81,6 +81,7 @@ type CommEndpoint struct {
 
 	expr   string     // the non-literal name expression, pending resolution
 	inline *paramRead // a param read written inline as the name argument
+	recv   string     // the node handle the call is made on (nh in nh.advertise), for its namespace
 }
 
 // CommGroup is every endpoint bound to one name within a family (topic / service
@@ -125,7 +126,11 @@ type CommGraphResult struct {
 	// lists all; a focused query lists those whose parameter or variable name
 	// matches the topic) instead of vanishing.
 	ParamResolved int
-	Unbound       []CommEndpoint
+	// ArgResolved counts endpoints whose name a caller passed in (a library
+	// publisher's topic argument, its node handle's namespace), resolved by
+	// following the arguments back through the call sites (rosargs.go).
+	ArgResolved int
+	Unbound     []CommEndpoint
 	// Declared counts launch-file bindings added because no indexed source
 	// endpoint explains them; VizConfigs the rviz configs read as endpoints.
 	Declared   int
@@ -314,10 +319,16 @@ func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoi
 			// The call's arguments, which may continue on the next lines.
 			args, nameAt := callNameArg(lang, id, code, loc, lines[i+1:min(len(lines), i+8)])
 			if nameAt >= 0 {
-				if expr, param, def, hasDef, ok := dynamicName(args[nameAt]); ok {
+				expr, param, def, hasDef, ok := dynamicName(args[nameAt])
+				if !ok && isNameConcat(args[nameAt]) {
+					// topic + "_updates": built from a variable, never the literal alone.
+					expr, ok = strings.TrimSpace(args[nameAt]), true
+				}
+				if ok {
 					ep := CommEndpoint{
 						Repo: repo, Path: path, Line: i + 1, Role: role, Raw: expr, Param: param,
 						In: enclosing(spans, i+1), Text: strings.TrimSpace(line), expr: expr,
+						recv: recvOf(code[:loc[0]]),
 					}
 					if param != "" {
 						ep.inline = &paramRead{param: param, def: def, hasDef: hasDef, path: path, line: i + 1}
@@ -498,6 +509,7 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 	}
 	var all, viz []CommEndpoint
 	var dyn []pending
+	srcFiles := map[string][]File{}   // C++/Python sources, for following a name through its callers
 	launchRepo := map[string]string{} // launch path -> repo, to cite a declaration
 	for _, rp := range reposFor(s, repo) {
 		files := s.Files(rp, ref)
@@ -520,6 +532,9 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 				yaml = append(yaml, repoFile{rp, f.Path, f.Content})
 				ps.yaml[f.Path] = f.Content
 				continue
+			}
+			if commLang(f.Path) != "" {
+				srcFiles[rp] = append(srcFiles[rp], f)
 			}
 			eps, un := scanComms(rp, f.Path, f.Content, f.Symbols)
 			res.Unresolved += un
@@ -558,9 +573,27 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 	res.UnexpandedRemaps = remaps.Unexpanded
 	if len(dyn) > 0 {
 		lp := buildLaunchParams(launch, yaml)
+		var ar *argResolver
 		for _, d := range dyn {
-			bound, unbound := resolveDynamic(d.ep, d.ps, lp)
-			if len(bound) > 0 {
+			var bound, unbound []CommEndpoint
+			if d.ep.inline != nil || !isNameConcat(d.ep.expr) {
+				bound, unbound = resolveDynamic(d.ep, d.ps, lp)
+			} else {
+				ep := d.ep
+				ep.NameResolution = "expr:" + ep.expr + " (unresolved)"
+				unbound = []CommEndpoint{ep}
+			}
+			if len(bound) == 0 && d.ep.inline == nil {
+				// A name passed in by the caller: follow the arguments back.
+				if ar == nil {
+					ar = newArgResolver(srcFiles, lf)
+				}
+				if b := ar.resolve(d.ep); len(b) > 0 {
+					bound, unbound = b, nil
+					res.ArgResolved++
+				}
+			}
+			if len(bound) > 0 && unbound == nil && bound[0].Param != "" {
 				res.ParamResolved++
 			}
 			all = append(all, bound...)
@@ -574,7 +607,7 @@ func CommGraph(s Store, repo, ref string) CommGraphResult {
 			res.Remapped++
 		}
 		all[i].Effective, all[i].RemapVia = eff, via
-		if all[i].Param != "" {
+		if all[i].Param != "" || all[i].NameConfidence > 0 { // resolved from a parameter or an argument
 			if resolution != roslaunch.ResolvedAsWritten {
 				all[i].NameResolution += "; " + resolution
 			}
@@ -747,6 +780,9 @@ func commGraphNote(res CommGraphResult) string {
 		b += fmt.Sprintf("%d endpoint(s) take their name from a parameter and were resolved through it (name_resolution param:<name>=<value> (<source>), name_confidence below a literal's: a launch value for the node's package > one elsewhere in the repo = the call's default > a package YAML no launch file is seen loading); %d endpoint(s) name a variable/parameter whose value could not be resolved and are listed under unresolved_endpoints, never linked. ",
 			res.ParamResolved, len(res.Unbound))
 	}
+	if res.ArgResolved > 0 {
+		b += fmt.Sprintf("%d endpoint(s) take their name, or their node handle's namespace, from a caller and were resolved by following the arguments back through the call sites (name_resolution args: <use> ← <call site> …, name_confidence %.2f; a private ~name is placed under every launched node of the package the chain starts in). ", res.ArgResolved, argNameConf)
+	}
 	if res.Declared > 0 {
 		b += fmt.Sprintf("%d launch-declared binding(s) (role launch_declared, listed under declared): a launched node is remapped onto the name but no indexed source endpoint shows it — typically a third-party package (move_base_flex, drivers) or a name built by an expression; the node binds the name at runtime, its direction is unknown, and the topic/service family is assumed topic. ", res.Declared)
 	}
@@ -754,7 +790,7 @@ func commGraphNote(res CommGraphResult) string {
 		b += fmt.Sprintf("%d rviz config(s) read: displays are listed as subscribers and tools as publishers (name_resolution as-configured (rviz)). ", res.VizConfigs)
 	}
 	b += "Producers can also live in packages that are not indexed at all; an empty producer list means none was FOUND, not that none exists. "
-	b += "RPC/DDS wire topology is still inferred from source idioms only, names built by expressions (concatenation, calls) are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source."
+	b += "RPC/DDS wire topology is still inferred from source idioms only, names built by expressions no argument trace explains are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source."
 	return b
 }
 
@@ -765,7 +801,7 @@ func commGraphNote(res CommGraphResult) string {
 func Topic(s Store, repo, ref, name string) CommGraphResult {
 	full := CommGraph(s, repo, ref)
 	want := normalizeTopic(name)
-	res := CommGraphResult{Meta: full.Meta, Note: full.Note, ParamResolved: full.ParamResolved,
+	res := CommGraphResult{Meta: full.Meta, Note: full.Note, ParamResolved: full.ParamResolved, ArgResolved: full.ArgResolved,
 		LaunchFiles: full.LaunchFiles, Remapped: full.Remapped, UnresolvedIncludes: full.UnresolvedIncludes,
 		UnexpandedRemaps: full.UnexpandedRemaps, VizConfigs: full.VizConfigs}
 	// An endpoint whose name could not be resolved is still a candidate when
