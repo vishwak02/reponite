@@ -124,3 +124,16 @@ types. Put the before/after numbers in the PR body.
 
 By contributing you agree your work is licensed under the project's
 [Apache-2.0](LICENSE) license.
+
+## Checking a change on real code
+
+`tools/battery.py` runs every command over all git repositories under a directory and grades
+each call (crash, error, slow, ok). Run it before and after a change and compare:
+
+```sh
+python3 tools/battery.py ~/src --bin bin/reponite --store /tmp/b0 --out /tmp/run0   # before
+python3 tools/battery.py ~/src --bin bin/reponite --store /tmp/b1 --out /tmp/run1   # after
+python3 tools/battery.py --compare /tmp/run0.jsonl /tmp/run1.jsonl
+```
+
+`reponite coverage` on the same repos shows which files a change starts or stops storing.
