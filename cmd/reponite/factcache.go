@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vishwak02/reponite/internal/query"
+	"github.com/vishwak02/reponite/internal/version"
 )
 
 // fileFactCache keeps the fleet-wide results query computes (communication
@@ -35,9 +36,14 @@ func newFileFactCache() *fileFactCache {
 	return &fileFactCache{dir: filepath.Join(root, ".facts", buildID())}
 }
 
-// buildID is the running binary's size and modification time: a rebuild is a
-// new identity without any version bookkeeping.
+// buildID identifies the code that derived a cached fact: a release binary
+// by its version (reinstalling the same release keeps its cache), a
+// development build by its size and modification time (every rebuild starts
+// fresh, since its derivations may have changed).
 func buildID() string {
+	if v := version.Version; v != "" && v != "0.0.0-dev" {
+		return "v" + v
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "unknown"

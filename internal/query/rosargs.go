@@ -504,6 +504,9 @@ func (r *argResolver) indexCallers() {
 	sort.Strings(repos)
 	for _, rp := range repos {
 		for i, f := range r.files[rp] {
+			if IsTestPath(f.Path) {
+				continue // a test's call sites do not name what runs, and would crowd out the real ones
+			}
 			seen := map[string]bool{}
 			for _, n := range calledNames(f.Content) {
 				if !seen[n] {

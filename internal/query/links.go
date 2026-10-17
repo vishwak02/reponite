@@ -39,7 +39,6 @@ type Link struct {
 }
 
 var (
-	linkPathTok = regexp.MustCompile(`(?:\$\(find\s+([A-Za-z0-9_]+)\)/|package://([A-Za-z0-9_]+)/)?((?:\.{1,2}/|/)?[A-Za-z0-9_@+.\-]+(?:/[A-Za-z0-9_@+.\-]+)*)`)
 	linkIDDef   = regexp.MustCompile(`"id"\s*:\s*"?([0-9]{7,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"?`)
 	linkIDUse   = regexp.MustCompile(`\b([0-9]{7,}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\b`)
 	linkDefine  = regexp.MustCompile(`\{\{-?\s*define\s+"([^"]+)"`)
@@ -162,8 +161,9 @@ func repoLinks(s Store, repo, ref string) []Link {
 			}
 		}
 		if strings.Contains(tok, "/") {
+			// files ending in /tok all share tok's base name: look only at those
 			var hits []string
-			for p := range paths {
+			for _, p := range byBase[path.Base(tok)] {
 				if strings.HasSuffix(p, "/"+tok) {
 					hits = append(hits, p)
 					if len(hits) > 1 {
@@ -203,15 +203,8 @@ func repoLinks(s Store, repo, ref string) []Link {
 				n++
 			}
 			seen := map[string]bool{}
-			for _, m := range linkPathTok.FindAllStringSubmatch(ln, -1) {
-				tok, pkg := m[3], m[1]
-				if pkg == "" {
-					pkg = m[2]
-				}
-				if !strings.Contains(tok, "/") && !strings.Contains(tok, ".") {
-					continue
-				}
-				if to, how := resolve(f.Path, tok, pkg); to != "" && !seen[to] {
+			for _, t := range pathTokens(ln) {
+				if to, how := resolve(f.Path, t.tok, t.pkg); to != "" && !seen[to] {
 					seen[to] = true
 					add("path", to, 0, how)
 				}
@@ -410,4 +403,58 @@ func sameRoute(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+type pathTok struct{ tok, pkg string }
+
+func pathChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '_' || c == '@' || c == '+' || c == '.' || c == '-' || c == '/'
+}
+
+// pathTokens are the path-shaped words of a line — containing a '/' or an
+// extension — with the ROS package a $(find pkg)/ or package://pkg/ prefix
+// names. A hand scan: a regular expression over every line of a large repo
+// was most of the reference graph's cost.
+func pathTokens(ln string) []pathTok {
+	if !strings.ContainsAny(ln, "./") {
+		return nil
+	}
+	var out []pathTok
+	for i := 0; i < len(ln); {
+		if !pathChar(ln[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(ln) && pathChar(ln[j]) {
+			j++
+		}
+		tok, pkg := ln[i:j], ""
+		// $(find pkg)/rest and package://pkg/rest
+		if i >= 1 && ln[i-1] == ')' {
+			if k := strings.LastIndex(ln[:i-1], "$(find "); k >= 0 && !strings.ContainsAny(ln[k+7:i-1], " )") {
+				pkg = ln[k+7 : i-1]
+			}
+		}
+		if strings.HasPrefix(tok, "//") && i >= len("package:") && ln[i-len("package:"):i] == "package:" {
+			rest := tok[2:]
+			if k := strings.IndexByte(rest, '/'); k > 0 {
+				pkg, tok = rest[:k], rest[k+1:]
+			}
+		}
+		i = j
+		if len(tok) < 3 || len(tok) > 300 {
+			continue
+		}
+		slash := strings.IndexByte(tok, '/') >= 0
+		dot := strings.LastIndexByte(tok, '.')
+		ext := dot > 0 && dot < len(tok)-1 && !strings.ContainsAny(tok[dot+1:], "/") &&
+			(tok[dot+1] < '0' || tok[dot+1] > '9')
+		if !slash && !ext {
+			continue
+		}
+		out = append(out, pathTok{strings.TrimRight(tok, "."), pkg})
+	}
+	return out
 }

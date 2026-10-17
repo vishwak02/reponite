@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -334,9 +335,20 @@ func deflate(s string) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+var inflaters = sync.Pool{New: func() any { return flate.NewReader(bytes.NewReader(nil)) }}
+
+// inflate decodes one blob with a pooled decompressor, writing straight into
+// the returned string's buffer (sized from a typical 4x ratio).
 func inflate(z []byte) (string, error) {
-	b, err := io.ReadAll(flate.NewReader(bytes.NewReader(z)))
-	return string(b), err
+	r := inflaters.Get().(io.ReadCloser)
+	defer inflaters.Put(r)
+	if err := r.(flate.Resetter).Reset(bytes.NewReader(z), nil); err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.Grow(4 * len(z))
+	_, err := io.Copy(&sb, r)
+	return sb.String(), err
 }
 
 // --- writes (used by the indexer) -----------------------------------------
@@ -954,6 +966,13 @@ func (s *Store) readFiles(rid int64, keep func(string) bool) []query.File {
 	if err != nil {
 		return nil
 	}
+	type raw struct {
+		path string
+		z    []byte
+		cont string
+		ok   bool
+	}
+	var blobs []raw
 	for rows.Next() {
 		var path string
 		var z []byte
@@ -961,15 +980,36 @@ func (s *Store) readFiles(rid int64, keep func(string) bool) []query.File {
 			if keep != nil && !keep(path) {
 				continue
 			}
-			cont, err := inflate(z)
-			if err != nil {
-				continue // a corrupt blob is skipped, never served as empty content
-			}
-			byPath[path] = &query.File{Path: path, Content: cont}
-			order = append(order, path)
+			blobs = append(blobs, raw{path: path, z: z})
 		}
 	}
 	rows.Close()
+	// inflate on every core: decoding a large ref was most of a cold answer
+	var wg sync.WaitGroup
+	next := make(chan int, len(blobs))
+	for i := range blobs {
+		next <- i
+	}
+	close(next)
+	for w := 0; w < runtime.GOMAXPROCS(0); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				c, err := inflate(blobs[i].z)
+				blobs[i].cont, blobs[i].ok = c, err == nil
+				blobs[i].z = nil
+			}
+		}()
+	}
+	wg.Wait()
+	for _, b := range blobs {
+		if !b.ok {
+			continue // a corrupt blob is skipped, never served as empty content
+		}
+		byPath[b.path] = &query.File{Path: b.path, Content: b.cont}
+		order = append(order, b.path)
+	}
 	srows, err := s.db.Query(`SELECT pn.s, sn.s, sp.start_line, sp.end_line FROM ref_files_v2 f
 		JOIN spans sp ON sp.set_id = f.span_set JOIN names pn ON pn.id = f.path_id JOIN names sn ON sn.id = sp.name_id
 		WHERE f.ref_id=?`, rid)

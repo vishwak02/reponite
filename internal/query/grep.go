@@ -108,15 +108,9 @@ func effectiveLimit(limit int) int {
 // Matches are emitted in (path, line) order regardless of store file order, so
 // an Offset/Limit window is stable across calls (honest paging).
 func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error) {
-	limit := effectiveLimit(opt.Limit)
-	if opt.Offset < 0 {
-		opt.Offset = 0
-	}
 	literal := opt.Fixed || regexp.QuoteMeta(pattern) == pattern
-	var re *regexp.Regexp
 	if !literal {
-		var err error
-		if re, err = regexp.Compile(pattern); err != nil {
+		if _, err := regexp.Compile(pattern); err != nil {
 			return GrepResult{}, err
 		}
 	}
@@ -136,6 +130,27 @@ func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error
 		}
 	}
 
+	res, err := ix.grepCandidates(pattern, opt, candidates)
+	if err == nil {
+		res.Note = note
+	}
+	return res, err
+}
+
+// grepCandidates matches pattern line by line in the candidate files.
+func (ix *TrigramIndex) grepCandidates(pattern string, opt GrepOptions, candidates []int) (GrepResult, error) {
+	limit := effectiveLimit(opt.Limit)
+	if opt.Offset < 0 {
+		opt.Offset = 0
+	}
+	literal := opt.Fixed || regexp.QuoteMeta(pattern) == pattern
+	var re *regexp.Regexp
+	if !literal {
+		var err error
+		if re, err = regexp.Compile(pattern); err != nil {
+			return GrepResult{}, err
+		}
+	}
 	match := func(line string) bool {
 		if literal {
 			return strings.Contains(line, pattern)
@@ -147,7 +162,7 @@ func (ix *TrigramIndex) Grep(pattern string, opt GrepOptions) (GrepResult, error
 	// store's file order — without this, an offset window shifts between calls.
 	sort.Slice(candidates, func(i, j int) bool { return ix.files[candidates[i]].Path < ix.files[candidates[j]].Path })
 
-	res := GrepResult{Scanned: len(candidates), Offset: opt.Offset, Note: note}
+	res := GrepResult{Scanned: len(candidates), Offset: opt.Offset}
 	for _, fi := range candidates {
 		f := ix.files[fi]
 		for ln, text := range strings.Split(f.Content, "\n") {
@@ -340,4 +355,57 @@ func enclosing(spans []SymbolSpan, line int) string {
 		}
 	}
 	return best
+}
+
+// ScanGrep is TrigramIndex.Grep for a single query: it prefilters each file
+// by the pattern's required literals with a substring search instead of
+// building a trigram index first. One query reads every file once either way;
+// building the index cost more than the search (42 s of a 67k-file tree).
+func ScanGrep(files []File, pattern string, opt GrepOptions) (GrepResult, error) {
+	literal := opt.Fixed || regexp.QuoteMeta(pattern) == pattern
+	var sets [][]string
+	note := ""
+	if literal {
+		sets = [][]string{{pattern}}
+	} else {
+		if _, err := regexp.Compile(pattern); err != nil {
+			return GrepResult{}, err
+		}
+		if re, err := syntax.Parse(pattern, syntax.Perl); err == nil {
+			for _, set := range requiredLiteralSets(re) {
+				if usableLiteralSet(set) {
+					sets = append(sets, set)
+				}
+			}
+		}
+		if len(sets) == 0 {
+			note = "regex without literal atoms: full scan"
+		}
+	}
+	var keep []File
+	for _, f := range files {
+		ok := true
+		for _, set := range sets {
+			any := false
+			for _, lit := range set {
+				if strings.Contains(f.Content, lit) {
+					any = true
+					break
+				}
+			}
+			if !any {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			keep = append(keep, f)
+		}
+	}
+	ix := &TrigramIndex{files: keep}
+	res, err := ix.grepCandidates(pattern, opt, ix.allFiles())
+	if err == nil && res.Note == "" {
+		res.Note = note
+	}
+	return res, err
 }

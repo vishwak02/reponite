@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -111,4 +112,25 @@ func TestArgTopicUnresolvedStaysUnbound(t *testing.T) {
 	if res.ArgResolved != 0 || len(res.Unbound) != 1 {
 		t.Fatalf("arg_resolved=%d unbound=%+v groups=%+v", res.ArgResolved, res.Unbound, res.Groups)
 	}
+}
+
+// Test code constructing a library many times must not hide the one real
+// call chain (a generic-callee cutoff counted only production call sites).
+func TestArgTopicIgnoresTestCallSites(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("lib", "v1", query.File{Path: "pub/src/pub.cpp",
+		Content: "Pub::Pub(ros::NodeHandle& nh, const std::string& topic) {\n  pub_ = nh.advertise<std_msgs::String>(topic, 1);\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "Pub.Pub", StartLine: 1, EndLine: 3}}})
+	m.PutFile("lib", "v1", query.File{Path: "app/src/main.cpp", Content: "int main() {\n  Pub p(nh, \"/real\");\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "main", StartLine: 1, EndLine: 3}}})
+	var b strings.Builder
+	b.WriteString("TEST(P, x) {\n")
+	for i := 0; i < 40; i++ {
+		b.WriteString("  Pub p" + strconv.Itoa(i) + "(nh, \"/t" + strconv.Itoa(i) + "\");\n")
+	}
+	b.WriteString("}\n")
+	m.PutFile("lib", "v1", query.File{Path: "pub/test/pub_test.cpp", Content: b.String(),
+		Symbols: []query.SymbolSpan{{Name: "TEST", StartLine: 1, EndLine: 42}}})
+	res := query.CommGraph(m, query.FleetRepo, "v1")
+	topicGroup(t, res, "real")
 }

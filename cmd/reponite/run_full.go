@@ -269,6 +269,8 @@ func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt p
 		fail(err)
 	}
 	fmt.Printf("indexed %s@%s (git %s @ %s)%s\n", repo, rv.Label, rv.Rev, shortHash(commit), moduleNote(st, repo))
+	// derive the per-repo facts questions need now, so no question pays for them
+	query.WarmFacts(st, repo, rv.Label)
 }
 
 const maxSubmoduleDepth = 5

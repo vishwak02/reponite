@@ -146,11 +146,28 @@ func callerSiteUsages(s Store, ref, base string, callers map[string]map[string]b
 		}
 		files := s.Files(rp, ref)
 		byPath := map[string]File{}
+		byDir := map[string][]File{} // a caller's package directory -> its files
 		for _, f := range files {
 			byPath[f.Path] = f
+			byDir[pkgFromPath(f.Path)] = append(byDir[pkgFromPath(f.Path)], f)
 		}
 		for _, caller := range sortedSet(set) {
-			path, span, ok := locateSymbol(files, caller)
+			// look only in the caller's own package directory: scanning every
+			// file per caller is quadratic on a large repo
+			cand := files
+			if i := strings.LastIndexByte(caller, '/'); i >= 0 {
+				if j := strings.IndexByte(caller[i:], '.'); j > 0 {
+					if fs, ok := byDir[caller[:i+j]]; ok {
+						cand = fs
+					}
+				}
+			} else if fs, ok := byDir[""]; ok {
+				cand = fs
+			}
+			path, span, ok := locateSymbol(cand, caller)
+			if !ok && len(cand) != len(files) {
+				path, span, ok = locateSymbol(files, caller)
+			}
 			if !ok {
 				continue
 			}
@@ -193,16 +210,24 @@ func sortedKeysBool(m map[string]map[string]bool) []string {
 // top-level script code no caller symbol encloses.
 func shellCommandUsages(s Store, repo, ref, base string, defRe *regexp.Regexp, have []Usage) []Usage {
 	pat := `(^|[;&|({]|\b(then|do|else|if|while|until|time|exec)\s|!\s)\s*` + regexp.QuoteMeta(base) + `(\s|;|&|\||\)|$)`
-	g, err := GrepRepo(s, repo, ref, pat, GrepOptions{Limit: -1})
-	if err != nil {
-		return nil
+	// only shell scripts can call a function as a command: scan just those
+	var matches []Match
+	for _, rp := range reposFor(s, repo) {
+		g, err := ScanGrep(filesMatching(s, rp, ref, isShellPath), pat, GrepOptions{Limit: -1})
+		if err != nil {
+			return nil
+		}
+		for _, m := range g.Matches {
+			m.Repo = rp
+			matches = append(matches, m)
+		}
 	}
 	seen := map[string]bool{}
 	for _, u := range have {
 		seen[u.Repo+"\x00"+u.Path+"\x00"+strconv.Itoa(u.Line)] = true
 	}
 	var out []Usage
-	for _, m := range g.Matches {
+	for _, m := range matches {
 		if !isShellPath(m.Path) || defRe.MatchString(m.Text) || strings.HasPrefix(strings.TrimSpace(m.Text), "#") {
 			continue
 		}

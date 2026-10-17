@@ -702,28 +702,20 @@ func testRefs(s Store, repo, ref, qid string, testCallers []ExplainEdge, idx *sp
 		seen[t.Path+"\x00"+baseName(c.Symbol)] = true
 		out = append(out, t)
 	}
-	// Test files naming it, scanned directly: one pattern over the test files
-	// only is far cheaper than a trigram index of the whole fleet.
+	// Test files naming it, from each repo's test-word index (built once per
+	// indexed content and cached): a fleet with a kernel-sized repo would
+	// otherwise rescan thousands of test files for every question.
 	base := baseName(qid)
-	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(base) + `\b`)
 	var found []TestRef
 	for _, rp := range reposFor(s, FleetRepo) {
-		for _, f := range filesMatching(s, rp, ref, IsTestPath) {
-			if !strings.Contains(f.Content, base) {
+		for _, t := range testWordIndex(s, rp, ref)[base] {
+			k := t.Path + "\x00" + t.In
+			if seen[k] {
 				continue
 			}
-			for i, ln := range strings.Split(f.Content, "\n") {
-				if !word.MatchString(ln) {
-					continue
-				}
-				in := enclosing(f.Symbols, i+1)
-				k := f.Path + "\x00" + in
-				if seen[k] {
-					continue
-				}
-				seen[k] = true
-				found = append(found, TestRef{Repo: rp, Path: f.Path, Line: i + 1, In: in})
-			}
+			seen[k] = true
+			t.Repo = rp
+			found = append(found, t)
 		}
 	}
 	sort.SliceStable(found, func(i, j int) bool {
@@ -1164,7 +1156,11 @@ func handlerSymbol(s Store, ref string, r Route) string {
 // repoHasComms reports whether any source file of repo uses a ROS
 // communication idiom.
 func repoHasComms(s Store, repo, ref string) bool {
-	for _, f := range s.Files(repo, ref) {
+	return cachedFact(s, repo, ref, "hascomms", "", func() bool { return scanHasComms(s, repo, ref) })
+}
+
+func scanHasComms(s Store, repo, ref string) bool {
+	for _, f := range filesMatching(s, repo, ref, func(p string) bool { return commLang(p) != "" }) {
 		if commLang(f.Path) == "" || !mayHaveComms(f.Content) {
 			continue
 		}
@@ -1173,4 +1169,39 @@ func repoHasComms(s Store, repo, ref string) bool {
 		}
 	}
 	return false
+}
+
+// maxTestRefsPerWord bounds a word's entries in a test-word index: a name
+// mentioned by more tests than this is too common to say which test covers it.
+const maxTestRefsPerWord = 64
+
+var testIdentRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]{2,}`)
+
+// testWordIndex maps every identifier in repo's test files to the first line
+// naming it in each enclosing test symbol (Repo left empty).
+func testWordIndex(s Store, repo, ref string) map[string][]TestRef {
+	return cachedFact(s, repo, ref, "testwords", "", func() map[string][]TestRef {
+		idx := map[string][]TestRef{}
+		for _, f := range filesMatching(s, repo, ref, IsTestPath) {
+			seen := map[string]bool{}
+			for i, ln := range strings.Split(f.Content, "\n") {
+				if len(ln) > 1000 {
+					continue
+				}
+				in := ""
+				for _, w := range testIdentRe.FindAllString(ln, -1) {
+					if in == "" {
+						in = enclosing(f.Symbols, i+1)
+					}
+					k := w + "\x00" + in
+					if seen[k] || len(idx[w]) >= maxTestRefsPerWord {
+						continue
+					}
+					seen[k] = true
+					idx[w] = append(idx[w], TestRef{Path: f.Path, Line: i + 1, In: in})
+				}
+			}
+		}
+		return idx
+	})
 }

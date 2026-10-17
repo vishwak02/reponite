@@ -64,3 +64,15 @@ func TestLinksAdapters(t *testing.T) {
 		t.Errorf("rpc link %+v", l)
 	}
 }
+
+func TestLinksRelativeParent(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "v1", query.File{Path: "a/b/main.yml", Content: "include: ../shared/common.yml\n"})
+	m.PutFile("r", "v1", query.File{Path: "a/shared/common.yml", Content: "x: 1\n"})
+	for _, l := range query.Links(m, "r", "v1") {
+		if l.Path == "a/b/main.yml" && l.To == "a/shared/common.yml" && l.Resolved == "relative" {
+			return
+		}
+	}
+	t.Fatalf("relative ../ path not linked: %+v", query.Links(m, "r", "v1"))
+}

@@ -243,7 +243,7 @@ func RootCauseBy(s Store, repo, target, from, to string) RootCauseResult {
 func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, error) {
 	repos := reposFor(s, repo)
 	if len(repos) == 1 {
-		res, err := BuildTrigramIndex(s.Files(repos[0], ref)).Grep(pattern, opt)
+		res, err := ScanGrep(s.Files(repos[0], ref), pattern, opt)
 		if err != nil {
 			return GrepResult{}, err
 		}
@@ -274,7 +274,7 @@ func GrepRepo(s Store, repo, ref, pattern string, opt GrepOptions) (GrepResult, 
 		if !refIndexed(s, rp, ref) {
 			missing = append(missing, rp)
 		}
-		res, err := BuildTrigramIndex(s.Files(rp, ref)).Grep(pattern, sub)
+		res, err := ScanGrep(s.Files(rp, ref), pattern, sub)
 		if err != nil {
 			return GrepResult{}, err
 		}

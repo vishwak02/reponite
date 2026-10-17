@@ -120,3 +120,15 @@ type SkippedPath struct {
 type SkipReader interface {
 	Skipped(repo, ref string) []SkippedPath
 }
+
+// WarmFacts computes and caches the per-repo derived facts the analyzers read
+// (test-word index, ROS-endpoint presence, reference graph), right after a ref
+// is indexed, so the first question about a large repo does not pay for them.
+func WarmFacts(s Store, repo, ref string) {
+	if currentFactCache() == nil {
+		return
+	}
+	testWordIndex(s, repo, ref)
+	repoHasComms(s, repo, ref)
+	Links(s, repo, ref)
+}
