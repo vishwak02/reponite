@@ -107,6 +107,11 @@ reponite index . --git v1.0.0 --submodules   # plus each submodule at the commit
 - The index lives at `<repo>/.reponite/index.db`, or at `$REPONITE_STORE_DIR/<repo>/index.db`
   when that is set.
 - Vendored code is excluded by default; see [Ignoring vendored code](#ignoring-vendored-code).
+- Files that cannot be hand-written source are skipped and listed at the end of the index
+  output: files larger than 4 MB (`REPONITE_MAX_SOURCE_BYTES` changes the limit), binary
+  content, and minified or bundled web assets.
+- Parsing runs on every core. A Linux-kernel-sized tree (about 67,000 files) indexes in a few
+  minutes and needs about 6 GB of memory at its peak; ordinary repositories need far less.
 
 `reponite watch [dir]` re-indexes `HEAD` whenever source files change.
 
@@ -363,8 +368,8 @@ Still honest about what it cannot know, in the output itself: a remap target tha
 unexpanded substitution (`$(find …)`, `$(env …)`, an `$(arg …)` with no default) is **reported,
 not applied** — grouping endpoints under the literal `$(arg scan_topic)` would be worse than not
 remapping. `<include>` directives are not expanded, a name remapped inconsistently within one
-package reads `launch-ambiguous` rather than being guessed, and names built by expressions
-(concatenation, calls) are *counted as unresolved*.
+package reads `launch-ambiguous` rather than being guessed, and names built by expressions no
+trace below explains are *counted as unresolved*.
 
 **Names read from parameters are resolved.** Production nodes rarely hard-code a topic: they
 read it into a variable or a config-struct member and pass that to `advertise`/`subscribe`.
@@ -387,6 +392,25 @@ exceeds its best-supported producer/consumer name. Sources that disagree are lis
 candidate, labeled `ambiguous`; a variable or parameter with no resolvable value is still
 reported under `unresolved_endpoints` (`param:status_topic (unresolved)`), and a focused
 `topics /status` shows the ones named like the topic.
+
+**Names passed in by a caller are resolved.** Library code often names neither its topic nor
+its namespace: a publisher class advertises its `topic_name` argument on a node handle it was
+given, the handle was built by a caller as `ros::NodeHandle private_nh("~/" + name)`, and
+`name` comes from a class the launched node constructs. reponite follows the arguments back
+through the call sites — string literals, `+` concatenations, function and constructor
+parameters, `NodeHandle` declarations — and places a private `~name` under every launched node
+of the package the chain starts in:
+
+```jsonc
+{ "repo": "navigation", "path": "costmap_2d/src/costmap_2d_publisher.cpp", "line": 52,
+  "raw": "topic_name", "name": "move_base_flex/global_costmap/costmap",
+  "name_resolution": "args: costmap_2d/src/costmap_2d_publisher.cpp:52 Costmap2DPublisher(topic_name) ← costmap_2d/src/costmap_2d_ros.cpp:159; namespace ~/global_costmap ← … ← mbf_costmap_nav/src/mbf_costmap_nav/costmap_navigation_server.cpp:164; node move_base_flex (pkg mbf_costmap_nav)",
+  "name_confidence": 0.55 }
+```
+
+A function called from more than 24 places is too generic to say which call reached the
+endpoint and is not followed; a name whose chain ends in anything other than a literal stays
+under `unresolved_endpoints`.
 
 **Bindings that only a launch file shows.** A launched node whose source is not indexed (a
 third-party package) or that builds its topic name by an expression is still wired by its
@@ -787,6 +811,9 @@ is filtered by the rules that existed then.
 | `REPONITE_STORE_DIR` | Keep every index outside the repos, at `$REPONITE_STORE_DIR/<repo>/index.db` (with `--git`, the repo itself is then only read) | unset — `<repo>/.reponite/index.db` |
 | `REPONITE_REFS` | Pin repos to refs, `repo=ref,…` — answers read those refs instead of `HEAD` | unset |
 | `REPONITE_NO_TESTS` | `1` drops test code from answers (same as `--no-tests`) | unset |
+| `REPONITE_MAX_SOURCE_BYTES` | Largest source file parsed; larger ones are skipped and listed | `4194304` (4 MB) |
+| `REPONITE_CPUPROFILE` | Write a CPU profile of one command to this file (`go tool pprof`) | unset |
+| `REPONITE_MEMPROFILE` | Rewrite a heap profile to this file every few seconds while a command runs | unset |
 | `REPONITE_EMBED_ENDPOINT` | Optional embeddings endpoint for neural semantic search | unset — the built-in ranker is used |
 | `REPONITE_EMBED_MODEL` | Model name for that endpoint | unset |
 | `REPONITE_EMBED_API_KEY` | Bearer token, if the endpoint needs one | unset |
@@ -899,7 +926,7 @@ needs no index), `setup`.
 
 ## Languages and file types
 
-Go · Python · JavaScript · TypeScript (JSX/TSX) · **Vue** and **Svelte** single-file components · Java · C · C++ · Rust · **Shell** — plus **ROS
+Go · Python · JavaScript · TypeScript (JSX/TSX) · **Vue** and **Svelte** single-file components · Java · C · C++ · Rust · **Shell** · **Robot Framework** — plus **ROS
 interface files** (`.msg`, `.srv`, `.action`), where the field list *is* the contract, so
 adding a field is correctly reported as `shape_changed`, and **ROS launch files**
 (`.launch`, `.test`), which supply the runtime topic remapping the source cannot show.
@@ -911,8 +938,22 @@ python3` and `#!/usr/bin/node` are recognized too. Shell functions have no decla
 parameter list, so a shell edit is reported as `behavior_changed` and never
 `shape_changed` — the honest reading for a language with no signature.
 
+Calls resolve within a language family only (C with C++, JavaScript with TypeScript, Vue and
+Svelte), so a Python `logger.info()` is never linked to a shell function named `info`. The one
+crossing is Robot Framework, whose keywords call Python library functions by name.
+
+**Robot Framework** (`.robot`, `.resource`): every test case and keyword is a symbol and every
+keyword a body calls is an edge. Robot names are case- and space-insensitive, so `Open Door`
+resolves to a keyword of that name and to a Python library function `open_door` alike. `tests`
+lists the test cases that reach a symbol, with a `robot --test '<name>' <suite>` command to run
+just those.
+
 **Content files.** These are stored and searchable (`grep`, `search`, `explain` on a path)
-without a code structure of their own, and several commands read them:
+without a call graph of their own, and several commands read them. Their structure is indexed
+as `section` symbols — Markdown and reStructuredText headings, YAML and JSON keys (to three
+levels) and named list entries (`name`, `id`, `key`, `title`), TOML/INI tables, Dockerfile
+stages and Makefile targets — so `search` finds `README:Installation` or
+`values:services:gateway` and a grep hit names the section it is in:
 
 | Files | Read by |
 |---|---|
@@ -922,6 +963,7 @@ without a code structure of their own, and several commands read them:
 | SQL DDL, `.proto`, `.prisma` | `models` (one span per table / message / model) |
 | `.env*`, `.properties`, Dockerfiles, CI workflows, docker-compose, Makefiles | `config`, `map` |
 | READMEs, package manifests (`go.mod`, `package.json`, `package.xml`, `Cargo.toml`, …) | `map`, `explain` |
+| Markdown, reStructuredText, AsciiDoc, TOML, INI/`.cfg`/`.conf`, templates (`.j2`, `.tpl`, `.tmpl`), Salt (`.sls`), Jsonnet, XML/xacro/URDF/SDF | `grep`, `search` (sections) |
 
 Other file types are not read.
 

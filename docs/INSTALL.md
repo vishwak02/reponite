@@ -168,3 +168,6 @@ Remove the `reponite` entry from your agent's MCP configuration as well.
 | The agent shows no reponite tools | Restart the client after `reponite setup`; check the entry with `reponite setup <dir> --print`. |
 | `cgo: C compiler "gcc" not found` while building | Install gcc or clang (`build-essential`, Xcode Command Line Tools). |
 | `why` returns no commits | The ref was indexed from a working tree. Index it with `--git`, and make sure `git` is on `PATH`. |
+| `N file(s) not parsed (too large to be source, or binary)` after indexing | Generated headers, data blobs and bundled assets are skipped on purpose. Raise `REPONITE_MAX_SOURCE_BYTES` to parse larger files. |
+| Indexing a very large tree uses a lot of memory | Peak memory grows with the number of symbols (about 6 GB for a full Linux kernel). Exclude generated or vendored directories in `.reponiteignore`; `REPONITE_MEMPROFILE=<file>` records where memory goes. |
+| A command is slow | `REPONITE_CPUPROFILE=<file> reponite <command> …` records where the time goes; attach the file to an issue. |

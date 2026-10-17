@@ -9,6 +9,48 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Large repositories, runtime names, more file types (IndexVer 9)
+
+#### Added
+
+- **`topics`: names passed in by a caller.** A topic name or node-handle namespace that is a
+  function or constructor argument is followed back through the call sites (literals,
+  concatenations, parameters, `NodeHandle` declarations), and a private `~name` is placed
+  under the launched nodes of the package the chain starts in — costmap_2d's publisher now
+  links as `/move_base_flex/global_costmap/costmap`. Labeled `args: …` with the chain.
+- **Robot Framework** suites and resource files: test cases and keywords are symbols, keyword
+  calls are edges (to Python library functions too), and `tests` prints a
+  `robot --test` command.
+- **Sections in content files** are symbols (`kind: section`): Markdown/rST headings,
+  YAML/JSON keys and named list entries, TOML/INI tables, Dockerfile stages, Makefile targets.
+  Markdown, rST, AsciiDoc, TOML, INI, templates, Salt, Jsonnet and XML are now stored.
+- `REPONITE_MAX_SOURCE_BYTES`, `REPONITE_CPUPROFILE`, `REPONITE_MEMPROFILE`.
+
+#### Changed
+
+- **Indexing scales to very large trees.** Parse trees are freed as soon as a file is
+  extracted (they live in C memory the Go collector does not see), symbol hashes are computed
+  at parse time, source text is re-read when stored, and parsing runs on every core in walk
+  order. A 67,000-file kernel tree indexes in under 3 minutes at about 6 GB peak; before, it
+  grew past 17 GB.
+- Oversized (> 4 MB), binary and minified source is skipped and listed after indexing instead
+  of being parsed (a 41 MB generated script crashed the parser).
+- Calls resolve within a language family only (Robot → Python excepted), removing false edges
+  such as Python `logger.info()` → a shell `info` function.
+- A module identity is taken from a root manifest, or none for a multi-project workspace; a
+  stale identity is cleared on re-index.
+- `usages` finds calls written without parentheses (shell commands, JSX) and shell functions
+  called from top-level script code; a definition is never its own usage.
+- `context` on a test symbol includes tests; otherwise it says how many test callers/callees
+  are hidden. `search` says when only test symbols match.
+- `config` keeps room for its key list when many keys are flagged.
+- `topics <name>` no longer computes the whole graph first; `trace`, `tests`, `routes`,
+  `topics` and `map` are several times faster on large fleets.
+
+#### Fixed
+
+- A topic name built as `topic + "_updates"` was linked as the literal `_updates`.
+
 ### Wiring outside source code (IndexVer 8)
 
 #### Added
