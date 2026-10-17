@@ -471,6 +471,9 @@ func adjustScore(cos float64, path, symbol string, qw map[string]float64, matche
 	if contentLangOf(path) {
 		score *= 0.7
 	}
+	if IsGeneratedPath(path) {
+		score *= 0.6
+	}
 	return score
 }
 

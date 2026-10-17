@@ -19,12 +19,14 @@ type CoverageKind struct {
 
 // CoverageRepo is one repo's coverage at a ref.
 type CoverageRepo struct {
-	Repo    string         `json:"repo"`
-	Ref     string         `json:"ref"`
-	Stored  int            `json:"stored"`
-	Skipped int            `json:"skipped"`
-	Reasons map[string]int `json:"reasons,omitempty"`
-	Kinds   []CoverageKind `json:"kinds"`
+	Repo    string `json:"repo"`
+	Ref     string `json:"ref"`
+	Stored  int    `json:"stored"`
+	Skipped int    `json:"skipped"`
+	// Generated counts stored files a code generator writes (ranked after hand-written code).
+	Generated int            `json:"generated,omitempty"`
+	Reasons   map[string]int `json:"reasons,omitempty"`
+	Kinds     []CoverageKind `json:"kinds"`
 	// Examples are a few skipped paths per reason, to see what a reason covers.
 	Examples map[string][]string `json:"examples,omitempty"`
 	Recorded bool                `json:"skips_recorded"` // false: indexed before skips were recorded
@@ -66,6 +68,9 @@ func Coverage(s Store, repo, ref string) CoverageResult {
 		filesMatching(s, rp, eff, func(p string) bool {
 			kind(coverageKind(p)).Stored++
 			c.Stored++
+			if IsGeneratedPath(p) {
+				c.Generated++
+			}
 			return false
 		})
 		if canSkip {

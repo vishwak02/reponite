@@ -57,3 +57,42 @@ func IsTestPath(path string) bool {
 	}
 	return false
 }
+
+// generatedSuffixes are file names code generators write: protobuf/gRPC,
+// ROS message bindings, Qt moc/uic, Flutter, Thrift, GraphQL codegen.
+var generatedSuffixes = []string{
+	".pb.go", ".pb.gw.go", "_pb2.py", "_pb2_grpc.py", "_pb2.pyi", ".pb.h", ".pb.cc", ".grpc.pb.h", ".grpc.pb.cc",
+	".g.dart", ".freezed.dart", ".gen.go", "_gen.go", "_generated.go", "_generated.ts", ".generated.ts",
+	"_string.go", "zz_generated.deepcopy.go", ".designer.cs", "_thrift.py",
+}
+
+// IsGeneratedPath reports a file a generator writes, by name convention
+// (foo.pb.go, foo_pb2.py, moc_foo.cpp, a generated/ or gen/ directory, ROS
+// msg/_Foo.py bindings). Such code is indexed but is rarely the answer, so
+// rankings put it after hand-written code.
+func IsGeneratedPath(path string) bool {
+	path = filepath.ToSlash(path)
+	base := strings.ToLower(filepath.Base(path))
+	for _, s := range generatedSuffixes {
+		if strings.HasSuffix(base, s) {
+			return true
+		}
+	}
+	if strings.HasPrefix(base, "moc_") || strings.HasPrefix(base, "ui_") && strings.HasSuffix(base, ".h") ||
+		strings.HasPrefix(base, "qrc_") {
+		return true
+	}
+	segs := strings.Split(path, "/")
+	for i, s := range segs[:max(0, len(segs)-1)] {
+		switch strings.ToLower(s) {
+		case "generated", "__generated__", "gen-py", "gen-cpp", "gen-go", "autogen":
+			return true
+		case "msg", "srv", "action":
+			// ROS python bindings: <pkg>/msg/_Foo.py
+			if i == len(segs)-2 && strings.HasPrefix(segs[len(segs)-1], "_") && strings.HasSuffix(base, ".py") {
+				return true
+			}
+		}
+	}
+	return false
+}
