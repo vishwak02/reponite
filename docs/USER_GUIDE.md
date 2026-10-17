@@ -1020,23 +1020,28 @@ reponite coverage --local --format text
 
 ## How it works
 
-```
-    CLI          MCP server        Web dashboard      VS Code extension
-      └───────────────┴─────────┬────────┴───────────────────┘
-                                │
-   ┌────────────────────────────▼──────────────────────────────┐
-   │  PURE CORE — Go standard library only, no CGO              │
-   │                                                            │
-   │  canon()            normalize source → stable identity     │
-   │  three hashes       symbol · signature · behavior          │
-   │  behavior Merkle    propagate change up the call graph     │
-   │  Compat Oracle      the four verdicts + confidence         │
-   │  root cause · diff · grep · brief · ximpact · topics       │
-   └────────────────────────────┬──────────────────────────────┘
-                                │  thin, build-tagged adapters
-        ┌───────────────┬───────┴───────┬───────────────┐
-   tree-sitter        SQLite         go-git        embeddings
-     (parsing)        (storage)      (refs)         (optional)
+```mermaid
+flowchart TB
+    subgraph surfaces["Surfaces"]
+        CLI["CLI"]
+        MCP["MCP server"]
+        WEB["web dashboard"]
+        VSC["VS Code extension"]
+    end
+    subgraph core["Pure core — Go standard library only, no CGO"]
+        C1["canon(): normalize source → stable identity"]
+        C2["three hashes: symbol · signature · behavior"]
+        C3["behavior Merkle: change propagates up the call graph"]
+        C4["analyzers: compat · rootcause · usages · trace · topics · routes · links · …"]
+    end
+    subgraph adapters["Thin, build-tagged adapters"]
+        TS["tree-sitter<br/>parsing"]
+        SQL["SQLite<br/>storage"]
+        GIT["go-git<br/>refs"]
+        EMB["embeddings<br/>optional"]
+    end
+    surfaces --> core
+    core --> adapters
 ```
 
 The **entire correctness-critical core is pure Go with zero dependencies**. Parsing,

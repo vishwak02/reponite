@@ -47,12 +47,33 @@ dashboard.
 | Which UI action calls which API, and which server route serves it? | `ui`, `routes` |
 | What does the backend store, and what configuration does it read? | `models`, `config` |
 | In a ROS system, who publishes and who subscribes to a topic? | `topics` |
+| What refers to this file or class through configuration, includes or ids? | `links` |
+| Was every file read, and why was anything skipped? | `coverage` |
 | Everything needed to edit one symbol, in one answer | `brief`, `investigate` |
 
-Languages: Go, Python, JavaScript, TypeScript (JSX/TSX), Vue, Svelte, Java, C, C++, Rust and
-shell, plus ROS interface and launch files. YAML, JSON, rviz, SQL, protobuf, Dockerfiles, CI
-workflows and READMEs are indexed as content. Details are in the
+Languages: parsed — Go, Python, JavaScript, TypeScript (JSX/TSX), Vue, Svelte, Java, C, C++,
+Rust, shell and Robot Framework; read heuristically — Kotlin, Swift, C#, Ruby, PHP, Lua, Scala,
+Dart, Groovy, Perl, R, Elixir, Julia and Zig. ROS interface and launch files, and every other
+text file (YAML, JSON, Markdown, XML, CSV, templates, CI workflows, …) are stored and searchable,
+with their structure — keys, headings, elements — as sections. Details are in the
 [user guide](docs/USER_GUIDE.md#languages-and-file-types).
+
+## How it works
+
+```mermaid
+flowchart LR
+    SRC["git history<br/>or working tree"] --> IDX["index<br/>classify every file · parse on every core<br/>resolve calls · three hashes per symbol"]
+    IDX --> DB[("one SQLite index per repo<br/>content-addressed: N versions cost<br/>about as much as one")]
+    DB --> Q["query engine<br/>fleet · per-repo version pins<br/>cached derived results"]
+    Q --> CLI["CLI"]
+    Q --> MCP["MCP · 32 tools<br/>for AI agents"]
+    Q --> WEB["web dashboard"]
+```
+
+Each symbol gets three hashes — its text, its signature, and its behavior (a Merkle hash
+over everything it calls) — which is how a change is classified as compatible, a signature
+change, or a behavior change. The full design, with diagrams of the indexing pipeline, the
+storage schema and the query path, is in [docs/architecture.md](docs/architecture.md).
 
 ## Install
 
