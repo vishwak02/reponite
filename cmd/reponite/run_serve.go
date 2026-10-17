@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
 
 	"github.com/vishwak02/reponite/internal/interfaces"
 	"github.com/vishwak02/reponite/internal/processing"
@@ -21,9 +22,10 @@ import (
 // localhost by default; --addr overrides.
 func serveCommand(args []string) {
 	installFactsIfBuilt()
-	var addr string
-	dirs := parseCmd("serve", "serve [<dir>...] [--addr host:port]", args, func(fs *flag.FlagSet) {
+	var addr, refs string
+	dirs := parseCmd("serve", "serve [<dir>...] [--addr host:port] [--refs repo=ref,...]", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&addr, "addr", "127.0.0.1:8899", "listen address")
+		fs.StringVar(&refs, "refs", os.Getenv("REPONITE_REFS"), "read each repo at its own ref (repo=ref,...), e.g. the versions a deployed system runs; default $REPONITE_REFS")
 	})
 	if addr == "" {
 		addr = "127.0.0.1:8899"
@@ -45,6 +47,14 @@ func serveCommand(args []string) {
 	store := stores[0]
 	if len(stores) > 1 {
 		store = storage.NewMultiStore(stores...)
+	}
+	if refs != "" {
+		pins, err := storage.ParsePins(refs)
+		if err != nil {
+			fail(err)
+		}
+		// HEAD (the dashboard's default ref) means "each repo at its pin"
+		store = &storage.Pinned{Inner: store, Pins: pins, Only: "HEAD"}
 	}
 	h := &interfaces.WebHandler{
 		Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0]), RepoStores: repoStores,

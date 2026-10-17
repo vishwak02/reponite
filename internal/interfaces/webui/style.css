@@ -209,3 +209,47 @@ pre.code{background:var(--surface-2);border:1px solid var(--line);border-radius:
 .btn{font:inherit;font-size:13px;font-weight:600;color:var(--fg);background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 14px;cursor:pointer}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
+
+/* ---- graph canvas (graph.js) ---- */
+.split .detail.canvas-host{padding:0;overflow:hidden;position:relative}
+.canvas-host.inline{height:calc(100vh - 160px);min-height:420px;border:1px solid var(--line);border-radius:var(--r-lg);
+  background:var(--surface);margin-top:12px;overflow:hidden;position:relative}
+.gcanvas svg{display:block;cursor:grab;background:
+  radial-gradient(circle,var(--line) 1px,transparent 1.2px) 0 0/22px 22px}
+.gcanvas svg.panning{cursor:grabbing}
+.gedge{fill:none;stroke:var(--line-strong);transition:opacity .12s,stroke .12s}
+.gedge.dashed{stroke-dasharray:5 4}
+.arrow.edge{fill:var(--line-strong)}.arrow.hi{fill:var(--accent)}
+.gnode rect{fill:var(--surface);stroke:var(--line-strong);stroke-width:1.5;filter:drop-shadow(0 1px 1px rgba(0,0,0,.08))}
+.gnode circle{stroke:var(--surface);stroke-width:2}
+.gnode{cursor:pointer;transition:opacity .12s}
+.glabel{font:600 12px var(--mono);fill:var(--fg);pointer-events:none}
+.gnode circle + .glabel{font:600 13px var(--sans);paint-order:stroke;stroke:var(--bg);stroke-width:3px}
+.gsub{font:10.5px var(--mono);fill:var(--faint);pointer-events:none}
+.gbadge{font:700 10px var(--sans);fill:var(--beh)}
+.gnode.focus rect{fill:var(--accent-weak);stroke:var(--accent);stroke-width:2.2}
+.gnode.focus .glabel{fill:var(--accent)}
+.gnode.ext rect{stroke-dasharray:4 3;fill:var(--surface-2)}
+.gnode.test rect{fill:var(--surface-2)}
+.gnode.topic circle{stroke-width:3}
+.gnode.lonely circle{fill:var(--beh)!important}
+.gnode.sel rect{stroke:var(--accent);stroke-width:2.6}
+.gnode.sel circle{stroke:var(--accent);stroke-width:3}
+svg.hovering .gnode:not(.near){opacity:.25}
+svg.hovering .gedge:not(.hi){opacity:.12}
+.gedge.hi{stroke:var(--accent)!important;opacity:1}
+
+/* controls and legends beside a canvas */
+.ctlrow{display:flex;align-items:center;gap:12px;margin:8px 2px 10px;font-size:12.5px;color:var(--muted)}
+.ctlrow label{white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.ctlrow.wrapr{flex-wrap:wrap}
+.ctlrow select{font:inherit;color:var(--fg);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:2px 6px}
+.btn.sm{padding:3px 10px;font-size:12px;margin-left:auto}
+.legend{font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:var(--r);padding:8px 10px;margin:4px 0 12px;
+  display:flex;flex-direction:column;gap:4px;background:var(--surface)}
+.legend .ln{display:inline-block;width:26px;height:0;border-top:2px solid var(--line-strong);vertical-align:middle;margin-right:6px}
+.legend .ln.mid{border-top-width:1.3px}.legend .ln.dash{border-top:1.5px dashed var(--line-strong)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.legend-row{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);margin:-8px 0 16px}
+.stackbar{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--surface-2);margin:12px 0 14px}
+.stackbar span{display:block;height:100%;min-width:1px}

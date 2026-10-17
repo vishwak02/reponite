@@ -46,6 +46,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/", h.index)
 	mux.HandleFunc("/style.css", asset("text/css; charset=utf-8", dashboardCSS))
 	mux.HandleFunc("/app.js", asset("application/javascript; charset=utf-8", dashboardJS))
+	mux.HandleFunc("/graph.js", asset("application/javascript; charset=utf-8", dashboardGraphJS))
 	mux.HandleFunc("/api/repos", h.apiRepos)
 	mux.HandleFunc("/api/overview", h.apiOverview)
 	mux.HandleFunc("/api/refs", h.apiRefs)
@@ -62,6 +63,10 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/topics", h.apiTopics)
 	mux.HandleFunc("/api/verify_edit", h.apiVerifyEdit)
 	mux.HandleFunc("/api/grep", h.apiGrep)
+	mux.HandleFunc("/api/graph", h.apiGraph)
+	mux.HandleFunc("/api/links", h.apiLinks)
+	mux.HandleFunc("/api/coverage", h.apiCoverage)
+	mux.HandleFunc("/api/fleetmap", h.apiFleetMap)
 	return mux
 }
 
@@ -129,7 +134,12 @@ func asset(contentType, body string) http.HandlerFunc {
 
 func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {
 	repo := h.repoOr(r)
-	body, err := RefsJSON(repo, h.Store.Refs(repo))
+	refs := h.Store.Refs(repo)
+	// a pinned view reads HEAD as the repo's pinned ref: offer it first
+	if p, ok := h.Store.(query.RefPinner); ok && p.RefFor(repo, "HEAD") != "HEAD" {
+		refs = append([]string{"HEAD"}, refs...)
+	}
+	body, err := RefsJSON(repo, refs)
 	writeJSON(w, body, err)
 }
 
@@ -290,6 +300,43 @@ func (h *WebHandler) apiRootcause(w http.ResponseWriter, r *http.Request) {
 func (h *WebHandler) apiXImpact(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	body, err := XImpactJSON(query.XImpact(h.Store, q.Get("symbol"), q.Get("ref")))
+	writeJSON(w, body, err)
+}
+
+// apiGraph returns a symbol's call-graph neighborhood (nodes + edges) for the
+// graph view: ?symbol=&repo=&depth=1..4&limit=&tests=true.
+func (h *WebHandler) apiGraph(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	depth, _ := strconv.Atoi(q.Get("depth"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	body, err := snakeJSON(query.CallGraph(h.Store, h.repoOr(r), h.refOr(r), q.Get("symbol"), depth, limit, q.Get("tests") == "true", q.Get("external") == "true"))
+	writeJSON(w, body, err)
+}
+
+// apiLinks returns the data references to and from a file or symbol.
+func (h *WebHandler) apiLinks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repo := q.Get("repo")
+	if repo == "" {
+		repo = query.FleetRepo
+	}
+	body, err := snakeJSON(query.LinksFor(h.Store, repo, h.refOr(r), q.Get("target")))
+	writeJSON(w, body, err)
+}
+
+// apiCoverage returns what each repo's index stored and skipped.
+func (h *WebHandler) apiCoverage(w http.ResponseWriter, r *http.Request) {
+	repo := r.URL.Query().Get("repo")
+	if repo == "" {
+		repo = query.FleetRepo
+	}
+	body, err := snakeJSON(query.Coverage(h.Store, repo, h.refOr(r)))
+	writeJSON(w, body, err)
+}
+
+// apiFleetMap returns every repo with the cross-repo links between them.
+func (h *WebHandler) apiFleetMap(w http.ResponseWriter, r *http.Request) {
+	body, err := FleetMapJSON(query.FleetMap(h.Store, h.refOr(r), 1<<20))
 	writeJSON(w, body, err)
 }
 

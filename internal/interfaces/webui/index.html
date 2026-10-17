@@ -35,6 +35,18 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
       <span>Explore</span>
     </a>
+    <a data-view="graph" href="#/graph">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2.5"/><circle cx="4" cy="6" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="6" r="2"/><circle cx="20" cy="18" r="2"/><path d="M6 6.8l4 3.6M6 17.2l4-3.6M14 10.4l4-3.6M14 13.6l4 3.6" stroke-linecap="round"/></svg>
+      <span>Call graph</span>
+    </a>
+    <a data-view="fleet" href="#/fleet">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="8.5" y="14" width="7" height="7" rx="2"/><path d="M10 6.5h4M7 10l3 4M17 10l-3 4" stroke-linecap="round"/></svg>
+      <span>Fleet map</span>
+    </a>
+    <a data-view="links" href="#/links">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1" stroke-linecap="round"/></svg>
+      <span>Links</span>
+    </a>
     <a data-view="diff" href="#/diff">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3v10M5 13a3 3 0 100 6 3 3 0 000-6zM19 21V11M19 11a3 3 0 100-6 3 3 0 000 6zM8 6h6a2 2 0 012 2v3" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span>Diff</span>
@@ -50,6 +62,10 @@
     <a data-view="usages" href="#/usages">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h10M4 18h13" stroke-linecap="round"/><circle cx="19" cy="12" r="2"/></svg>
       <span>Usages</span>
+    </a>
+    <a data-view="coverage" href="#/coverage">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" stroke-linecap="round"/></svg>
+      <span>Coverage</span>
     </a>
     <a data-view="verify" href="#/verify">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 3v6c0 4.4-3 7.4-7 9-4-1.6-7-4.6-7-9V6l7-3z" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -73,6 +89,60 @@
         <div class="detail" id="brief"></div>
       </div>
     </div>
+
+    <div id="graph" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3" stroke-linecap="round"/></svg>
+            <input id="gq" placeholder="Symbol to center on…" autocomplete="off">
+          </div>
+          <div id="ghits"></div>
+          <div class="ctlrow">
+            <label>depth <select id="gdepth"><option>1</option><option selected>2</option><option>3</option></select></label>
+            <label><input type="checkbox" id="gtests"> tests</label>
+            <label><input type="checkbox" id="gext"> library calls</label>
+            <button class="btn sm" id="gfit">fit</button>
+          </div>
+          <div class="legend">
+            <div><span class="ln solid"></span> resolved (≥ 0.85)</div>
+            <div><span class="ln mid"></span> member / import (0.7–0.85)</div>
+            <div><span class="ln dash"></span> weak (&lt; 0.7: override, external, ambiguous)</div>
+            <div class="muted">callers ← <b>focus</b> → callees · drag to pan · wheel to zoom · click a node for its brief · double-click to re-center</div>
+          </div>
+          <div id="gside"></div>
+        </div>
+        <div class="detail canvas-host" id="gcanvas"></div>
+      </div>
+    </div>
+
+    <div id="fleet" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="page-h" style="font-size:16px">Fleet map</div>
+          <p class="muted" style="font-size:12.5px">Every indexed repo, and the links found between them: HTTP calls to routes, ROS topics, resolved imports, declared dependencies. Node size follows the symbol count.</p>
+          <div id="fkinds" class="ctlrow wrapr"></div>
+          <div id="fside"></div>
+        </div>
+        <div class="detail canvas-host" id="fcanvas"></div>
+      </div>
+    </div>
+
+    <div id="links" class="view">
+      <div class="split">
+        <div class="pane">
+          <div class="field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1" stroke-linecap="round"/></svg>
+            <input id="lq" placeholder="File path or symbol…" autocomplete="off">
+          </div>
+          <p class="muted" style="font-size:12.5px;padding:0 2px">References written as data: paths, ids, template includes, Helm values, rpc implementations, OpenAPI routes, configuration values naming code. Referred-by on the left, refers-to on the right; double-click a file to follow it.</p>
+          <div id="lside"></div>
+        </div>
+        <div class="detail canvas-host" id="lcanvas"></div>
+      </div>
+    </div>
+
+    <div id="coverage" class="view"><div class="wrap" id="coverage-body"></div></div>
 
     <div id="diff" class="view">
       <div class="split">
@@ -106,7 +176,9 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M8 8a5.5 5.5 0 000 8M16 8a5.5 5.5 0 010 8" stroke-linecap="round"/></svg>
             <input id="tq" placeholder="Topic / service / action name… (blank = whole map)" autocomplete="off">
           </div>
-          <p class="muted" style="font-size:12.5px;padding:0 2px">The runtime edges no call graph contains: ROS publishers ↔ subscribers (and service/action clients ↔ servers) linked by name across the fleet. Name-string linkage is medium-confidence; remapping isn't resolved.</p>
+          <p class="muted" style="font-size:12.5px;padding:0 2px">The runtime edges no call graph contains: ROS publishers ↔ subscribers (and service/action clients ↔ servers) linked by their runtime name across the fleet — launch remaps, parameter values and names passed in by callers resolved.</p>
+          <div class="ctlrow"><label><input type="checkbox" id="tgraph" checked> graph</label><label><input type="checkbox" id="tconn"> connected only</label></div>
+          <div id="tside"></div>
         </div>
         <div class="detail" id="topics-detail"></div>
       </div>
@@ -142,6 +214,7 @@
   </main>
 </div>
 <div id="toast"></div>
+<script src="/graph.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

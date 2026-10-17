@@ -15,3 +15,6 @@ var dashboardCSS string
 
 //go:embed webui/app.js
 var dashboardJS string
+
+//go:embed webui/graph.js
+var dashboardGraphJS string
