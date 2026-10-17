@@ -245,3 +245,17 @@ func TestErrorsCatalogueAndBudget(t *testing.T) {
 		t.Errorf("miss: %+v", none)
 	}
 }
+
+// A fragment of a formatted message finds the template that contains it.
+func TestErrorsMessageFragment(t *testing.T) {
+	s := graphStore{filesStore: filesStore{files: map[string][]File{"svc": {{Path: "svc/resolver.py",
+		Content: "def resolve(e):\n    raise Exception(\"Instance resolver error: {}\".format(str(e)))\n",
+		Symbols: []SymbolSpan{{Name: "resolve", StartLine: 1, EndLine: 2}}}}}}}
+	r := Errors(s, FleetRepo, "v1", "Instance resolver error", 0)
+	if len(r.Sites) != 1 || r.Sites[0].Match != "message_fragment" {
+		t.Fatalf("sites: %+v (%s)", r.Sites, r.Note)
+	}
+	if n := len(Errors(s, FleetRepo, "v1", "error", 0).Sites); n != 0 {
+		t.Fatalf("a bare word must not match every message: %d", n)
+	}
+}

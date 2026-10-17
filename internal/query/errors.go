@@ -38,7 +38,7 @@ type ErrorSite struct {
 	Text       string // the source line, trimmed
 	Test       bool
 	Fixed      int      // message mode: fixed characters of the template that matched
-	Match      string   // why it is listed: message | type | status | code | base_type
+	Match      string   // why it is listed: message | message_fragment | type | status | code | base_type
 	Callers    []string // one hop up: qualified callers of the enclosing symbol
 	MoreCalls  int      // callers not listed
 	lang       string
@@ -730,6 +730,22 @@ func Errors(s Store, repo, ref, q string, budget int) ErrorsResult {
 			}
 		}
 	}
+	// A pasted fragment of a message ("Instance resolver error" for
+	// "Instance resolver error: {}") matches no whole template: take the sites
+	// whose literal text contains it, labeled as fragment matches. Short
+	// words ("error") would match everything and are left unmatched.
+	if len(matched) == 0 && status == 0 && len(msg) >= 8 {
+		lq := strings.ToLower(msg)
+		for _, x := range sc.sites {
+			for _, l := range x.lits {
+				if strings.Contains(strings.ToLower(l), lq) {
+					x.Fixed, x.Match = len(msg), "message_fragment"
+					matched = append(matched, x)
+					break
+				}
+			}
+		}
+	}
 	// A template matching only a fragment of what the best one matched is a
 	// coincidence ("does not exist"), not another producer.
 	best := 0
@@ -830,6 +846,8 @@ func matchRank(m string) int {
 		return 3
 	case "message", "default_message":
 		return 1
+	case "message_fragment":
+		return 0
 	}
 	return 0
 }
