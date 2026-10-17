@@ -19,7 +19,6 @@ import (
 	"path"
 	"strings"
 	"unicode/utf8"
-
 )
 
 // fileInput is one tracked file offered by a walker.
@@ -161,4 +160,3 @@ func textFile(in fileInput) classified {
 	syms, spans := sectionSymbolsAs(p, src, lang)
 	return classified{pf: &ParsedFile{Path: p, Content: src, Lang: lang, IsTest: IsTestPath(p), Symbols: syms, Spans: spans}}
 }
-
