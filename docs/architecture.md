@@ -362,7 +362,7 @@ flowchart BT
 | `internal/scip` | SCIP index reader (a protobuf subset) | — |
 | `internal/fleet` | the persistent repo registry | — |
 | `internal/semantic` | optional embeddings endpoint for semantic search | `neural` |
-| `internal/interfaces` | JSON and compact-text renderings, MCP tools, web dashboard | `mcp` for the server |
+| `internal/interfaces` | JSON and compact-text renderings, MCP tools, the web server and its embedded app (`webui/dist`, built from `web/`) | `mcp` for the server |
 | `cmd/reponite` | the CLI | `sqlite && treesitter` for index-backed commands |
 
 ## 9. Build tiers and verification

@@ -795,24 +795,33 @@ reponite serve .      # just this one
 reponite serve --refs api=v2.3.0,web=v1.8.1   # each repo at the version a system runs
 ```
 
-Views:
+The top bar holds the repository and version every repo-scoped page reads, and a search box:
+**⌘K / Ctrl+K** opens a palette that finds any symbol in the fleet (or only the selected repo)
+and jumps to any page.
 
-| View | What it shows |
+| Page | What it shows |
 |---|---|
-| **Overview** | what is indexed per repo and ref, and the database behind it |
-| **Explore** | symbol search → editing brief (body, callers, callees, tests, compat) |
-| **Call graph** | a symbol's callers on the left and callees on the right, up to three hops, edges drawn by resolution confidence; click a node for its brief, double-click to re-center |
-| **Fleet map** | every repo, sized by symbols, linked by HTTP calls, ROS topics and services, imports and declared dependencies |
-| **Links** | what refers to a file or symbol as data (paths, ids, includes, values), and what it refers to |
-| **Diff** · **Impact** | what changed between two refs; who across the fleet calls a symbol |
-| **Topics** | publishers → topic → subscribers, as a graph or a list |
-| **Usages** · **Verify** | every call site; paste an edit and see what breaks |
-| **Coverage** | what each repo's index stored and skipped, with reasons |
+| **Overview** | repos, versions, symbols and files across the fleet; the largest repos, the language mix, how the code is started |
+| **Fleet map** | every repo as a node sized by its code, linked by ROS topics and services, HTTP calls, imports and declared dependencies (each kind toggles); click a repo for what it uses and what uses it |
+| **Topics** | every topic, service and action: filter by kind, by "producer ↔ consumer", "cross-repo" or "one side only"; each name drawn as producers → name → consumers with the code line of every endpoint; a fleet **Map** of repos and topics |
+| **Coverage** | per repo, the files stored and skipped, by file kind and skip reason, with examples |
+| **Symbol** | one symbol in tabs — **Overview** (callers and callees with previews and confidence, tests that reach it), **Code** (highlighted, or the whole file with the symbol marked), **Call graph**, **Usages**, **Across versions** (the verdict in every indexed ref) |
+| **Call graph** | callers flowing in from the left, callees out to the right, 1–3 hops, tests and library calls optional; hover lights a node's calls, click opens a side panel, double-click expands a node's own neighborhood in place |
+| **Links** | every file referenced as data (paths, ids, template includes, config values naming code), drawn per file: what refers to it and what it refers to |
+| **Grep** | literal or regular-expression search of the stored source, grouped by file, linked to the enclosing symbol |
+| **Diff & impact** | what changed between two indexed versions (code only, or documents and config too), and for a changed symbol who in the fleet calls it |
+| **Verify an edit** | load a file, edit it in place, and see which symbols the edit adds, changes or removes and which call sites would break — nothing is written |
+| **Repos** | every repo with its pinned version, languages and size, sortable |
 
-Graphs pan with a drag, zoom with the wheel, and highlight a node's edges on hover.
+Every page is deep-linkable, so a URL is shareable with a teammate. Light and dark themes
+follow the system and toggle from the top bar. The app is embedded in the binary and makes no
+external requests — it works offline. The earlier dependency-free dashboard is still served
+at `/classic/`.
 
-Every view is deep-linkable, so a URL is shareable with a teammate. Light and dark themes.
-No external assets — the dashboard works offline.
+The source is in `web/` (React, TypeScript, Vite, Tailwind; React Flow with ELK for
+directed diagrams, Sigma for the large force-directed maps, CodeMirror for code). `make web`
+rebuilds it into `internal/interfaces/webui/dist`, which the Go build embeds; `npm run dev` in
+`web/` serves it with hot reload against a running `reponite serve`.
 
 ---
 

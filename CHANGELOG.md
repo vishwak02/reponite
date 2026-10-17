@@ -9,6 +9,22 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### A new dashboard
+
+#### Added
+
+- **The dashboard is a single-page app** (React + TypeScript, built with Vite and embedded in
+  the binary): a ⌘K palette that finds any symbol in the fleet; a symbol page with tabs for the
+  brief, highlighted source (or the whole file with the symbol marked), call graph, usages and
+  behaviour across versions; an expandable call-graph workspace laid out by ELK; a WebGL fleet
+  map (Sigma + ForceAtlas2) with per-kind link toggles; ROS topic flows with every endpoint's
+  code line and a fleet topic map; per-file link diagrams; grep; diff with fleet-wide impact;
+  in-browser edit verification; coverage by file kind and skip reason. Light and dark themes.
+  The classic dashboard stays at `/classic/`.
+- **`/api/file`** returns one stored file; **`/api/links`** with no target returns every link
+  of the repo.
+- **`make web`** rebuilds the dashboard.
+
 ### Large repositories, runtime names, more file types (IndexVer 9–10)
 
 #### Added

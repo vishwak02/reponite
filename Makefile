@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt tidy clean cli sqlite treesitter mcp e2e
+.PHONY: build test vet fmt tidy clean cli sqlite treesitter mcp e2e web
 
 build:
 	go build -o bin/reponite ./cmd/reponite
@@ -40,3 +40,9 @@ neural:
 e2e:
 	go get modernc.org/sqlite $(GRAMMARS) github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
 	go test -mod=mod -tags "sqlite treesitter" ./internal/e2e/
+
+# The dashboard app (web/) builds into internal/interfaces/webui/dist, which the
+# Go build embeds. Needs Node 18+; the built output is committed, so a Go-only
+# build never needs this.
+web:
+	cd web && npm ci && npm run build

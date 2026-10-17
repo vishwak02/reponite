@@ -140,9 +140,12 @@ deployed system runs. See [Working with many repos](docs/USER_GUIDE.md#working-w
 reponite serve      # http://127.0.0.1:8899 — every registered repository
 ```
 
-Interactive call-graph, fleet-map, links and topic graphs, plus Explore, Diff, Impact, Usages,
-Coverage and Verify views — all deep-linkable, with no external assets. `--refs repo=ref,…`
-shows each repository at the version a system runs.
+A single-page app embedded in the binary: a ⌘K symbol palette across the fleet, a symbol page
+(brief, highlighted source, call graph, usages, behaviour across versions), an expandable
+call-graph workspace, a WebGL fleet map, ROS topic flows, file links, diff & impact, grep,
+edit verification and index coverage — deep-linkable, light and dark, with no external
+requests. `--refs repo=ref,…` shows each repository at the version a system runs. The classic
+dependency-free dashboard stays at `/classic/`.
 
 ## Documentation
 

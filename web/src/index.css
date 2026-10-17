@@ -1,0 +1,92 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 20% 98%;
+    --foreground: 224 25% 10%;
+    --panel: 0 0% 100%;
+    --card: 0 0% 100%;
+    --card-foreground: 224 25% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 25% 10%;
+    --muted: 220 16% 94%;
+    --muted-foreground: 220 9% 44%;
+    --accent: 248 96% 97%;
+    --accent-foreground: 248 70% 52%;
+    --primary: 248 90% 64%;
+    --primary-foreground: 0 0% 100%;
+    --border: 220 14% 89%;
+    --input: 220 14% 86%;
+    --ring: 248 90% 64%;
+    --ok: 152 60% 38%;
+    --warn: 38 92% 45%;
+    --bad: 356 72% 50%;
+    --shape: 268 70% 58%;
+    --radius: 0.65rem;
+    --grid: 220 14% 88%;
+  }
+  .dark {
+    --background: 228 22% 7%;
+    --foreground: 220 20% 92%;
+    --panel: 228 20% 9.5%;
+    --card: 228 19% 11%;
+    --card-foreground: 220 20% 92%;
+    --popover: 228 19% 12%;
+    --popover-foreground: 220 20% 92%;
+    --muted: 228 15% 15%;
+    --muted-foreground: 220 10% 62%;
+    --accent: 248 40% 18%;
+    --accent-foreground: 248 95% 80%;
+    --primary: 248 92% 70%;
+    --primary-foreground: 228 30% 8%;
+    --border: 228 14% 18%;
+    --input: 228 14% 22%;
+    --ring: 248 92% 70%;
+    --ok: 152 55% 52%;
+    --warn: 38 92% 58%;
+    --bad: 356 85% 64%;
+    --shape: 268 85% 72%;
+    --grid: 228 14% 16%;
+  }
+  * { @apply border-border; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+    font-feature-settings: "cv11", "ss01";
+  }
+  code, pre, .font-mono { font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace; }
+  ::selection { background: hsl(var(--primary) / .25); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 8px; border: 2px solid hsl(var(--background)); }
+}
+
+@layer components {
+  .dotgrid {
+    background-image: radial-gradient(hsl(var(--grid)) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+}
+
+/* React Flow theming */
+.react-flow { --xy-background-color: transparent; }
+.react-flow__edge-path { stroke: hsl(var(--muted-foreground) / .45); }
+.react-flow__controls { box-shadow: none !important; border: 1px solid hsl(var(--border)); border-radius: .6rem; overflow: hidden; }
+.react-flow__controls-button { background: hsl(var(--card)) !important; border-bottom: 1px solid hsl(var(--border)) !important; color: hsl(var(--foreground)) !important; }
+.react-flow__controls-button svg { fill: currentColor !important; }
+.react-flow__minimap { background: hsl(var(--card)) !important; border: 1px solid hsl(var(--border)); border-radius: .6rem; }
+.react-flow__attribution { display: none; }
+.cm-editor { font-size: 12.5px; }
+.cm-editor .cm-gutters { background: transparent; border-right: 1px solid hsl(var(--border)); }
+
+@layer components {
+  .kbd { @apply rounded border bg-muted px-1 py-px font-mono text-[10px] font-medium text-muted-foreground; }
+}
+
+.cm-marked { background: hsl(var(--primary) / .09); box-shadow: inset 2px 0 0 hsl(var(--primary)); }
+.cm-editor { font-size: 12.5px; }
+.cm-editor .cm-scroller { font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace; }

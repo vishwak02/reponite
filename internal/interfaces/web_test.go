@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -41,8 +42,17 @@ func TestWebHandler(t *testing.T) {
 		return string(b)
 	}
 
-	if !strings.Contains(get("/"), "<title>reponite") {
-		t.Fatal("dashboard HTML not served at /")
+	app := get("/")
+	if !strings.Contains(app, "<title>reponite") || !strings.Contains(app, `id="root"`) {
+		t.Fatal("dashboard app not served at /")
+	}
+	// the app's built assets are embedded and served under /assets/
+	js0 := regexp.MustCompile(`/assets/[^"]+\.js`).FindString(app)
+	if js0 == "" || !strings.Contains(get(js0), "api/") {
+		t.Fatalf("app script %q not served from the embedded build", js0)
+	}
+	if !strings.Contains(get("/classic/"), "<title>reponite") {
+		t.Fatal("classic dashboard not served at /classic/")
 	}
 	// The embedded CSS/JS assets are served (proves //go:embed wired correctly).
 	if !strings.Contains(get("/style.css"), "--accent") {
@@ -61,14 +71,21 @@ func TestWebHandler(t *testing.T) {
 	if !strings.Contains(brief, "billing.Charge") || !strings.Contains(brief, "func Charge()") {
 		t.Fatalf("/api/brief incomplete: %s", brief)
 	}
+	// /api/file serves one stored file; an unknown path is a 404
+	if f := get("/api/file?path=billing/charge.go&ref=HEAD"); !strings.Contains(f, `"content"`) {
+		t.Fatalf("/api/file incomplete: %s", f)
+	}
+	if resp, err := http.Get(srv.URL + "/api/file?path=nope.go&ref=HEAD"); err != nil || resp.StatusCode != 404 {
+		t.Fatalf("/api/file for a missing path: want 404, got %v %v", resp, err)
+	}
 	// Overview: per-repo/ref index stats (the Overview/database view's data).
 	ov := get("/api/overview")
 	if !strings.Contains(ov, "billing") || !strings.Contains(ov, "symbols") {
 		t.Fatalf("/api/overview incomplete: %s", ov)
 	}
 
-	// The dashboard ships the Usages and Verify views (P1: only Topics had one).
-	html := get("/")
+	// The classic dashboard ships the Usages and Verify views.
+	html := get("/classic/")
 	for _, id := range []string{`id="usages"`, `id="verify"`, `id="uq"`, `id="vpath"`, `id="vcontent"`} {
 		if !strings.Contains(html, id) {
 			t.Fatalf("dashboard HTML missing %s", id)

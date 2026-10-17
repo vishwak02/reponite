@@ -7,6 +7,9 @@ language or a feature without breaking the core.
 ## Prerequisites
 
 - **Go 1.22+** and a **C toolchain** (gcc/clang) — the tree-sitter adapter uses CGO.
+- **Node 18+**, only to change the dashboard (`web/`). Its build output is committed under
+  `internal/interfaces/webui/dist`, so Go builds never need Node. After editing `web/`, run
+  `make web` and commit the rebuilt `dist` with the source.
 
 ## Build & test
 

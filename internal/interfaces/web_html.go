@@ -1,11 +1,20 @@
 package interfaces
 
-import _ "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
-// The read-only dashboard's assets live as real files under webui/ and are
-// embedded at build time (//go:embed). The dashboard is vanilla HTML/CSS/JS
-// with no external requests — it fetches only the same server's /api/* JSON —
-// so the three files are served directly (see web.go Routes).
+// The dashboard is a React app (web/, built by `npm run build`) whose output
+// lands in webui/dist and is embedded here, so the binary serves it with no
+// external requests — it fetches only the same server's /api/* JSON. The
+// earlier dependency-free dashboard stays embedded and served at /classic/.
+
+//go:embed all:webui/dist
+var appFS embed.FS
+
+// appDist is webui/dist as the root (index.html, assets/).
+var appDist, _ = fs.Sub(appFS, "webui/dist")
 
 //go:embed webui/index.html
 var dashboardHTML string

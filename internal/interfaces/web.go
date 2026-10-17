@@ -9,6 +9,7 @@ package interfaces
 
 import (
 	"io"
+	"io/fs"
 	"net/http"
 	"strconv"
 
@@ -44,6 +45,8 @@ type WebHandler struct {
 func (h *WebHandler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
+	mux.Handle("/assets/", immutable(http.FileServer(http.FS(appDist))))
+	mux.HandleFunc("/classic/", h.classic)
 	mux.HandleFunc("/style.css", asset("text/css; charset=utf-8", dashboardCSS))
 	mux.HandleFunc("/app.js", asset("application/javascript; charset=utf-8", dashboardJS))
 	mux.HandleFunc("/graph.js", asset("application/javascript; charset=utf-8", dashboardGraphJS))
@@ -67,6 +70,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux.HandleFunc("/api/links", h.apiLinks)
 	mux.HandleFunc("/api/coverage", h.apiCoverage)
 	mux.HandleFunc("/api/fleetmap", h.apiFleetMap)
+	mux.HandleFunc("/api/file", h.apiFile)
 	return mux
 }
 
@@ -114,13 +118,39 @@ func (h *WebHandler) dbStatsFor(repo string) (string, map[string]int64) {
 	return "", nil
 }
 
+// index serves the dashboard app. It routes in the URL fragment, so every
+// page is this one document.
 func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
+	if r.URL.Path != "/" && r.URL.Path != "/index.html" {
+		http.NotFound(w, r)
+		return
+	}
+	b, err := fs.ReadFile(appDist, "index.html")
+	if err != nil {
+		http.Error(w, "dashboard not built (run npm run build in web/)", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(b)
+}
+
+// classic serves the earlier dependency-free dashboard.
+func (h *WebHandler) classic(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/classic/" {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, dashboardHTML)
+}
+
+// immutable marks the app's content-hashed assets cacheable for good.
+func immutable(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // asset serves an embedded static file (the dashboard's CSS/JS) with a fixed
@@ -313,14 +343,21 @@ func (h *WebHandler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, body, err)
 }
 
-// apiLinks returns the data references to and from a file or symbol.
+// apiLinks returns the data references to and from a file or symbol, or
+// with no target every reference in the repo.
 func (h *WebHandler) apiLinks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	repo := q.Get("repo")
 	if repo == "" {
 		repo = query.FleetRepo
 	}
-	body, err := snakeJSON(query.LinksFor(h.Store, repo, h.refOr(r), q.Get("target")))
+	target := q.Get("target")
+	res := query.LinksFor(h.Store, repo, h.refOr(r), target)
+	if target == "" {
+		// no target: every link of the repo, for the dashboard's file graph
+		res.RefersTo = query.Links(h.Store, repo, h.refOr(r))
+	}
+	body, err := snakeJSON(res)
 	writeJSON(w, body, err)
 }
 
@@ -332,6 +369,29 @@ func (h *WebHandler) apiCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := snakeJSON(query.Coverage(h.Store, repo, h.refOr(r)))
 	writeJSON(w, body, err)
+}
+
+// apiFile returns one stored file's content (the dashboard's file view and
+// the starting text of a Verify edit).
+func (h *WebHandler) apiFile(w http.ResponseWriter, r *http.Request) {
+	repo, ref, path := h.repoOr(r), h.refOr(r), r.URL.Query().Get("path")
+	files := h.Store.Files
+	if pr, ok := h.Store.(query.PathFilesReader); ok {
+		files = func(repo, ref string) []query.File {
+			return pr.FilesMatching(repo, ref, func(p string) bool { return p == path })
+		}
+	}
+	for _, f := range files(repo, ref) {
+		if f.Path == path {
+			body, err := snakeJSON(struct {
+				Path    string `json:"path"`
+				Content string `json:"content"`
+			}{f.Path, f.Content})
+			writeJSON(w, body, err)
+			return
+		}
+	}
+	http.Error(w, "no stored file "+path+" in "+repo+" at "+ref, http.StatusNotFound)
 }
 
 // apiFleetMap returns every repo with the cross-repo links between them.
