@@ -7,23 +7,10 @@ import (
 
 // The dashboard is a React app (web/, built by `npm run build`) whose output
 // lands in webui/dist and is embedded here, so the binary serves it with no
-// external requests — it fetches only the same server's /api/* JSON. The
-// earlier dependency-free dashboard stays embedded and served at /classic/.
+// external requests — it fetches only the same server's /api/* JSON.
 
 //go:embed all:webui/dist
 var appFS embed.FS
 
 // appDist is webui/dist as the root (index.html, assets/).
 var appDist, _ = fs.Sub(appFS, "webui/dist")
-
-//go:embed webui/index.html
-var dashboardHTML string
-
-//go:embed webui/style.css
-var dashboardCSS string
-
-//go:embed webui/app.js
-var dashboardJS string
-
-//go:embed webui/graph.js
-var dashboardGraphJS string

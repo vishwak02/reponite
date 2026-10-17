@@ -815,8 +815,7 @@ and jumps to any page.
 
 Every page is deep-linkable, so a URL is shareable with a teammate. Light and dark themes
 follow the system and toggle from the top bar. The app is embedded in the binary and makes no
-external requests — it works offline. The earlier dependency-free dashboard is still served
-at `/classic/`.
+external requests — it works offline.
 
 The source is in `web/` (React, TypeScript, Vite, Tailwind; React Flow with ELK for
 directed diagrams, Sigma for the large force-directed maps, CodeMirror for code). `make web`

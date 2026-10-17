@@ -144,8 +144,7 @@ A single-page app embedded in the binary: a ⌘K symbol palette across the fleet
 (brief, highlighted source, call graph, usages, behaviour across versions), an expandable
 call-graph workspace, a WebGL fleet map, ROS topic flows, file links, diff & impact, grep,
 edit verification and index coverage — deep-linkable, light and dark, with no external
-requests. `--refs repo=ref,…` shows each repository at the version a system runs. The classic
-dependency-free dashboard stays at `/classic/`.
+requests. `--refs repo=ref,…` shows each repository at the version a system runs.
 
 ## Documentation
 

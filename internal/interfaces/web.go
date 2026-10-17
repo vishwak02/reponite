@@ -46,10 +46,6 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", h.index)
 	mux.Handle("/assets/", immutable(http.FileServer(http.FS(appDist))))
-	mux.HandleFunc("/classic/", h.classic)
-	mux.HandleFunc("/style.css", asset("text/css; charset=utf-8", dashboardCSS))
-	mux.HandleFunc("/app.js", asset("application/javascript; charset=utf-8", dashboardJS))
-	mux.HandleFunc("/graph.js", asset("application/javascript; charset=utf-8", dashboardGraphJS))
 	mux.HandleFunc("/api/repos", h.apiRepos)
 	mux.HandleFunc("/api/overview", h.apiOverview)
 	mux.HandleFunc("/api/refs", h.apiRefs)
@@ -135,31 +131,12 @@ func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// classic serves the earlier dependency-free dashboard.
-func (h *WebHandler) classic(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/classic/" {
-		http.NotFound(w, r)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	io.WriteString(w, dashboardHTML)
-}
-
 // immutable marks the app's content-hashed assets cacheable for good.
 func immutable(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		next.ServeHTTP(w, r)
 	})
-}
-
-// asset serves an embedded static file (the dashboard's CSS/JS) with a fixed
-// content type.
-func asset(contentType, body string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", contentType)
-		io.WriteString(w, body)
-	}
 }
 
 func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {

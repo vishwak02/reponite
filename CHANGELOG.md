@@ -20,7 +20,7 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   map (Sigma + ForceAtlas2) with per-kind link toggles; ROS topic flows with every endpoint's
   code line and a fleet topic map; per-file link diagrams; grep; diff with fleet-wide impact;
   in-browser edit verification; coverage by file kind and skip reason. Light and dark themes.
-  The classic dashboard stays at `/classic/`.
+  It replaces the previous vanilla-JS dashboard.
 - **`/api/file`** returns one stored file; **`/api/links`** with no target returns every link
   of the repo.
 - **`make web`** rebuilds the dashboard.

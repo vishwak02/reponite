@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -51,15 +52,8 @@ func TestWebHandler(t *testing.T) {
 	if js0 == "" || !strings.Contains(get(js0), "api/") {
 		t.Fatalf("app script %q not served from the embedded build", js0)
 	}
-	if !strings.Contains(get("/classic/"), "<title>reponite") {
-		t.Fatal("classic dashboard not served at /classic/")
-	}
-	// The embedded CSS/JS assets are served (proves //go:embed wired correctly).
-	if !strings.Contains(get("/style.css"), "--accent") {
-		t.Fatal("/style.css not served from embedded asset")
-	}
-	if !strings.Contains(get("/app.js"), "async function brief") {
-		t.Fatal("/app.js not served from embedded asset")
+	if resp, err := http.Get(srv.URL + "/app.js"); err != nil || resp.StatusCode != 404 {
+		t.Fatalf("the old dashboard's /app.js is still served: %v %v", resp, err)
 	}
 	if !strings.Contains(get("/api/refs"), "HEAD") {
 		t.Fatal("/api/refs missing HEAD")
@@ -84,17 +78,15 @@ func TestWebHandler(t *testing.T) {
 		t.Fatalf("/api/overview incomplete: %s", ov)
 	}
 
-	// The classic dashboard ships the Usages and Verify views.
-	html := get("/classic/")
-	for _, id := range []string{`id="usages"`, `id="verify"`, `id="uq"`, `id="vpath"`, `id="vcontent"`} {
-		if !strings.Contains(html, id) {
-			t.Fatalf("dashboard HTML missing %s", id)
-		}
+	// The app's pages call the Usages and Verify endpoints.
+	var bundle strings.Builder
+	chunks, _ := filepath.Glob("webui/dist/assets/*.js")
+	for _, c := range chunks {
+		bundle.WriteString(get("/assets/" + filepath.Base(c)))
 	}
-	js := get("/app.js")
-	for _, fn := range []string{"function renderUsages", "function renderVerify", "api/verify_edit"} {
-		if !strings.Contains(js, fn) {
-			t.Fatalf("/app.js missing %s", fn)
+	for _, api := range []string{`"usages"`, "verify_edit"} {
+		if !strings.Contains(bundle.String(), api) {
+			t.Fatalf("no app script calls /api/%s", api)
 		}
 	}
 
