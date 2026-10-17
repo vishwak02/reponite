@@ -566,34 +566,45 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 	}
 	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(base) + `\b`)
 	var out []Reach
-	rr := RoutesWith(s, FleetRepo, ref, "", 1<<30, RoutesOptions{})
+	// The fleet-wide graphs are built only when the symbol's own repo has a
+	// route or a ROS endpoint at all: only its own routes and endpoints are
+	// reported, and building them for a 40-repo fleet takes tens of seconds.
 	type hit struct {
 		l   RouteLink
 		via string
 	}
 	var direct, viaClass []hit
-	for _, l := range rr.Links {
-		r := l.Route
-		if r.Repo != repo {
-			continue
-		}
-		h := strings.TrimSuffix(strings.Split(r.Handler, "(")[0], ".as_view")
-		segs := strings.Split(h, ".")
-		last := segs[len(segs)-1]
-		switch {
-		case last == base && (len(segs) < 2 || class == "" || segs[len(segs)-2] == class || kind == "class"):
-			direct = append(direct, hit{l, ""})
-		case r.Handler == "" && word.MatchString(lineAtFile(s, repo, ref, r.Path, r.Line)):
-			direct = append(direct, hit{l, ""})
-		case class != "" && last == class:
-			// A class-based view/viewset routed as a whole: only its standard
-			// action and HTTP-verb methods are reached through the class.
-			detail := strings.HasSuffix(strings.TrimSuffix(r.Pattern, "/"), "{}")
-			if act, std := viewsetActions[base]; std && act == detail ||
-				httpVerbs[base] && (r.Method == "*" || strings.EqualFold(r.Method, base)) {
-				viaClass = append(viaClass, hit{l, " (via its class " + class + ")"})
+	match := func(rr RoutesResult) {
+		direct, viaClass = nil, nil
+		for _, l := range rr.Links {
+			r := l.Route
+			if r.Repo != repo {
+				continue
+			}
+			h := strings.TrimSuffix(strings.Split(r.Handler, "(")[0], ".as_view")
+			segs := strings.Split(h, ".")
+			last := segs[len(segs)-1]
+			switch {
+			case last == base && (len(segs) < 2 || class == "" || segs[len(segs)-2] == class || kind == "class"):
+				direct = append(direct, hit{l, ""})
+			case r.Handler == "" && word.MatchString(lineAtFile(s, repo, ref, r.Path, r.Line)):
+				direct = append(direct, hit{l, ""})
+			case class != "" && last == class:
+				// A class-based view/viewset routed as a whole: only its standard
+				// action and HTTP-verb methods are reached through the class.
+				detail := strings.HasSuffix(strings.TrimSuffix(r.Pattern, "/"), "{}")
+				if act, std := viewsetActions[base]; std && act == detail ||
+					httpVerbs[base] && (r.Method == "*" || strings.EqualFold(r.Method, base)) {
+					viaClass = append(viaClass, hit{l, " (via its class " + class + ")"})
+				}
 			}
 		}
+	}
+	// The repo's own routes decide whether the symbol is routed at all; only
+	// then are the fleet's clients matched to them.
+	match(RoutesWith(s, repo, ref, "", 1<<30, RoutesOptions{}))
+	if len(direct)+len(viaClass) > 0 {
+		match(RoutesWith(s, FleetRepo, ref, "", 1<<30, RoutesOptions{}))
 	}
 	if len(direct) > 0 {
 		viaClass = nil // a method with its own route is not also reached through its class
@@ -610,7 +621,10 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 			out = append(out, Reach{Kind: "route-client", Detail: c.Method + " " + c.URL + " from " + c.In, Repo: c.Repo, Path: c.Path, Line: c.Line, Text: c.Text})
 		}
 	}
-	cg := CommGraph(s, FleetRepo, ref)
+	var cg CommGraphResult
+	if repoHasComms(s, repo, ref) {
+		cg = CommGraph(s, FleetRepo, ref)
+	}
 	for _, g := range cg.Groups {
 		for _, side := range []struct {
 			eps   []CommEndpoint
@@ -646,7 +660,8 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 	}
 	// UI events: JSX on*={…name…}, Vue @event="name", Angular (event)="name(…)".
 	pat := `on[A-Z]\w*=\{[^}]*\b` + regexp.QuoteMeta(base) + `\b|@[\w.:-]+="` + regexp.QuoteMeta(base) + `\b|\(\w+\)="` + regexp.QuoteMeta(base) + `\(`
-	if g, err := GrepRepo(s, FleetRepo, ref, pat, GrepOptions{Limit: 10}); err == nil {
+	// A template binds a handler of its own codebase: the symbol's repo is searched.
+	if g, err := GrepRepo(s, repo, ref, pat, GrepOptions{Limit: 10}); err == nil {
 		evt := regexp.MustCompile(`on[A-Z]\w*|@[\w.:-]+|\(\w+\)`)
 		for _, m := range g.Matches {
 			out = append(out, Reach{Kind: "ui-event", Detail: evt.FindString(m.Text) + " in " + m.Symbol, Repo: m.Repo, Path: m.Path, Line: m.Line, Text: strings.TrimSpace(m.Text)})
@@ -677,23 +692,40 @@ func testRefs(s Store, repo, ref, qid string, testCallers []ExplainEdge, idx *sp
 		seen[t.Path+"\x00"+baseName(c.Symbol)] = true
 		out = append(out, t)
 	}
+	// Test files naming it, scanned directly: one pattern over the test files
+	// only is far cheaper than a trigram index of the whole fleet.
 	base := baseName(qid)
-	g, err := GrepRepo(s, FleetRepo, ref, `\b`+regexp.QuoteMeta(base)+`\b`, GrepOptions{Limit: -1})
-	if err != nil {
-		return out
-	}
-	for _, m := range g.Matches {
-		if !IsTestPath(m.Path) {
-			continue
+	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(base) + `\b`)
+	var found []TestRef
+	for _, rp := range reposFor(s, FleetRepo) {
+		for _, f := range s.Files(rp, ref) {
+			if !IsTestPath(f.Path) || !strings.Contains(f.Content, base) {
+				continue
+			}
+			for i, ln := range strings.Split(f.Content, "\n") {
+				if !word.MatchString(ln) {
+					continue
+				}
+				in := enclosing(f.Symbols, i+1)
+				k := f.Path + "\x00" + in
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+				found = append(found, TestRef{Repo: rp, Path: f.Path, Line: i + 1, In: in})
+			}
 		}
-		k := m.Path + "\x00" + m.Symbol
-		if seen[k] {
-			continue
-		}
-		seen[k] = true
-		out = append(out, TestRef{Repo: m.Repo, Path: m.Path, Line: m.Line, In: m.Symbol})
 	}
-	return out
+	sort.SliceStable(found, func(i, j int) bool {
+		if found[i].Repo != found[j].Repo {
+			return found[i].Repo < found[j].Repo
+		}
+		if found[i].Path != found[j].Path {
+			return found[i].Path < found[j].Path
+		}
+		return found[i].Line < found[j].Line
+	})
+	return append(out, found...)
 }
 
 var (
@@ -1109,4 +1141,18 @@ func handlerSymbol(s Store, ref string, r Route) string {
 		return names[0]
 	}
 	return ""
+}
+
+// repoHasComms reports whether any source file of repo uses a ROS
+// communication idiom.
+func repoHasComms(s Store, repo, ref string) bool {
+	for _, f := range s.Files(repo, ref) {
+		if commLang(f.Path) == "" || !mayHaveComms(f.Content) {
+			continue
+		}
+		if eps, un := scanComms(repo, f.Path, f.Content, f.Symbols); len(eps) > 0 || un > 0 {
+			return true
+		}
+	}
+	return false
 }
