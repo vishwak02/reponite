@@ -47,12 +47,20 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   Groovy, Perl, R, Elixir, Julia, Zig — get heuristic symbols, spans and calls (IndexVer 12),
   so they are searchable by symbol and have callers and callees; JVM languages resolve calls
   into each other.
+- **Dashboard graphs.** Call graph (callers ← symbol → callees, by confidence), fleet map
+  (repos linked by HTTP, ROS, imports, dependencies), links and topics as graphs, and a
+  coverage view; `serve --refs` reads each repo at its pinned version.
+- **Architecture docs** with diagrams of the whole system (`docs/architecture.md`).
 - **Compact text output** (`--format text`, MCP `format: "text"`) for `topics`, `usages`,
   `routes`, `impls` and `links`: grouped by file, no repeated field names — the costmap topic
   answer is 1.7 KB instead of 15 KB.
 
 #### Changed
 
+- **Large fleets stay fast.** Test references come from a cached per-repo index; one-shot
+  greps prefilter by literal instead of building an index; file decoding runs on every core;
+  `index` warms the per-repo facts. On a fleet including a full Linux kernel tree: `explain`
+  0.6 s (was up to 12 min), kernel `usages` 14 s (88 s), kernel `links` 11 s.
 - Indexing collects garbage at 1.5× the live heap (unless `GOGC` is set) and sets a soft
   memory limit of half the machine's RAM (unless `GOMEMLIMIT` is set): the kernel tree peaks
   at 5.3 GB instead of 6.2 GB.

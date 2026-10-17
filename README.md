@@ -140,8 +140,9 @@ deployed system runs. See [Working with many repos](docs/USER_GUIDE.md#working-w
 reponite serve      # http://127.0.0.1:8899 — every registered repository
 ```
 
-Overview, Explore, Diff, Impact, Topics, Usages and Verify views, all deep-linkable, with no
-external assets.
+Interactive call-graph, fleet-map, links and topic graphs, plus Explore, Diff, Impact, Usages,
+Coverage and Verify views — all deep-linkable, with no external assets. `--refs repo=ref,…`
+shows each repository at the version a system runs.
 
 ## Documentation
 

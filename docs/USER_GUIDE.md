@@ -792,11 +792,24 @@ the [fleet registry](#working-with-many-repos).
 ```sh
 reponite serve        # every registered repo → http://127.0.0.1:8899
 reponite serve .      # just this one
+reponite serve --refs api=v2.3.0,web=v1.8.1   # each repo at the version a system runs
 ```
 
-Seven views: **Overview** (what's indexed, and the database behind it) · **Explore**
-(search → editing brief) · **Diff** · **Impact** (fleet callers and contract skew) ·
-**Topics** (ROS graph) · **Usages** · **Verify** (paste an edit, see what breaks).
+Views:
+
+| View | What it shows |
+|---|---|
+| **Overview** | what is indexed per repo and ref, and the database behind it |
+| **Explore** | symbol search → editing brief (body, callers, callees, tests, compat) |
+| **Call graph** | a symbol's callers on the left and callees on the right, up to three hops, edges drawn by resolution confidence; click a node for its brief, double-click to re-center |
+| **Fleet map** | every repo, sized by symbols, linked by HTTP calls, ROS topics and services, imports and declared dependencies |
+| **Links** | what refers to a file or symbol as data (paths, ids, includes, values), and what it refers to |
+| **Diff** · **Impact** | what changed between two refs; who across the fleet calls a symbol |
+| **Topics** | publishers → topic → subscribers, as a graph or a list |
+| **Usages** · **Verify** | every call site; paste an edit and see what breaks |
+| **Coverage** | what each repo's index stored and skipped, with reasons |
+
+Graphs pan with a drag, zoom with the wheel, and highlight a node's edges on hover.
 
 Every view is deep-linkable, so a URL is shareable with a teammate. Light and dark themes.
 No external assets — the dashboard works offline.
