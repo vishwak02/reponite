@@ -386,6 +386,26 @@ func (s *Store) RefByCommit(repo, commit string, indexVer int) (string, bool) {
 	return ref, true
 }
 
+// SetRefFilter records the file filter (the --exclude patterns, joined) a
+// ref was indexed with, so a later index of the same label knows whether
+// the stored file set is the one now asked for. "" = no filter.
+func (s *Store) SetRefFilter(repo, ref, filter string) error {
+	k := "filter\x00" + repo + "\x00" + ref
+	if filter == "" {
+		_, err := s.db.Exec(`DELETE FROM store_meta WHERE k=?`, k)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO store_meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, k, filter)
+	return err
+}
+
+// RefFilter is the file filter ref was indexed with ("" when none).
+func (s *Store) RefFilter(repo, ref string) string {
+	var v string
+	_ = s.db.QueryRow(`SELECT v FROM store_meta WHERE k=?`, "filter\x00"+repo+"\x00"+ref).Scan(&v)
+	return v
+}
+
 // RefAtCommit reports whether ref of repo is indexed at commit under ruleset indexVer.
 func (s *Store) RefAtCommit(repo, ref, commit string, indexVer int) bool {
 	var n int

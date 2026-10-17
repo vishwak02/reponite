@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/interfaces"
@@ -209,7 +210,7 @@ func cmdIndex(args []string) {
 		}
 		indexOneRev(st, repo, dir, rv, opt, force)
 		if submodules {
-			indexSubmodules(repo, dir, rv, excludes, force)
+			indexSubmodules(repo, dir, rv, excludes, force, 1)
 		}
 	}
 	registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
@@ -220,10 +221,12 @@ func cmdIndex(args []string) {
 // under the current ruleset (resume: an interrupted batch re-run skips what
 // is done; a second label for the same commit copies rows, not work).
 func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt processing.IndexOptions, force bool) {
-	if !force && len(opt.Excludes) > 0 {
-		// --exclude makes this label a different file set from another label of
-		// the same commit: only the label itself, already indexed, is skipped.
-		if st.RefAtCommit(repo, rv.Label, rv.Commit, version.IndexVer) {
+	filter := refFilter(opt.Excludes)
+	if !force && (filter != "" || st.RefFilter(repo, rv.Label) != "") {
+		// --exclude makes a label a different file set from another label of the
+		// same commit: the label is skipped only when it was indexed at this
+		// commit with exactly this filter, and never aliased to another label.
+		if st.RefAtCommit(repo, rv.Label, rv.Commit, version.IndexVer) && st.RefFilter(repo, rv.Label) == filter {
 			fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))
 			return
 		}
@@ -250,16 +253,28 @@ func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt p
 	if err := st.SetIndexVersion(repo, rv.Label, version.IndexVer); err != nil {
 		fail(err)
 	}
+	if err := st.SetRefFilter(repo, rv.Label, filter); err != nil {
+		fail(err)
+	}
 	fmt.Printf("indexed %s@%s (git %s @ %s)%s\n", repo, rv.Label, rv.Rev, shortHash(commit), moduleNote(st, repo))
 }
+
+const maxSubmoduleDepth = 5
 
 // indexSubmodules indexes every submodule of parent@rv at its pinned commit,
 // as ref "<parent>@<label>" in the submodule's own store — the exact code that
 // version of the parent builds with. A submodule whose objects are not on
 // this machine is named, never skipped silently.
-func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeFlags, force bool) {
+//
+// Submodules of submodules are part of the build too, so they are followed
+// (up to maxSubmoduleDepth levels), labeled with the same top-level
+// "<parent>@<label>" so one pin names every repo that version builds.
+func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeFlags, force bool, depth int) {
 	pins, err := processing.GitSubmodulePins(dir, rv.Rev)
 	if err != nil {
+		if depth > 1 {
+			return // a nested submodule's own pins are best-effort
+		}
 		fail(err)
 	}
 	var missing []string
@@ -279,6 +294,10 @@ func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeF
 			processing.IndexOptions{Excludes: excludes, Report: printIndexSummary}, force)
 		registerRepo(sub, p.RepoDir, sst.ModulePath(sub))
 		sst.Close()
+		if depth < maxSubmoduleDepth {
+			indexSubmodules(parent, p.RepoDir, processing.GitRev{Label: rv.Label, Rev: p.Commit, Commit: p.Commit},
+				excludes, force, depth+1)
+		}
 	}
 	// One line for every submodule whose pinned commit is not on this machine:
 	// a monorepo with dozens of uninitialized submodules otherwise buries the
@@ -920,4 +939,11 @@ func cmdTrace(args []string) {
 	res := query.Trace(s, pos[0], ref, opt)
 	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.TraceOutput(res, format))
+}
+
+// refFilter is the canonical form of a set of --exclude patterns.
+func refFilter(ex []string) string {
+	x := append([]string(nil), ex...)
+	sort.Strings(x)
+	return strings.Join(x, ",")
 }

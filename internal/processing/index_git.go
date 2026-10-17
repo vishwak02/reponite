@@ -348,7 +348,10 @@ func GitSubmodulePins(repoDir, rev string) ([]SubmodulePin, error) {
 		if pin.Name == "" {
 			pin.Name = filepath.Base(name)
 		}
-		for _, cand := range []string{filepath.Join(repoDir, name), filepath.Join(repoDir, ".git", "modules", pin.Name)} {
+		// a checkout's submodule dir, its .git/modules entry, or — when repoDir is
+		// itself a submodule's git dir — that dir's modules/ entry
+		for _, cand := range []string{filepath.Join(repoDir, name), filepath.Join(repoDir, ".git", "modules", pin.Name),
+			filepath.Join(repoDir, "modules", pin.Name)} {
 			sr, oerr := git.PlainOpen(cand)
 			if oerr != nil {
 				continue
