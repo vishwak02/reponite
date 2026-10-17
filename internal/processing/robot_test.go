@@ -55,3 +55,13 @@ Door Is Closed
 		t.Error("a keyword library is not test code")
 	}
 }
+
+func TestRobotEmbeddedArgumentKeyword(t *testing.T) {
+	suite := robotFile("tests/door.robot", "*** Test Cases ***\nDoor Works\n    Open Front Door\n")
+	res := robotFile("tests/door.resource", "*** Keywords ***\nOpen ${door} Door\n    Log    ${door}\n")
+	files := []ParsedFile{suite, res}
+	linkRobotEmbedded(files)
+	if got := files[0].Symbols[0].Callees; len(got) != 1 || got[0] != res.Symbols[0].Name {
+		t.Fatalf("callees %v, keyword %q", got, res.Symbols[0].Name)
+	}
+}

@@ -115,6 +115,8 @@ func fileSections(p, content string) []section {
 		return tableSections(content)
 	case ext == ".rviz":
 		return yamlSections(content)
+	case ext == ".html" || ext == ".htm":
+		return htmlSections(content)
 	case base == "dockerfile" || base == "containerfile" || strings.HasPrefix(base, "dockerfile.") || ext == ".dockerfile":
 		return dockerSections(content)
 	case base == "makefile" || base == "gnumakefile" || ext == ".mk":
@@ -136,6 +138,38 @@ func closeSections(secs []section, depthOf func(section) int, total int) []secti
 		}
 	}
 	return secs
+}
+
+var (
+	htmlHeading = regexp.MustCompile(`(?i)<h([1-4])\b[^>]*>(.*?)</h[1-4]>`)
+	htmlTag     = regexp.MustCompile(`<[^>]*>`)
+)
+
+// htmlSections takes <h1>…<h4> headings written on one line as sections.
+func htmlSections(content string) []section {
+	lines := strings.Split(content, "\n")
+	var secs []section
+	var stack []string
+	for i, ln := range lines {
+		m := htmlHeading.FindStringSubmatch(ln)
+		if m == nil {
+			continue
+		}
+		lvl := int(m[1][0] - '0')
+		title := strings.TrimSpace(htmlTag.ReplaceAllString(m[2], ""))
+		if title == "" {
+			continue
+		}
+		if len(stack) >= lvl {
+			stack = stack[:lvl-1]
+		}
+		for len(stack) < lvl-1 {
+			stack = append(stack, "")
+		}
+		stack = append(stack, title)
+		secs = append(secs, section{path: nonEmpty(stack), start: i + 1})
+	}
+	return closeSections(secs, func(s section) int { return len(s.path) }, len(lines))
 }
 
 var mdHeading = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)

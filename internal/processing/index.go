@@ -89,6 +89,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
 	var extRefs []query.ExternalRef // cross-repo dependency edges (§8B)
 	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
+	linkRobotEmbedded(files)
 	for _, f := range files {
 		pkg := pkgOf(f.Path)
 		lang := f.Lang

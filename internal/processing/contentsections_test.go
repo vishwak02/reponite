@@ -74,3 +74,14 @@ func TestDockerMakeTableRSTSections(t *testing.T) {
 		t.Errorf("rst headings: %v", got)
 	}
 }
+
+func TestHTMLSections(t *testing.T) {
+	syms, _ := sectionSymbols("docs/index.html", "<html>\n<h1>Guide</h1>\n<p>x</p>\n<h2 id=\"i\">Install <b>now</b></h2>\n<p>y</p>\n")
+	var names []string
+	for _, s := range syms {
+		names = append(names, s.Name)
+	}
+	if len(names) != 2 || names[0] != "index:Guide" || names[1] != "index:Guide:Install now" {
+		t.Fatalf("sections: %v", names)
+	}
+}

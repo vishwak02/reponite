@@ -51,6 +51,10 @@ func contentLang(p string) string {
 		return "jsonnet"
 	case ".xml", ".xacro", ".urdf", ".sdf":
 		return "xml"
+	case ".html", ".htm":
+		return "html"
+	case ".po", ".pot":
+		return "po" // gettext catalogues: `errors` finds a translated message's msgid
 	}
 	return ""
 }

@@ -9,7 +9,7 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
-### Large repositories, runtime names, more file types (IndexVer 9)
+### Large repositories, runtime names, more file types (IndexVer 9–10)
 
 #### Added
 
@@ -20,11 +20,17 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   links as `/move_base_flex/global_costmap/costmap`. Labeled `args: …` with the chain.
 - **Robot Framework** suites and resource files: test cases and keywords are symbols, keyword
   calls are edges (to Python library functions too), and `tests` prints a
-  `robot --test` command.
+  `robot --test` command. Keywords with embedded arguments (`Open ${door} Door`) are linked
+  from their calls (`Open Front Door`), across suite and resource files (IndexVer 10).
+- HTML files are stored with their `<h1>`–`<h4>` headings as sections; gettext catalogues
+  (`.po`, `.pot`) are stored, and `errors` finds a translated message's `msgid` in them
+  (IndexVer 10).
 - **Sections in content files** are symbols (`kind: section`): Markdown/rST headings,
   YAML/JSON keys and named list entries, TOML/INI tables, Dockerfile stages, Makefile targets.
   Markdown, rST, AsciiDoc, TOML, INI, templates, Salt, Jsonnet and XML are now stored.
 - `REPONITE_MAX_SOURCE_BYTES`, `REPONITE_CPUPROFILE`, `REPONITE_MEMPROFILE`.
+- `semsearch` ranks by how much of the query a symbol covers and by query words in its name;
+  tests, destructors and content sections rank lower.
 
 #### Changed
 

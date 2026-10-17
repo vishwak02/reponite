@@ -944,7 +944,8 @@ crossing is Robot Framework, whose keywords call Python library functions by nam
 
 **Robot Framework** (`.robot`, `.resource`): every test case and keyword is a symbol and every
 keyword a body calls is an edge. Robot names are case- and space-insensitive, so `Open Door`
-resolves to a keyword of that name and to a Python library function `open_door` alike. `tests`
+resolves to a keyword of that name and to a Python library function `open_door` alike, and a
+keyword with embedded arguments (`Open ${door} Door`) is linked from `Open Front Door`. `tests`
 lists the test cases that reach a symbol, with a `robot --test '<name>' <suite>` command to run
 just those.
 
@@ -963,7 +964,8 @@ stages and Makefile targets — so `search` finds `README:Installation` or
 | SQL DDL, `.proto`, `.prisma` | `models` (one span per table / message / model) |
 | `.env*`, `.properties`, Dockerfiles, CI workflows, docker-compose, Makefiles | `config`, `map` |
 | READMEs, package manifests (`go.mod`, `package.json`, `package.xml`, `Cargo.toml`, …) | `map`, `explain` |
-| Markdown, reStructuredText, AsciiDoc, TOML, INI/`.cfg`/`.conf`, templates (`.j2`, `.tpl`, `.tmpl`), Salt (`.sls`), Jsonnet, XML/xacro/URDF/SDF | `grep`, `search` (sections) |
+| Markdown, reStructuredText, AsciiDoc, TOML, INI/`.cfg`/`.conf`, templates (`.j2`, `.tpl`, `.tmpl`), Salt (`.sls`), Jsonnet, XML/xacro/URDF/SDF, HTML | `grep`, `search` (sections) |
+| gettext catalogues (`.po`, `.pot`) | `errors` (translated messages) |
 
 Other file types are not read.
 

@@ -48,7 +48,10 @@ const (
 	//      stages, Makefile targets); Markdown, rST, TOML/INI, templates, Salt,
 	//      Jsonnet and XML are stored; oversized, binary and minified source
 	//      is skipped and reported; Robot Framework suites and keywords.
-	IndexVer = 9
+	//  10: Robot keywords with embedded arguments (`Open ${door} Door`)
+	//      are linked from their calls; HTML and gettext (.po) files are
+	//      stored as content.
+	IndexVer = 10
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

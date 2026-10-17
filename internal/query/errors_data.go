@@ -26,7 +26,7 @@ const maxErrorDataDefs = 12
 
 func isErrorDataPath(p string) bool {
 	switch strings.ToLower(path.Ext(p)) {
-	case ".json", ".yaml", ".yml":
+	case ".json", ".yaml", ".yml", ".po", ".pot": // gettext: a translated message leads to its msgid
 		return true
 	}
 	return false

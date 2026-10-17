@@ -198,3 +198,62 @@ func dedupeStrings(xs []string) []string {
 	}
 	return out
 }
+
+var robotEmbeddedVar = regexp.MustCompile(`\$\{[^}]*\}`)
+
+// linkRobotEmbedded resolves calls to keywords with embedded arguments
+// (`Open ${door} Door` called as `Open Front Door`): a call whose stored name
+// matches such a keyword's pattern is rewritten to the keyword's own name,
+// across every Robot file of the ref (resource files define most keywords).
+func linkRobotEmbedded(files []ParsedFile) {
+	type pat struct {
+		re   *regexp.Regexp
+		name string
+	}
+	var pats []pat
+	for _, f := range files {
+		if f.Lang != "robot" {
+			continue
+		}
+		for _, s := range f.Symbols {
+			raw := s.Signature
+			if i := strings.Index(raw, " ["); i >= 0 {
+				raw = raw[:i]
+			}
+			if !robotEmbeddedVar.MatchString(raw) {
+				continue
+			}
+			var b strings.Builder
+			b.WriteString("^")
+			for i, lit := range robotEmbeddedVar.Split(raw, -1) {
+				if i > 0 {
+					b.WriteString("_?[a-z0-9_]+?_?")
+				}
+				b.WriteString(regexp.QuoteMeta(RobotName(lit)))
+			}
+			b.WriteString("$")
+			if re, err := regexp.Compile(b.String()); err == nil {
+				pats = append(pats, pat{re, s.Name})
+			}
+		}
+	}
+	if len(pats) == 0 {
+		return
+	}
+	for fi := range files {
+		if files[fi].Lang != "robot" {
+			continue
+		}
+		for si := range files[fi].Symbols {
+			cs := files[fi].Symbols[si].Callees
+			for ci, c := range cs {
+				for _, p := range pats {
+					if c != p.name && p.re.MatchString(c) {
+						cs[ci] = p.name
+						break
+					}
+				}
+			}
+		}
+	}
+}
