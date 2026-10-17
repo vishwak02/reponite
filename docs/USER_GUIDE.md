@@ -572,6 +572,33 @@ queried name or text appears in such a file, `errors` returns those lines under 
 the neighbouring keys of the entry (the code, the other languages) and `loaded_by`: the code
 files that name the catalogue — the hop back into the code that raises it.
 
+### What refers to this file, as data? — `links`
+
+Much of a system is wired by data, not calls: a playbook naming a role, a launch file
+including another, a plan using a behaviour by id, a template using a Helm value, a config
+naming a plugin class. `links` lists those references for a file (or the configuration
+values naming a symbol), in any file kind:
+
+```sh
+reponite links ansible/roles/blackbox_recorder/tasks/main.yaml
+# refers_to:   [path/role] roles/blackbox_recorder/templates/blackbox-recorder.service.j2
+# referred_by: [path/ansible-role] ansible/playbook_blackbox_recorder.yaml:15  name: blackbox_recorder
+reponite links oks_alica/etc/behaviours/CheckBECStatus.beh
+# referred_by: [id] oks_alica/etc/plans/BatteryExchange.pml:527
+```
+
+| Kind | What it links |
+|---|---|
+| `path` | a string resolving to a tracked file: relative to the file, repo root, ROS `$(find pkg)/…` or `package://pkg/…`, an Ansible role's `templates/`/`files/`, a role named in a play, a unique suffix or file name |
+| `id` | a large number or UUID defined as `"id"` in one file and used in another |
+| `template` | a Helm/Go-template `include`/`template` of a `define` |
+| `values` | a Helm template's `.Values.a.b` to the key in the chart's `values.yaml` |
+| `rpc-impl` | a protobuf `rpc` to the code implementing it |
+| `openapi-route` | an OpenAPI/Swagger path to the route serving it |
+| `names-symbol` | a configuration value (`name`, `type`, `class`, `plugin`, `implementationName`, …) that is exactly a code symbol of the repo |
+
+`explain <file>` lists the same references under "refers to" and "referred to by".
+
 ### Which tests cover this, and how do I run just those? — `tests`
 
 ```sh
@@ -871,6 +898,8 @@ reponite <command> [arguments] [flags]
 | `context <symbol> [ref]` | Direct callers and callees |
 | `brief <symbol> [ref]` | Token-budgeted bundle for editing a symbol |
 | `usages <symbol>` | Every call site, with call-graph confirmation |
+| `links <path\|symbol>` | References written as data: paths, ids, template includes, Helm values, rpc implementations, OpenAPI routes, config values naming code |
+| `coverage [--repo R]` | What the index stored of each repo, and every skipped file kind with its reason |
 | `topics [name]` | ROS publisher ↔ subscriber / service / action graph, with launch-declared bindings and rviz displays |
 | `logsite "<log line>"` | Which code printed a log line (format strings matched with placeholders filled) |
 | `impls <Base[::method]>` | Subclasses and plugins of a base class across repos, and their overrides |

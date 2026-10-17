@@ -177,6 +177,10 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 			return UIText(res), nil
 		}
 		return UIJSON(res)
+	case "reponite_links":
+		return snakeJSON(query.LinksFor(t.Store, discoverRepo, ref, args["target"]))
+	case "reponite_coverage":
+		return snakeJSON(query.Coverage(t.Store, discoverRepo, ref))
 	case "reponite_topics":
 		var res query.CommGraphResult
 		if topic := args["topic"]; topic != "" {

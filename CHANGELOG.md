@@ -32,6 +32,10 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 - `semsearch` ranks by how much of the query a symbol covers and by query words in its name;
   tests, destructors and content sections rank lower.
 
+- **`reponite links <path|symbol>`** (MCP `reponite_links`): references written as data in any
+  file kind — paths (relative, root, ROS package, Ansible role, unique suffix/name), ids,
+  Helm/Go-template includes, `.Values` keys, protobuf rpc implementations, OpenAPI routes, and
+  configuration values naming a code symbol. `explain <file>` shows them too.
 - **`reponite coverage`**: per repo and file kind, what the index stored and every skipped
   file with its reason, so an empty answer can be told apart from unread files.
 - **Every tracked text file is stored** (IndexVer 11): unknown extensions and extension-less

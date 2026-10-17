@@ -61,7 +61,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests", "ui", "map", "explain", "trace", "models", "config", "coverage":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests", "ui", "map", "explain", "trace", "models", "config", "coverage", "links":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "arch",
 		"sync", "status", "gc":
@@ -114,6 +114,7 @@ index-backed (build with `+"`make cli`"+`):
   ui [route|component] [ref] [--uses] [--budget N] [--format text]   frontend: pages (client routes -> component), a component tree with props/state/effects/handlers -> API -> server route, or where a component is rendered
   models [model] [ref] [--budget N]   data layer: models/tables, fields, relations, serializers, routes, readers + writers
   config [key] [ref] [--budget N]    config surface: env/flags/settings/feature flags/ROS params read (with defaults) vs set
+  links <path|symbol>  references written as data: paths, ids, template includes, config values naming code
   coverage [--repo R]  what the index stored of each repo, and every skipped file kind with its reason
   topics [name]        ROS comms graph: publishers <-> subscribers linked by name (the call graph can't see it)
   verify-edit <path>   pre-commit check: what breaks if you save your edits to this file

@@ -354,6 +354,21 @@ func fileText(b *strings.Builder, f *query.ExplainFile) {
 	}
 	links("called from", f.Inbound)
 	links("calls into", f.Outbound)
+	refs := func(title string, ls []query.Link, other bool) {
+		if len(ls) == 0 {
+			return
+		}
+		fmt.Fprintf(b, "\n## %s\n", title)
+		for _, l := range ls {
+			where := l.To
+			if other {
+				where = fmt.Sprintf("%s:%d", l.Path, l.Line)
+			}
+			fmt.Fprintf(b, "- [%s] %s  — %s\n", l.Kind, where, l.Text)
+		}
+	}
+	refs("refers to (as data)", f.RefersTo, false)
+	refs("referred to by (as data)", f.ReferredBy, true)
 }
 
 // GuideText is the agent decision table (`reponite guide`, MCP reponite_guide).

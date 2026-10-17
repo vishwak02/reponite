@@ -114,6 +114,8 @@ type ExplainFile struct {
 	Imports          []string
 	Inbound          []FileLink // files whose code calls into this one
 	Outbound         []FileLink // files this one calls into
+	RefersTo         []Link     // files and symbols this one names as data (paths, ids, includes)
+	ReferredBy       []Link     // places that name this file as data
 	EntryPoints      []EntryPoint
 	Routes           []Route
 	Topics           []CommEndpoint
@@ -850,6 +852,14 @@ func explainFile(s Store, repo, ref, path string, files []File, idx *spanIndex, 
 		ef.Role = append(ef.Role, "project file: "+k)
 	}
 	ef.Purpose = fileDoc(f.Content, lang)
+	for _, l := range Links(s, repo, ref) {
+		if l.Path == path && len(ef.RefersTo) < 15 {
+			ef.RefersTo = append(ef.RefersTo, l)
+		}
+		if l.To == path && len(ef.ReferredBy) < 15 {
+			ef.ReferredBy = append(ef.ReferredBy, l)
+		}
+	}
 	ef.Imports = fileImports(f.Content, lang)
 	for _, e := range EntryPoints(repo, []File{*f}) {
 		ef.EntryPoints = append(ef.EntryPoints, e)

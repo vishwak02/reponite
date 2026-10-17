@@ -48,6 +48,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdTopics(args)
 	case "coverage":
 		cmdCoverage(args)
+	case "links":
+		cmdLinks(args)
 	case "logsite":
 		cmdLogSite(args)
 	case "impls":
@@ -994,5 +996,36 @@ func cmdCoverage(args []string) {
 		return
 	}
 	b, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(b))
+}
+
+// cmdLinks prints the references to and from a file (or naming a symbol) that
+// are written as data: paths, ids, template includes, config values.
+func cmdLinks(args []string) {
+	var local bool
+	var rf refFlags
+	var repoFlag string
+	pos := parseCmd("links", "links <path|symbol> [--repo R] [--local]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "only this repo")
+		fs.StringVar(&repoFlag, "repo", "", "only this repo of the fleet")
+		rf.register(fs)
+	})
+	if len(pos) < 1 {
+		fail(fmt.Errorf("links needs a path or a symbol name"))
+	}
+	f := openFleet(local)
+	defer f.Close()
+	ref := rf.ref
+	if ref == "" {
+		ref = "HEAD"
+	}
+	s, _ := f.view(ref, rf.pins)
+	repo := query.FleetRepo
+	if repoFlag != "" {
+		repo = repoFlag
+	} else if local {
+		repo = f.Local
+	}
+	b, _ := json.MarshalIndent(query.LinksFor(s, repo, ref, pos[0]), "", "  ")
 	fmt.Println(string(b))
 }

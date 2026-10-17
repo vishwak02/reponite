@@ -100,7 +100,7 @@ reponite setup ~/src/my-project                        # Claude Desktop
 reponite setup ~/src/my-project --client claude-code   # or cursor, windsurf
 ```
 
-The agent then has 30 tools (`reponite_map`, `reponite_explain`, `reponite_trace`,
+The agent then has 32 tools (`reponite_map`, `reponite_explain`, `reponite_trace`,
 `reponite_usages`, `reponite_compat`, `reponite_verify_edit` and more), each answer
 budgeted in tokens and labeled with its confidence. `reponite guide` prints which tool
 answers which question. The full list is in the
