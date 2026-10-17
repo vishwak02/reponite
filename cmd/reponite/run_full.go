@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -158,6 +159,11 @@ func (e *excludeFlags) Set(v string) error {
 }
 
 func cmdIndex(args []string) {
+	if os.Getenv("GOGC") == "" {
+		// indexing allocates and drops a great deal: collecting at 1.5x the live
+		// heap instead of 2x lowers the peak of a very large tree by ~15%
+		debug.SetGCPercent(50)
+	}
 	var gitRev, tagGlob string
 	var excludes excludeFlags
 	var submodules, force bool
@@ -669,6 +675,7 @@ func cmdUsages(args []string) {
 	var local bool
 	var rf refFlags
 	pos := parseCmd("usages", "usages <symbol> [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
+		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 		rf.register(fs)
 		registerNoTests(fs)
@@ -681,6 +688,10 @@ func cmdUsages(args []string) {
 	s, cov := f.view(rf.ref, rf.pins)
 	res := query.Usages(s, query.FleetRepo, rf.ref, pos[0])
 	res.Note = joinNote(res.Note, cov)
+	if outFormat == "text" {
+		fmt.Print(interfaces.UsagesText(res))
+		return
+	}
 	printJSON(interfaces.UsagesJSON(res))
 }
 
@@ -712,6 +723,7 @@ func cmdImpls(args []string) {
 	var limit int
 	var rf refFlags
 	pos := parseCmd("impls", "impls <Base | Base::method | Base.method> [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 50, "max classes")
 		rf.register(fs)
@@ -725,6 +737,10 @@ func cmdImpls(args []string) {
 	s, cov := f.view(rf.ref, rf.pins)
 	res := query.Impls(s, query.FleetRepo, rf.ref, pos[0], limit)
 	res.Note = joinNote(res.Note, cov)
+	if outFormat == "text" {
+		fmt.Print(interfaces.ImplsText(res))
+		return
+	}
 	printJSON(interfaces.ImplsJSON(res))
 }
 
@@ -736,6 +752,7 @@ func cmdRoutes(args []string) {
 	var gateways, upstreams string
 	var rf refFlags
 	pos := parseCmd("routes", "routes [path substring] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 50, "max routes")
 		fs.StringVar(&gateways, "gateway", "", "reverse-proxy gateway config(s) in Caddy JSON, comma-separated: follow each request through its mount")
@@ -756,6 +773,10 @@ func cmdRoutes(args []string) {
 	s, cov := f.view(rf.ref, rf.pins)
 	res := query.RoutesWith(s, query.FleetRepo, rf.ref, filter, limit, opt)
 	res.Note = joinNote(res.Note, cov)
+	if outFormat == "text" {
+		fmt.Print(interfaces.RoutesText(res))
+		return
+	}
 	printJSON(interfaces.RoutesJSON(res))
 }
 
@@ -766,6 +787,7 @@ func cmdTopics(args []string) {
 	var local bool
 	var rf refFlags
 	pos := parseCmd("topics", "topics [name] [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
+		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		rf.register(fs)
 		registerNoTests(fs)
@@ -780,6 +802,10 @@ func cmdTopics(args []string) {
 		res = query.CommGraph(s, query.FleetRepo, rf.ref)
 	}
 	res.Note = joinNote(res.Note, cov)
+	if outFormat == "text" {
+		fmt.Print(interfaces.TopicsText(res))
+		return
+	}
 	printJSON(interfaces.TopicsJSON(res))
 }
 
@@ -1006,6 +1032,7 @@ func cmdLinks(args []string) {
 	var rf refFlags
 	var repoFlag string
 	pos := parseCmd("links", "links <path|symbol> [--repo R] [--local]", args, func(fs *flag.FlagSet) {
+		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "only this repo")
 		fs.StringVar(&repoFlag, "repo", "", "only this repo of the fleet")
 		rf.register(fs)
@@ -1026,6 +1053,18 @@ func cmdLinks(args []string) {
 	} else if local {
 		repo = f.Local
 	}
-	b, _ := json.MarshalIndent(query.LinksFor(s, repo, ref, pos[0]), "", "  ")
+	lr := query.LinksFor(s, repo, ref, pos[0])
+	if outFormat == "text" {
+		fmt.Print(interfaces.LinksText(lr))
+		return
+	}
+	b, _ := json.MarshalIndent(lr, "", "  ")
 	fmt.Println(string(b))
+}
+
+// outFormat is the --format of the commands with a compact text rendering.
+var outFormat = "json"
+
+func registerFormat(fs *flag.FlagSet) {
+	fs.StringVar(&outFormat, "format", "json", "json, or text (compact: grouped, no repeated field names)")
 }

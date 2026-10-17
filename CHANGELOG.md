@@ -43,8 +43,15 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   cache ones; binaries, LFS pointers, lockfiles and large data tables are skipped with that
   reason. One classifier serves both the git and the working-tree walker.
 
+- **Compact text output** (`--format text`, MCP `format: "text"`) for `topics`, `usages`,
+  `routes`, `impls` and `links`: grouped by file, no repeated field names — the costmap topic
+  answer is 1.7 KB instead of 15 KB.
+
 #### Changed
 
+- Indexing collects garbage at 1.5× the live heap (unless `GOGC` is set) and sets a soft
+  memory limit of half the machine's RAM (unless `GOMEMLIMIT` is set): the kernel tree peaks
+  at 5.3 GB instead of 6.2 GB.
 - **Fleet-wide answers are cached.** The communication graph, the route map and the fleet
   map are kept between commands, keyed by every in-scope repo's ref, commit, manifest and
   ruleset plus the binary's identity, so a re-index or a rebuild recomputes and nothing

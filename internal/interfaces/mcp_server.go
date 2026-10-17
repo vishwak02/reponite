@@ -118,6 +118,7 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("ref", mcp.Description("baseline ref (default HEAD)"))))
 	add(mcp.NewTool("reponite_usages",
 		mcp.WithDescription("When: you need every call site of a symbol with its exact line (e.g. before changing a signature). Every call site of a symbol across the fleet — the exact calling line, its file:line, and the enclosing function — with `confirmed` when that function is a resolved caller in the call graph (vs a lexical match in a comment/string or a dynamic call). Use before changing a signature to see how it's actually called."),
+		mcp.WithString("format", mcp.Description(`"text" for a compact rendering grouped by file (a fraction of the tokens; default JSON)`)),
 		mcp.WithString("symbol", mcp.Required()),
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
@@ -137,6 +138,7 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("limit", mcp.Description("max sites (default 10)"))))
 	add(mcp.NewTool("reponite_impls",
 		mcp.WithDescription("When: code calls a base class/interface and you need what actually runs (subclasses, plugins). What actually runs when code calls an interface? Given a C++ base class (optionally with a method: Base::method), lists every class deriving from it fleet-wide — including plugins and subclasses in OTHER repos that the call graph cannot reach, since they are loaded at runtime — with file:line, derivation depth, whether it is registered with PLUGINLIB_EXPORT_CLASS, and each class's own definition of the method (empty when inherited). Read with per-repo refs to answer for the exact versions a system runs. Then open the override with brief/context."),
+		mcp.WithString("format", mcp.Description(`"text" for a compact rendering grouped by file (a fraction of the tokens; default JSON)`)),
 		mcp.WithString("base", mcp.Required(), mcp.Description("base class, or Base::method / Base.method")),
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
@@ -144,6 +146,7 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("limit", mcp.Description("max classes (default 50)"))))
 	add(mcp.NewTool("reponite_routes",
 		mcp.WithDescription("When: following an HTTP call from a client to the server view, or a view to its callers. HTTP edges the call graph CAN'T see: which frontend/client call reaches which backend route, across repos. Reads server routes (Django path/re_path/url composed through include() prefixes and DRF routers, FastAPI/Flask decorators with router prefixes, Express, Go net/http, gin/echo/chi) and client calls (fetch, axios or any client object's get/post/…, requests, httpx), resolving URLs built from literals, template strings, f-strings, concatenation and named URL constants, then pairs them by path and method. With `path`: only that endpoint's routes and callers. Use to go from a UI action to the view that serves it, or from a view to every UI that calls it. Medium confidence (base URLs, proxies and gateway rewrites are not resolved; stated in the result)."),
+		mcp.WithString("format", mcp.Description(`"text" for a compact rendering grouped by file (a fraction of the tokens; default JSON)`)),
 		mcp.WithString("path", mcp.Description("focus on routes/calls whose path contains this (default: the whole map)")),
 		mcp.WithString("gateway", mcp.Description("reverse-proxy gateway config file(s), Caddy JSON, comma-separated — requests are followed through each mount to the repo behind it")),
 		mcp.WithString("upstream", mcp.Description("which repo serves a gateway upstream, host:port=repo,... (default: matched by name)")),
@@ -153,12 +156,14 @@ func ServeStdio(ts *ToolServer) error {
 		mcp.WithString("limit", mcp.Description("max routes (default 50)"))))
 	add(mcp.NewTool("reponite_topics",
 		mcp.WithDescription("When: following ROS data between processes (who publishes/subscribes a topic). ROS communication graph — the runtime edges the call graph CAN'T see. A publisher and a subscriber live in different processes and are joined only by a topic name at runtime, so no source call graph links them; this does, fleet-wide, by scanning roscpp/rospy/rclcpp/rclpy pub/sub/service/action idioms and pairing producers with consumers by name. With no `topic`: the whole comms map (connected edges first). With `topic`: who publishes and who subscribes to that one name. Use to answer \"who reacts when I publish X?\" or \"where does this subscriber's data come from?\". Names are resolved to their runtime form: launch-file remaps, names read from parameters (launch/YAML values), names a library takes from its caller (argument and NodeHandle-namespace tracing), and rviz displays/tools; each endpoint states how its name was resolved and with what confidence."),
+		mcp.WithString("format", mcp.Description(`"text" for a compact rendering grouped by file (a fraction of the tokens; default JSON)`)),
 		mcp.WithString("topic", mcp.Description("focus on one topic/service/action name (default: whole comms graph)")),
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,... — read the exact combination of versions a deployed system runs (overrides ref for those repos)")),
 		mcp.WithString("ref", mcp.Description("default HEAD"))))
 	add(mcp.NewTool("reponite_links",
 		mcp.WithDescription("When: something refers to a file or symbol through data, not code — which playbook uses this role, which launch file includes this one, which plan uses this behaviour, which template uses this Helm value, which config names this class. References written as data in any file kind: paths (relative, repo root, ROS $(find pkg)/package://, Ansible roles, unique suffix or file name), ids (a large number or UUID defined as \"id\" elsewhere), Helm/Go-template include of a define, .Values keys to values.yaml, protobuf rpc to its implementation, OpenAPI path to the route serving it, and configuration values naming a code symbol. Returns refers_to and referred_by for the target."),
+		mcp.WithString("format", mcp.Description(`"text" for a compact rendering grouped by file (a fraction of the tokens; default JSON)`)),
 		mcp.WithString("target", mcp.Required(), mcp.Description("a repo-relative path (suffix ok) or a symbol name")),
 		mcp.WithString("repo", mcp.Description("scope to one repo (default: fleet-wide)")),
 		mcp.WithString("refs", mcp.Description("per-repo refs repo=ref,...")),

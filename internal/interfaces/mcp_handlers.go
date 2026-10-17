@@ -137,6 +137,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		if discoverRepo == query.FleetRepo {
 			res.Note = res.Note + " — " + coverage()
 		}
+		if args["format"] == "text" {
+			return UsagesText(res), nil
+		}
 		return UsagesJSON(res)
 	case "reponite_logsite":
 		limit, _ := strconv.Atoi(args["limit"])
@@ -151,6 +154,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		if discoverRepo == query.FleetRepo {
 			res.Note = res.Note + " — " + coverage()
 		}
+		if args["format"] == "text" {
+			return ImplsText(res), nil
+		}
 		return ImplsJSON(res)
 	case "reponite_routes":
 		limit, _ := strconv.Atoi(args["limit"])
@@ -161,6 +167,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		res := query.RoutesWith(t.Store, discoverRepo, ref, args["path"], limit, opt)
 		if discoverRepo == query.FleetRepo {
 			res.Note = res.Note + " — " + coverage()
+		}
+		if args["format"] == "text" {
+			return RoutesText(res), nil
 		}
 		return RoutesJSON(res)
 	case "reponite_ui":
@@ -178,7 +187,11 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		}
 		return UIJSON(res)
 	case "reponite_links":
-		return snakeJSON(query.LinksFor(t.Store, discoverRepo, ref, args["target"]))
+		lr := query.LinksFor(t.Store, discoverRepo, ref, args["target"])
+		if args["format"] == "text" {
+			return LinksText(lr), nil
+		}
+		return snakeJSON(lr)
 	case "reponite_coverage":
 		return snakeJSON(query.Coverage(t.Store, discoverRepo, ref))
 	case "reponite_topics":
@@ -190,6 +203,9 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		}
 		if discoverRepo == query.FleetRepo {
 			res.Note = res.Note + " — " + coverage()
+		}
+		if args["format"] == "text" {
+			return TopicsText(res), nil
 		}
 		return TopicsJSON(res)
 	case "reponite_verify_edit":

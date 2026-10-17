@@ -25,6 +25,7 @@ func main() {
 			}
 		}
 	}
+	setSoftMemoryLimit()
 	// REPONITE_MEMPROFILE=<file> rewrites a heap profile every few seconds
 	// while the command runs, so the last one survives a run that is killed
 	// for using too much memory.
