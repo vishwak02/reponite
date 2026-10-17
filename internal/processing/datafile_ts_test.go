@@ -41,12 +41,13 @@ func TestIndexDirStoresDataFiles(t *testing.T) {
 	for _, f := range m.Files("r", "HEAD") {
 		got[f.Path] = true
 	}
-	for _, p := range []string{".env", ".github/workflows/ci.yml", "Dockerfile", "db/001.sql", "api/order.proto", "app/main.py"} {
+	for _, p := range []string{".env", ".github/workflows/ci.yml", "Dockerfile", "db/001.sql", "api/order.proto", "app/main.py",
+		".github/scripts/x.py"} {
 		if !got[p] {
 			t.Errorf("%s must be stored (have %v)", p, got)
 		}
 	}
-	for _, p := range []string{".github/scripts/x.py", ".venv/lib/site.py"} {
+	for _, p := range []string{".venv/lib/site.py"} {
 		if got[p] {
 			t.Errorf("%s must stay skipped", p)
 		}

@@ -44,141 +44,45 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if relErr != nil {
 			rel = path
 		}
+		rel = filepath.ToSlash(rel)
 		if info.IsDir() {
-			if path != dir {
-				// Dot-dirs (.git, .reponite, …) are always skipped; the ignore
-				// set adds vendor/third_party/node_modules/… + .reponiteignore
-				// + --exclude.
-				// .github/workflows (CI definitions) and .circleci are the dot-dirs read
-				if strings.HasPrefix(info.Name(), ".") && !query.IsProjectDir(rel) && !IsDataDotDir(rel) || ig.Excluded(rel, true) {
-					return filepath.SkipDir
+			// tool/cache dot-dirs (.git, .reponite, .venv, …) and the ignore set
+			// (vendor/, node_modules/, …, .reponiteignore, --exclude) are not walked
+			if path != dir && (noiseDotDirs[info.Name()] || ig.Excluded(rel, true)) {
+				why := "tool or cache directory"
+				if !noiseDotDirs[info.Name()] {
+					why = "excluded by an ignore rule (vendored, .reponiteignore or --exclude)"
 				}
+				skipped = append(skipped, SkippedFile{Path: rel + "/", Reason: why, Quiet: true})
+				return filepath.SkipDir
 			}
 			return nil
 		}
-		if ig.Excluded(rel, false) {
-			return nil
+		if !info.Mode().IsRegular() {
+			return nil // a symlink or device: its target is indexed where it lives
 		}
-		// Inside a walked dot-directory (.github) only its data files count.
-		if underDotDir(filepath.ToSlash(rel)) && !IsDataDotPath(filepath.ToSlash(rel)) {
-			return nil
+		c, cerr := classifyFile(fileInput{
+			path: rel, size: info.Size(),
+			read: func() (string, error) { b, err := os.ReadFile(path); return string(b), err },
+			load: func() (string, error) { b, err := os.ReadFile(path); return string(b), err },
+		}, ig, repo, normVer, func(pf *ParsedFile) { pf.SCIP = scipFor(scipIdx, scipLocal, pf.Path, pf.Spans) })
+		if cerr != nil {
+			return cerr
 		}
-		// Schema and configuration files (.sql/.proto/.prisma, .env*,
-		// Dockerfile, .properties): stored for `models` and `config`.
-		if IsDataFile(rel) {
-			if b, readErr := os.ReadFile(path); readErr == nil {
-				if pf, ok := dataFile(filepath.ToSlash(rel), string(b)); ok {
-					pool.add(pf)
-				}
+		switch {
+		case c.skip != nil:
+			skipped = append(skipped, *c.skip)
+		case c.job != nil:
+			if c.lang == "go" {
+				hasGo = true
 			}
-			return nil
+			pool.submit(c.job)
+		case c.pf != nil:
+			pool.add(*c.pf)
 		}
-		// Module manifests carry the repo's identity, not symbols; collect for
-		// module_path detection (§8B.2). They are never source, so return after.
-		// They are also stored as project files (as are READMEs, Dockerfiles,
-		// Makefiles and CI definitions) for `map`/`explain`.
-		if IsManifestFile(path) {
-			if src, readErr := os.ReadFile(path); readErr == nil {
-				manifests[rel] = src
-				if pf, ok := projectFile(rel, string(src)); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
+		if c.manifest != nil {
+			manifests[rel] = c.manifest
 		}
-		if IsProjectFile(rel) && !IsROSParamFile(path) {
-			if src, readErr := os.ReadFile(path); readErr == nil {
-				if pf, ok := projectFile(rel, string(src)); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		if filepath.ToSlash(filepath.Dir(rel)) != "." && query.IsProjectDir(filepath.ToSlash(filepath.Dir(rel))) && !IsProjectFile(rel) {
-			return nil // a non-CI file under .github
-		}
-		// ROS interface files (.msg/.srv/.action) are pure text, not tree-sitter.
-		if IsROSFile(path) {
-			src, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			if pf, ok := rosFile(rel, string(src)); ok {
-				pool.add(pf)
-			}
-			return nil
-		}
-		// ROS launch/rostest XML: stored for search + read back by `topics` to
-		// resolve remapping. Not tree-sitter parsed, so it comes before dispatch.
-		if IsROSLaunchFile(path) {
-			if b, readErr := os.ReadFile(path); readErr == nil {
-				pool.add(launchFile(rel, string(b)))
-			}
-			return nil
-		}
-		if IsROSParamFile(path) {
-			if b, readErr := os.ReadFile(path); readErr == nil {
-				if pf, ok := paramFile(rel, string(b)); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		// Vue/Svelte single-file components: script parsed in place, the
-		// component itself a symbol (sfc_ts.go).
-		if query.IsSFCPath(rel) {
-			if b, readErr := os.ReadFile(path); readErr == nil {
-				if pf, ok := sfcFile(rel, string(b), normVer); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		// Robot Framework suites and keyword libraries (robot.go).
-		if IsRobotFile(rel) {
-			if b, readErr := os.ReadFile(path); readErr == nil && len(b) <= maxContentFileBytes {
-				pool.add(robotFile(filepath.ToSlash(rel), string(b)))
-			}
-			return nil
-		}
-		// JSON catalogues and rviz configs: content-only (contentfile.go).
-		if IsContentFile(rel) {
-			if b, readErr := os.ReadFile(path); readErr == nil {
-				if pf, ok := contentFile(filepath.ToSlash(rel), string(b)); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		src, rules, ext, ok, why := readSource(path)
-		if why != "" {
-			skipped = append(skipped, SkippedFile{rel, why})
-		}
-		if !ok {
-			return nil
-		}
-		if rules.Name == "go" {
-			hasGo = true
-		}
-		pool.submit(func() (ParsedFile, bool, error) {
-			root, spans, parseErr := parseFileRules(src, ext, rules)
-			if parseErr != nil || root == nil {
-				return ParsedFile{}, false, parseErr // nil root: no grammar bound for this extension
-			}
-			defer releaseAST(root)
-			syms := Extract(root, rules, normVer)
-			sealSymbols(repo, rules.Name, normVer, syms)
-			return ParsedFile{
-				Path: rel, Lang: rules.Name,
-				Symbols: syms, Spans: spans, Imports: Imports(root, rules),
-				IsTest: IsTestPath(rel), Types: CppTypeFacts(root, rules),
-				SCIP: scipFor(scipIdx, scipLocal, rel, spans),
-				Load: func() (string, error) {
-					b, err := os.ReadFile(path)
-					return string(b), err
-				},
-			}, true, nil
-		})
 		return nil
 	})
 	files, perr := pool.wait()

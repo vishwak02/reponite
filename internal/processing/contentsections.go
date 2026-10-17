@@ -33,7 +33,24 @@ type section struct {
 // name is the file's stem and the section path joined with ':' — no '.',
 // which the symbol id uses as its own separator.
 func sectionSymbols(p, content string) ([]Symbol, []query.SymbolSpan) {
+	return sectionSymbolsAs(p, content, "")
+}
+
+// sectionSymbolsAs is sectionSymbols for a file whose structure was
+// recognized from its content (lang "json", "xml", "csv") when its name says
+// nothing.
+func sectionSymbolsAs(p, content, lang string) ([]Symbol, []query.SymbolSpan) {
 	secs := fileSections(p, content)
+	if secs == nil {
+		switch lang {
+		case "json":
+			secs = jsonSections(content)
+		case "xml":
+			secs = xmlSections(content)
+		case "csv":
+			secs = csvSections(content)
+		}
+	}
 	if len(secs) == 0 {
 		return nil, nil
 	}
@@ -117,6 +134,13 @@ func fileSections(p, content string) []section {
 		return yamlSections(content)
 	case ext == ".html" || ext == ".htm":
 		return htmlSections(content)
+	case ext == ".xml" || ext == ".tmx" || ext == ".tsx" && strings.Contains(content, "<tileset") || ext == ".bpmn" ||
+		ext == ".svg" || ext == ".xacro" || ext == ".urdf" || ext == ".sdf":
+		return xmlSections(content)
+	case ext == ".just" || base == "justfile":
+		return makeSections(content)
+	case ext == ".csv" || ext == ".tsv":
+		return csvSections(content)
 	case base == "dockerfile" || base == "containerfile" || strings.HasPrefix(base, "dockerfile.") || ext == ".dockerfile":
 		return dockerSections(content)
 	case base == "makefile" || base == "gnumakefile" || ext == ".mk":
@@ -170,6 +194,61 @@ func htmlSections(content string) []section {
 		secs = append(secs, section{path: nonEmpty(stack), start: i + 1})
 	}
 	return closeSections(secs, func(s section) int { return len(s.path) }, len(lines))
+}
+
+var (
+	xmlTag     = regexp.MustCompile(`<([A-Za-z_][\w:.-]*)(\s[^<>]*?)/?>`)
+	xmlNameAtt = regexp.MustCompile(`\sname\s*=\s*"([^"]+)"`)
+	xmlIDAtt   = regexp.MustCompile(`\sid\s*=\s*"([^"]+)"`)
+)
+
+// xmlSections takes every element named by a name (else id) attribute as a
+// section "<tag>:<name>" — a Tiled map's layers and objects, a BPMN process's
+// tasks, a URDF's links and joints, an SVG's groups.
+func xmlSections(content string) []section {
+	lines := strings.Split(content, "\n")
+	var secs []section
+	for i, ln := range lines {
+		for _, m := range xmlTag.FindAllStringSubmatch(ln, -1) {
+			val := ""
+			if n := xmlNameAtt.FindStringSubmatch(m[2]); n != nil {
+				val = n[1]
+			} else if n := xmlIDAtt.FindStringSubmatch(m[2]); n != nil {
+				val = n[1]
+			}
+			if val == "" {
+				continue
+			}
+			tag := m[1]
+			if j := strings.LastIndexByte(tag, ':'); j >= 0 {
+				tag = tag[j+1:] // bpmn:task -> task
+			}
+			secs = append(secs, section{path: []string{tag, val}, start: i + 1, end: i + 1})
+			if len(secs) >= maxSections {
+				return secs
+			}
+		}
+	}
+	return secs
+}
+
+// csvSections takes a table's header cells as its sections ("columns:<name>").
+func csvSections(content string) []section {
+	head := content
+	if i := strings.IndexByte(head, '\n'); i >= 0 {
+		head = head[:i]
+	}
+	sep := ","
+	if strings.Count(head, "\t") > strings.Count(head, ",") {
+		sep = "\t"
+	}
+	var secs []section
+	for _, c := range strings.Split(strings.TrimSpace(head), sep) {
+		if c = strings.Trim(strings.TrimSpace(c), `"`); c != "" {
+			secs = append(secs, section{path: []string{"columns", c}, start: 1, end: 1})
+		}
+	}
+	return secs
 }
 
 var mdHeading = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*#*\s*$`)

@@ -88,6 +88,9 @@ func minified(b []byte) bool {
 type SkippedFile struct {
 	Path   string
 	Reason string
+	// Quiet marks a skip that is expected (a binary, a tool directory, an
+	// ignore rule): recorded for coverage, not listed after every index.
+	Quiet bool
 }
 
 // summarize is the IndexSummary of one index pass.

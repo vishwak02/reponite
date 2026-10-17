@@ -217,7 +217,10 @@ func explainTarget(s Store, ref, target string, opt ExplainOptions) ExplainResul
 	}
 	if !strings.HasPrefix(target, "/") || line > 0 {
 		want := strings.TrimPrefix(path, "./")
-		named := func(fp string) bool { return fp == want || strings.HasSuffix(fp, "/"+want) }
+		named := func(fp string) bool { // the file itself, or a file under the directory
+			return fp == want || strings.HasSuffix(fp, "/"+want) || want == "." ||
+				strings.HasPrefix(fp, want+"/") || strings.Contains(fp, "/"+want+"/")
+		}
 		for _, rp := range repos {
 			// a symbol name rarely names a file: look the path up first, decode the repo only on a hit
 			hits := filesMatching(s, rp, ref, named)

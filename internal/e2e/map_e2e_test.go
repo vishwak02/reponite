@@ -209,11 +209,13 @@ func TestMapMultiLanguageRepo(t *testing.T) {
 			t.Errorf("a test is not a hub: %+v", h)
 		}
 	}
-	// Only CI files are read from .github.
+	// Everything under .github is the project's own text (CODEOWNERS too).
+	owners := false
 	for _, f := range st.Files("shop", "HEAD") {
-		if f.Path == ".github/CODEOWNERS" {
-			t.Error(".github/CODEOWNERS must not be stored")
-		}
+		owners = owners || f.Path == ".github/CODEOWNERS"
+	}
+	if !owners {
+		t.Error(".github/CODEOWNERS must be stored")
 	}
 
 	// A tight budget truncates explicitly and says what to do next.

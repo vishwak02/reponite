@@ -51,7 +51,13 @@ const (
 	//  10: Robot keywords with embedded arguments (`Open ${door} Door`)
 	//      are linked from their calls; HTML and gettext (.po) files are
 	//      stored as content.
-	IndexVer = 10
+	//  11: every tracked text file is stored: unknown extensions and
+	//      extension-less files by content (JSON/XML/CSV recognized, sections
+	//      as symbols; XML elements named by name/id, CSV header columns),
+	//      dot-directories except tool/cache ones (.github/scripts, actions,
+	//      linter configs); binaries, LFS pointers, lockfiles and large data
+	//      tables are skipped with a reason. Both walkers share one classifier.
+	IndexVer = 11
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

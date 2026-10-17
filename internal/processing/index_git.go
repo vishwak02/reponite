@@ -21,7 +21,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"github.com/vishwak02/reponite/internal/query"
 )
 
 // IndexGitRef indexes the Go files in repoDir's git revision rev (a tag, branch,
@@ -65,152 +64,25 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	var skipped []SkippedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
 	err = tree.Files().ForEach(func(f *object.File) error {
-		dotted := strings.HasPrefix(f.Name, ".") || strings.Contains(f.Name, "/.")
-		if ig.Excluded(f.Name, false) || dotted && query.ProjectFileKind(f.Name) != query.ProjCI && !IsDataDotPath(f.Name) {
-			return nil // ignore set + dot-dirs/dot-files (CI definitions and .env files excepted), mirroring IndexDir
+		blob := f.Blob.Hash
+		c, cerr := classifyFile(fileInput{
+			path: f.Name, size: f.Size, read: f.Contents,
+			load: func() (string, error) { return blobString(r, blob) },
+		}, ig, repo, normVer, nil)
+		if cerr != nil {
+			return cerr
 		}
-		if IsDataFile(f.Name) {
-			// schema/config files (.sql/.proto/.prisma/.env/Dockerfile/.properties); `map`
-			// finds a Dockerfile among them by path, so it is stored once, here
-			if f.Size > maxDataFileBytes {
-				return nil
-			}
-			if src, cerr := f.Contents(); cerr == nil {
-				if pf, ok := dataFile(f.Name, src); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
+		switch {
+		case c.skip != nil:
+			skipped = append(skipped, *c.skip)
+		case c.job != nil:
+			pool.submit(c.job)
+		case c.pf != nil:
+			pool.add(*c.pf)
 		}
-		if IsManifestFile(f.Name) {
-			if src, err := f.Contents(); err == nil {
-				manifests[f.Name] = []byte(src)
-				if pf, ok := projectFile(f.Name, src); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
+		if c.manifest != nil {
+			manifests[f.Name] = c.manifest
 		}
-		if IsProjectFile(f.Name) && !IsROSParamFile(f.Name) {
-			if f.Size > query.MaxProjectFileBytes {
-				return nil
-			}
-			if src, err := f.Contents(); err == nil {
-				if pf, ok := projectFile(f.Name, src); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		if IsROSFile(f.Name) {
-			src, err := f.Contents()
-			if err != nil {
-				return err
-			}
-			if pf, ok := rosFile(f.Name, src); ok {
-				pool.add(pf)
-			}
-			return nil
-		}
-		if IsROSLaunchFile(f.Name) {
-			if src, cerr := f.Contents(); cerr == nil {
-				pool.add(launchFile(f.Name, src))
-			}
-			return nil
-		}
-		if IsROSParamFile(f.Name) {
-			if f.Size > maxParamFileBytes {
-				return nil
-			}
-			if src, cerr := f.Contents(); cerr == nil {
-				if pf, ok := paramFile(f.Name, src); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		if query.IsSFCPath(f.Name) {
-			if src, cerr := f.Contents(); cerr == nil {
-				if pf, ok := sfcFile(f.Name, src, normVer); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		if IsRobotFile(f.Name) {
-			// Robot Framework suites and keyword libraries: tests and keywords as symbols.
-			if f.Size > maxContentFileBytes {
-				skipped = append(skipped, SkippedFile{f.Name, "larger than a hand-written suite"})
-				return nil
-			}
-			if src, cerr := f.Contents(); cerr == nil {
-				pool.add(robotFile(f.Name, src))
-			}
-			return nil
-		}
-		if IsContentFile(f.Name) {
-			// JSON catalogues and rviz configs: content-only, for errors/topics/grep
-			if f.Size > maxContentFileBytes {
-				return nil
-			}
-			if src, cerr := f.Contents(); cerr == nil {
-				if pf, ok := contentFile(f.Name, src); ok {
-					pool.add(pf)
-				}
-			}
-			return nil
-		}
-		ext := filepath.Ext(f.Name)
-		if _, known := RulesForExt(ext); !known && ext != "" {
-			return nil // an unsupported extension: never read its blob
-		}
-		if why := skipSourceReason(f.Name, f.Size, nil); why != "" {
-			if ext != "" {
-				skipped = append(skipped, SkippedFile{f.Name, why})
-			}
-			return nil // never read a blob too large to be source
-		}
-		src, err := f.Contents()
-		if err != nil {
-			return err
-		}
-		if why := skipSourceReason(f.Name, int64(len(src)), []byte(src)); why != "" {
-			if ext != "" || strings.HasPrefix(src, "#!") {
-				skipped = append(skipped, SkippedFile{f.Name, why})
-			}
-			return nil
-		}
-		rules, ext, ok := RulesForSource(ext, []byte(src))
-		if !ok {
-			// Extension-less files fall back to their shebang (CLI entry points).
-			if ext != "" {
-				return nil
-			}
-			line := src
-			if i := strings.IndexByte(line, '\n'); i >= 0 {
-				line = line[:i]
-			}
-			if rules, ok = RulesForShebang(line); !ok {
-				return nil
-			}
-			ext = rules.Exts[0]
-		}
-		name, blob := f.Name, f.Blob.Hash
-		pool.submit(func() (ParsedFile, bool, error) {
-			root, spans, perr := parseFileRules([]byte(src), ext, rules)
-			if perr != nil || root == nil {
-				return ParsedFile{}, false, perr // nil root: no grammar bound for this extension
-			}
-			defer releaseAST(root)
-			syms := Extract(root, rules, normVer)
-			sealSymbols(repo, rules.Name, normVer, syms)
-			return ParsedFile{
-				Path: name, Lang: rules.Name, IsTest: IsTestPath(name),
-				Symbols: syms, Spans: spans, Imports: Imports(root, rules),
-				Types: CppTypeFacts(root, rules),
-				Load:  func() (string, error) { return blobString(r, blob) },
-			}, true, nil
-		})
 		return nil
 	})
 	files, perr := pool.wait()

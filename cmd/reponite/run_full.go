@@ -339,6 +339,13 @@ func printIndexSummary(sum processing.IndexSummary) {
 		shown++
 	}
 	fmt.Println()
+	var loud []processing.SkippedFile // expected skips (binaries, tool dirs, ignore rules) go to `coverage`
+	for _, sk := range sum.Skipped {
+		if !sk.Quiet {
+			loud = append(loud, sk)
+		}
+	}
+	sum.Skipped = loud
 	if n := len(sum.Skipped); n > 0 {
 		fmt.Printf("  %d file(s) not parsed (too large to be source, or binary):", n)
 		for i, s := range sum.Skipped {
