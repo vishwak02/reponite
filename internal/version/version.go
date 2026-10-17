@@ -57,7 +57,11 @@ const (
 	//      dot-directories except tool/cache ones (.github/scripts, actions,
 	//      linter configs); binaries, LFS pointers, lockfiles and large data
 	//      tables are skipped with a reason. Both walkers share one classifier.
-	IndexVer = 11
+	//  12: languages without a bundled grammar (Kotlin, Swift, C#, Ruby, PHP,
+	//      Lua, Scala, Dart, Groovy, Perl, R, Elixir, Julia, Zig) get heuristic
+	//      symbols, spans and calls; Java, Kotlin, Scala and Groovy resolve
+	//      calls into each other.
+	IndexVer = 12
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

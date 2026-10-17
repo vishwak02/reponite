@@ -430,6 +430,8 @@ func langFamily(lang string) string {
 	switch lang {
 	case "c", "cpp":
 		return "c"
+	case "java", "kotlin", "scala", "groovy": // one JVM: each calls the others' code
+		return "jvm"
 	case "javascript", "typescript", "vue", "svelte":
 		return "js"
 	case "", "go":

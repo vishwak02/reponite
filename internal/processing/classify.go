@@ -122,10 +122,18 @@ func sniffLang(content string) string {
 	return "text"
 }
 
-// textFile stores a file the indexer has no specific handler for.
+// textFile stores a file the indexer has no specific handler for: a language
+// without a bundled grammar gets heuristic symbols and calls, anything else
+// is stored as text with the structure its content shows.
 func textFile(in fileInput) classified {
 	p := in.path
 	ext := strings.ToLower(path.Ext(p))
+	if HeuristicLang(p) != "" && in.size <= DefaultMaxSourceBytes {
+		if src, err := in.read(); err == nil && !looksBinary([]byte(src)) {
+			pf := heuristicFile(p, src, 1)
+			return classified{pf: &pf}
+		}
+	}
 	skip := func(why string) classified { return classified{skip: &SkippedFile{Path: p, Reason: why, Quiet: true}} }
 	if binaryExts[ext] {
 		return skip("binary format")

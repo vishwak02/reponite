@@ -43,6 +43,10 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   cache ones; binaries, LFS pointers, lockfiles and large data tables are skipped with that
   reason. One classifier serves both the git and the working-tree walker.
 
+- **Languages without a bundled grammar** — Kotlin, Swift, C#, Ruby, PHP, Lua, Scala, Dart,
+  Groovy, Perl, R, Elixir, Julia, Zig — get heuristic symbols, spans and calls (IndexVer 12),
+  so they are searchable by symbol and have callers and callees; JVM languages resolve calls
+  into each other.
 - **Compact text output** (`--format text`, MCP `format: "text"`) for `topics`, `usages`,
   `routes`, `impls` and `links`: grouped by file, no repeated field names — the costmap topic
   answer is 1.7 KB instead of 15 KB.

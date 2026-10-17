@@ -956,7 +956,7 @@ needs no index), `setup`.
 
 ## Languages and file types
 
-Go · Python · JavaScript · TypeScript (JSX/TSX) · **Vue** and **Svelte** single-file components · Java · C · C++ · Rust · **Shell** · **Robot Framework** — plus **ROS
+Go · Python · JavaScript · TypeScript (JSX/TSX) · **Vue** and **Svelte** single-file components · Java · C · C++ · Rust · **Shell** · **Robot Framework**, parsed; and **Kotlin, Swift, C#, Ruby, PHP, Lua, Scala, Dart, Groovy, Perl, R, Elixir, Julia, Zig** read heuristically — definitions by their keywords, calls by `name(`, spans ending at the closing brace or the next definition (signatures are marked `heuristic`) — plus **ROS
 interface files** (`.msg`, `.srv`, `.action`), where the field list *is* the contract, so
 adding a field is correctly reported as `shape_changed`, and **ROS launch files**
 (`.launch`, `.test`), which supply the runtime topic remapping the source cannot show.
