@@ -157,3 +157,11 @@ func (n *NoTests) IndexVersion(repo, ref string) (int, bool) {
 	}
 	return 0, false
 }
+
+// Skipped forwards (query.SkipReader); a skipped file is not code, test or otherwise.
+func (n *NoTests) Skipped(repo, ref string) []query.SkippedPath {
+	if r, ok := n.Inner.(query.SkipReader); ok {
+		return r.Skipped(repo, ref)
+	}
+	return nil
+}

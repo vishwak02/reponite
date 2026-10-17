@@ -142,3 +142,11 @@ func (p *Pinned) keepPinned(hits []query.ExternalRefHit) []query.ExternalRefHit 
 	}
 	return out
 }
+
+// Skipped reads the pinned ref (query.SkipReader).
+func (p *Pinned) Skipped(repo, ref string) []query.SkippedPath {
+	if r, ok := p.Inner.(query.SkipReader); ok {
+		return r.Skipped(repo, p.at(repo, ref))
+	}
+	return nil
+}

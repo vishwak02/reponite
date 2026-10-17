@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -45,6 +46,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdUsages(args)
 	case "topics":
 		cmdTopics(args)
+	case "coverage":
+		cmdCoverage(args)
 	case "logsite":
 		cmdLogSite(args)
 	case "impls":
@@ -954,4 +957,42 @@ func refFilter(ex []string) string {
 	x := append([]string(nil), ex...)
 	sort.Strings(x)
 	return strings.Join(x, ",")
+}
+
+// cmdCoverage prints what the index stored of each repo and why the rest was not.
+func cmdCoverage(args []string) {
+	var local bool
+	var rf refFlags
+	var repoFlag, format string
+	pos := parseCmd("coverage", "coverage [ref] [--repo R] [--local] [--format json|text]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&local, "local", false, "only this repo")
+		fs.StringVar(&repoFlag, "repo", "", "only this repo of the fleet")
+		fs.StringVar(&format, "format", "json", "json or text")
+		rf.register(fs)
+	})
+	f := openFleet(local)
+	defer f.Close()
+	ref := arg(pos, 0, "HEAD")
+	if rf.ref != "" && rf.ref != "HEAD" {
+		ref = rf.ref
+	}
+	s, _ := f.view(ref, rf.pins)
+	repo := query.FleetRepo
+	if repoFlag != "" {
+		repo = repoFlag
+	} else if local {
+		repo = f.Local
+	}
+	res := query.Coverage(s, repo, ref)
+	if format == "text" {
+		for _, r := range res.Repos {
+			fmt.Printf("%s@%s: %d stored, %d skipped\n", r.Repo, r.Ref, r.Stored, r.Skipped)
+			for reason, n := range r.Reasons {
+				fmt.Printf("  skipped %5d  %s  (e.g. %s)\n", n, reason, strings.Join(r.Examples[reason], ", "))
+			}
+		}
+		return
+	}
+	b, _ := json.MarshalIndent(res, "", "  ")
+	fmt.Println(string(b))
 }

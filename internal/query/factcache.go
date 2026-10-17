@@ -110,3 +110,13 @@ func filesMatching(s Store, repo, ref string, keep func(string) bool) []File {
 	}
 	return out
 }
+
+// SkippedPath is a tracked file an index did not store, and why.
+type SkippedPath struct {
+	Path, Reason string
+}
+
+// SkipReader is optional on a Store: the files a ref's index did not store.
+type SkipReader interface {
+	Skipped(repo, ref string) []SkippedPath
+}

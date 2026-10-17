@@ -156,3 +156,11 @@ func (m *MultiStore) MonikersAt(repo, ref string) map[string]string {
 	}
 	return nil
 }
+
+// Skipped forwards to the repo's owner (query.SkipReader).
+func (m *MultiStore) Skipped(repo, ref string) []query.SkippedPath {
+	if r, ok := m.owner[repo].(query.SkipReader); ok {
+		return r.Skipped(repo, ref)
+	}
+	return nil
+}

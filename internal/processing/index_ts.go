@@ -106,6 +106,9 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	// under a non-standard path (not vendor/ or third_party/) otherwise sits in
 	// the index unnoticed, inflating it and outranking first-party code in
 	// search — findable today only by accident.
+	if err := recordSkipped(w, repo, ref, skipped); err != nil {
+		return err
+	}
 	if opt.Report != nil {
 		opt.Report(summarize(files, skipped))
 	}

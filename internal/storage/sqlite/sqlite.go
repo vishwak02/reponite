@@ -150,6 +150,10 @@ CREATE TABLE IF NOT EXISTS ref_monikers (
   ref_id INTEGER NOT NULL, name_id INTEGER NOT NULL, moniker TEXT NOT NULL,
   PRIMARY KEY (ref_id, name_id)
 ) WITHOUT ROWID;
+-- Files a ref did not store, and why (coverage).
+CREATE TABLE IF NOT EXISTS ref_skipped (
+  ref_id INTEGER NOT NULL, path_id INTEGER NOT NULL, reason TEXT NOT NULL, PRIMARY KEY (ref_id, path_id)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS ref_manifest (
   ref_id INTEGER NOT NULL, blob TEXT NOT NULL, PRIMARY KEY (ref_id, blob)
 ) WITHOUT ROWID;
@@ -471,7 +475,7 @@ func (s *Store) ClearRef(repo, ref string) error {
 		return nil
 	}
 	return s.withTx(func(tx *sql.Tx) error {
-		for _, t := range []string{"ref_syms", "ref_files_v2", "ref_ext_refs", "ref_monikers"} {
+		for _, t := range []string{"ref_syms", "ref_files_v2", "ref_ext_refs", "ref_monikers", "ref_skipped"} {
 			if _, err := tx.Exec(`DELETE FROM `+t+` WHERE ref_id=?`, id); err != nil {
 				return err
 			}
@@ -1303,4 +1307,48 @@ func (s *Store) migrateV1() error {
 		_, _ = s.db.Exec(`VACUUM`) // hand the freed v1 pages back to the filesystem
 	}
 	return nil
+}
+
+// PutSkipped records the files a ref's index did not store, with the reason.
+func (s *Store) PutSkipped(repo, ref string, skipped []query.SkippedPath) error {
+	return s.withTx(func(tx *sql.Tx) error {
+		rid, err := s.refID(tx, repo, ref)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM ref_skipped WHERE ref_id=?`, rid); err != nil {
+			return err
+		}
+		for _, sk := range skipped {
+			pid, err := s.nameID(tx, sk.Path)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO ref_skipped(ref_id, path_id, reason) VALUES(?,?,?)`, rid, pid, sk.Reason); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Skipped lists the files a ref's index did not store (query.SkipReader).
+func (s *Store) Skipped(repo, ref string) []query.SkippedPath {
+	rid, ok := s.lookupRef(repo, ref)
+	if !ok {
+		return nil
+	}
+	rows, err := s.db.Query(`SELECT n.s, k.reason FROM ref_skipped k JOIN names n ON n.id = k.path_id WHERE k.ref_id=? ORDER BY n.s`, rid)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []query.SkippedPath
+	for rows.Next() {
+		var sp query.SkippedPath
+		if rows.Scan(&sp.Path, &sp.Reason) == nil {
+			out = append(out, sp)
+		}
+	}
+	return out
 }

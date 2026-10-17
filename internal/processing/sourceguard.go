@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/vishwak02/reponite/internal/query"
 )
 
 // DefaultMaxSourceBytes is the largest file parsed as source: far above any
@@ -104,4 +106,22 @@ func summarize(files []ParsedFile, skipped []SkippedFile) IndexSummary {
 		}
 	}
 	return IndexSummary{Files: len(files), TestFiles: tests, TopDirs: DirFootprint(paths, 2), Skipped: skipped}
+}
+
+// skipRecorder is optional on an Indexer: it stores the files an index did
+// not store, for `coverage`.
+type skipRecorder interface {
+	PutSkipped(repo, ref string, skipped []query.SkippedPath) error
+}
+
+func recordSkipped(w Indexer, repo, ref string, skipped []SkippedFile) error {
+	r, ok := w.(skipRecorder)
+	if !ok {
+		return nil
+	}
+	out := make([]query.SkippedPath, 0, len(skipped))
+	for _, sk := range skipped {
+		out = append(out, query.SkippedPath{Path: sk.Path, Reason: sk.Reason})
+	}
+	return r.PutSkipped(repo, ref, out)
 }

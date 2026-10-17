@@ -32,6 +32,13 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 - `semsearch` ranks by how much of the query a symbol covers and by query words in its name;
   tests, destructors and content sections rank lower.
 
+- **`reponite coverage`**: per repo and file kind, what the index stored and every skipped
+  file with its reason, so an empty answer can be told apart from unread files.
+- **Every tracked text file is stored** (IndexVer 11): unknown extensions and extension-less
+  files by content (JSON/XML/CSV recognized, with sections), dot-directories except tool and
+  cache ones; binaries, LFS pointers, lockfiles and large data tables are skipped with that
+  reason. One classifier serves both the git and the working-tree walker.
+
 #### Changed
 
 - **Fleet-wide answers are cached.** The communication graph, the route map and the fleet

@@ -97,6 +97,9 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	if err := indexFiles(w, repo, ref, normVer, files, nil, opt.Peers); err != nil {
 		return "", err
 	}
+	if err := recordSkipped(w, repo, ref, skipped); err != nil {
+		return "", err
+	}
 	if opt.Report != nil {
 		opt.Report(summarize(files, skipped))
 	}

@@ -968,7 +968,24 @@ stages and Makefile targets — so `search` finds `README:Installation` or
 | Markdown, reStructuredText, AsciiDoc, TOML, INI/`.cfg`/`.conf`, templates (`.j2`, `.tpl`, `.tmpl`), Salt (`.sls`), Jsonnet, XML/xacro/URDF/SDF, HTML | `grep`, `search` (sections) |
 | gettext catalogues (`.po`, `.pot`) | `errors` (translated messages) |
 
-Other file types are not read.
+Every other tracked text file is stored too, so `grep` and `search` see it: its structure is
+recognized from the content when the name says nothing — JSON-shaped files (ALICA plans and
+behaviours, for example) get their keys as sections; XML (Tiled maps, BPMN, SVG, URDF) gets
+every element named by a `name` or `id` attribute; CSV/TSV gets its header columns. Files under
+dot-directories are included (`.github/scripts`, composite actions, linter configs) except tool
+and cache directories (`.git`, `.venv`, `.idea`, `.cache`, …).
+
+What is not stored is skipped with a reason — a binary format or binary content, a Git LFS
+pointer, a lockfile, a data table over 32 KB, a file over its kind's size limit, minified code,
+an ignore rule. `reponite coverage` lists, per repo and file kind, what was stored and what was
+skipped and why:
+
+```sh
+reponite coverage --local --format text
+# rr_app@HEAD: 8149 stored, 397 skipped
+#   skipped   223  Git LFS pointer (the content is not in git)  (e.g. docs/images/flow.svg, …)
+#   skipped   142  binary format  (e.g. frontend/fonts/Geist.woff2, …)
+```
 
 ---
 
