@@ -9,6 +9,7 @@ import (
 )
 
 func mcpCommand(args []string) {
+	installFactsIfBuilt()
 	// No dirs named: mount the whole registered fleet (§8B.7), so an agent's
 	// MCP config needn't list every repo. Explicit dirs always win.
 	dirs := resolveDirs(args)

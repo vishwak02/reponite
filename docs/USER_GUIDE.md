@@ -814,6 +814,7 @@ is filtered by the rules that existed then.
 | `REPONITE_MAX_SOURCE_BYTES` | Largest source file parsed; larger ones are skipped and listed | `4194304` (4 MB) |
 | `REPONITE_CPUPROFILE` | Write a CPU profile of one command to this file (`go tool pprof`) | unset |
 | `REPONITE_MEMPROFILE` | Rewrite a heap profile to this file every few seconds while a command runs | unset |
+| `REPONITE_NO_FACT_CACHE` | `1` turns off the cache of fleet-wide results (`topics`, `routes`, fleet `map`) | unset — results are cached under `$REPONITE_STORE_DIR/.facts/` (else the user cache dir), keyed by the exact indexed content |
 | `REPONITE_EMBED_ENDPOINT` | Optional embeddings endpoint for neural semantic search | unset — the built-in ranker is used |
 | `REPONITE_EMBED_MODEL` | Model name for that endpoint | unset |
 | `REPONITE_EMBED_API_KEY` | Bearer token, if the endpoint needs one | unset |

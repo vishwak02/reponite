@@ -797,6 +797,10 @@ func hubsIn(scope, all map[string]SymbolRef, snap RefSnapshot, idx *spanIndex) [
 
 // FleetMap maps every indexed repo briefly plus the cross-repo links known.
 func FleetMap(s Store, ref string, budget int) FleetMapResult {
+	return cachedFact(s, FleetRepo, ref, "fleetmap", fmt.Sprint(budget), func() FleetMapResult { return fleetMap(s, ref, budget) })
+}
+
+func fleetMap(s Store, ref string, budget int) FleetMapResult {
 	if budget <= 0 {
 		budget = DefaultMapBudget
 	}

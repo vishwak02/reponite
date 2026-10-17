@@ -96,6 +96,23 @@ func (m *MultiStore) Files(repo, ref string) []query.File {
 	return nil
 }
 
+// FilesMatching forwards a path-filtered read to the repo's owner.
+func (m *MultiStore) FilesMatching(repo, ref string, keep func(string) bool) []query.File {
+	if s := m.owner[repo]; s != nil {
+		if r, ok := s.(query.PathFilesReader); ok {
+			return r.FilesMatching(repo, ref, keep)
+		}
+		var out []query.File
+		for _, f := range s.Files(repo, ref) {
+			if keep(f.Path) {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func (m *MultiStore) Manifest(repo, ref string) (content.Manifest, bool) {
 	if s := m.owner[repo]; s != nil {
 		return s.Manifest(repo, ref)

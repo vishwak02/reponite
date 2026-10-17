@@ -19,6 +19,7 @@ import (
 )
 
 func indexBackedCommand(cmd string, args []string) {
+	installFactsIfBuilt()
 	switch cmd {
 	case "index":
 		cmdIndex(args)

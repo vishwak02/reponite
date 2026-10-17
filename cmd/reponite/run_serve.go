@@ -20,6 +20,7 @@ import (
 // mounts every repo in the persistent fleet registry (§8B.7). Bound to
 // localhost by default; --addr overrides.
 func serveCommand(args []string) {
+	installFactsIfBuilt()
 	var addr string
 	dirs := parseCmd("serve", "serve [<dir>...] [--addr host:port]", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&addr, "addr", "127.0.0.1:8899", "listen address")

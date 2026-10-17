@@ -216,9 +216,16 @@ func explainTarget(s Store, ref, target string, opt ExplainOptions) ExplainResul
 		line, _ = strconv.Atoi(m[2])
 	}
 	if !strings.HasPrefix(target, "/") || line > 0 {
+		want := strings.TrimPrefix(path, "./")
+		named := func(fp string) bool { return fp == want || strings.HasSuffix(fp, "/"+want) }
 		for _, rp := range repos {
+			// a symbol name rarely names a file: look the path up first, decode the repo only on a hit
+			hits := filesMatching(s, rp, ref, named)
+			if len(hits) == 0 {
+				continue
+			}
 			files := s.Files(rp, ref)
-			if p, ok := findFile(files, strings.TrimPrefix(path, "./")); ok {
+			if p, ok := findFile(files, want); ok {
 				res.Repo, res.Ref, res.Meta = rp, EffectiveRef(s, rp, ref), NewMeta(s, rp, ref)
 				idx := newSpanIndex(files)
 				if line > 0 {
@@ -671,10 +678,8 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 }
 
 func lineAtFile(s Store, repo, ref, path string, line int) string {
-	for _, f := range s.Files(repo, ref) {
-		if f.Path == path {
-			return lineAt(f.Content, line)
-		}
+	for _, f := range filesMatching(s, repo, ref, func(p string) bool { return p == path }) {
+		return lineAt(f.Content, line)
 	}
 	return ""
 }
@@ -698,8 +703,8 @@ func testRefs(s Store, repo, ref, qid string, testCallers []ExplainEdge, idx *sp
 	word := regexp.MustCompile(`\b` + regexp.QuoteMeta(base) + `\b`)
 	var found []TestRef
 	for _, rp := range reposFor(s, FleetRepo) {
-		for _, f := range s.Files(rp, ref) {
-			if !IsTestPath(f.Path) || !strings.Contains(f.Content, base) {
+		for _, f := range filesMatching(s, rp, ref, IsTestPath) {
+			if !strings.Contains(f.Content, base) {
 				continue
 			}
 			for i, ln := range strings.Split(f.Content, "\n") {

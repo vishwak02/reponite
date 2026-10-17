@@ -94,6 +94,20 @@ func (p *Pinned) Snapshot(repo, ref string) query.RefSnapshot {
 	return p.Inner.Snapshot(repo, p.at(repo, ref))
 }
 func (p *Pinned) Files(repo, ref string) []query.File { return p.Inner.Files(repo, p.at(repo, ref)) }
+
+// FilesMatching reads the pinned ref, path-filtered when the inner store can.
+func (p *Pinned) FilesMatching(repo, ref string, keep func(string) bool) []query.File {
+	if r, ok := p.Inner.(query.PathFilesReader); ok {
+		return r.FilesMatching(repo, p.at(repo, ref), keep)
+	}
+	var out []query.File
+	for _, f := range p.Files(repo, ref) {
+		if keep(f.Path) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
 func (p *Pinned) Manifest(repo, ref string) (content.Manifest, bool) {
 	return p.Inner.Manifest(repo, p.at(repo, ref))
 }

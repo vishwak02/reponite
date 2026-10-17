@@ -107,6 +107,21 @@ func (n *NoTests) Files(repo, ref string) []query.File {
 	return out
 }
 
+// FilesMatching hides test files from a path-filtered read too.
+func (n *NoTests) FilesMatching(repo, ref string, keep func(string) bool) []query.File {
+	k := func(p string) bool { return !query.IsTestPath(p) && keep(p) }
+	if r, ok := n.Inner.(query.PathFilesReader); ok {
+		return r.FilesMatching(repo, ref, k)
+	}
+	var out []query.File
+	for _, f := range n.Inner.Files(repo, ref) {
+		if k(f.Path) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 func (n *NoTests) Manifest(repo, ref string) (content.Manifest, bool) {
 	return n.Inner.Manifest(repo, ref)
 }

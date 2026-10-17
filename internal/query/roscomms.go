@@ -499,6 +499,10 @@ func roleFamily(role string) (family string, producer bool) {
 // the parameter's launch/YAML value (rosparams.go). Pure over Store.Files, no
 // new indexing; each repo's files are read once.
 func CommGraph(s Store, repo, ref string) CommGraphResult {
+	return cachedFact(s, repo, ref, "commgraph", "", func() CommGraphResult { return commGraph(s, repo, ref) })
+}
+
+func commGraph(s Store, repo, ref string) CommGraphResult {
 	res := CommGraphResult{Meta: NewMeta(s, repo, ref)}
 	type key struct{ family, name string }
 	groups := map[key]*CommGroup{}

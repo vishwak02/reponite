@@ -34,6 +34,14 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Changed
 
+- **Fleet-wide answers are cached.** The communication graph, the route map and the fleet
+  map are kept between commands, keyed by every in-scope repo's ref, commit, manifest and
+  ruleset plus the binary's identity, so a re-index or a rebuild recomputes and nothing
+  stale is served. Fleet `map` on 40 repos: 32 s first, 0.1 s after; `routes` 11 s → 0.1 s.
+  Within one command, decoded files are reused (bounded at 512 MB) and lookups that need a
+  few files read only those: `explain` 6.6 s → 1.5 s.
+- `index --submodules` follows submodules of submodules; the `--exclude` set is recorded
+  with each ref, so a label is re-indexed rather than reused when its file set changes.
 - **Indexing scales to very large trees.** Parse trees are freed as soon as a file is
   extracted (they live in C memory the Go collector does not see), symbol hashes are computed
   at parse time, source text is re-read when stored, and parsing runs on every core in walk

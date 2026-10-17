@@ -13,6 +13,7 @@
 package query
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -101,6 +102,11 @@ func Routes(s Store, repo, ref, filter string, limit int) RoutesResult {
 // object) goes through a gateway mount is matched only against the routes of
 // the repo behind that mount, with the mount's prefix removed.
 func RoutesWith(s Store, repo, ref, filter string, limit int, opt RoutesOptions) RoutesResult {
+	args := fmt.Sprintf("%q|%d|%+v", filter, limit, opt)
+	return cachedFact(s, repo, ref, "routes", args, func() RoutesResult { return routesWith(s, repo, ref, filter, limit, opt) })
+}
+
+func routesWith(s Store, repo, ref, filter string, limit int, opt RoutesOptions) RoutesResult {
 	if limit <= 0 {
 		limit = 50
 	}

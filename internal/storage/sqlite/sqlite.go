@@ -52,13 +52,26 @@ type Store struct {
 	// the cache.
 	symsMu sync.Mutex
 	syms   map[int64]map[string]query.SymbolRef
+	// files holds decoded Files answers per ref within this process, bounded
+	// by filesBudget bytes of content: one answer (explain, map) reads the same
+	// refs several times, and inflating them again was most of its time.
+	filesMu    sync.Mutex
+	files      map[int64][]query.File
+	filesBytes int
+	filesOrder []int64
 }
+
+// filesBudget bounds the content kept by the Files cache.
+const filesBudget = 512 << 20
 
 // invalidate drops cached reads; called by every write.
 func (s *Store) invalidate() {
 	s.symsMu.Lock()
 	s.syms = nil
 	s.symsMu.Unlock()
+	s.filesMu.Lock()
+	s.files, s.filesBytes, s.filesOrder = nil, 0, nil
+	s.filesMu.Unlock()
 }
 
 const schema = `
@@ -849,10 +862,91 @@ func (s *Store) Files(repo, ref string) []query.File {
 	if !ok {
 		return nil
 	}
+	s.filesMu.Lock()
+	if f, ok := s.files[rid]; ok {
+		s.filesMu.Unlock()
+		return f
+	}
+	s.filesMu.Unlock()
+	out := s.readFiles(rid, nil)
+	n := 0
+	for _, f := range out {
+		n += len(f.Content)
+	}
+	s.filesMu.Lock()
+	if s.files == nil {
+		s.files = map[int64][]query.File{}
+	}
+	for s.filesBytes+n > filesBudget && len(s.filesOrder) > 0 {
+		old := s.filesOrder[0]
+		s.filesOrder = s.filesOrder[1:]
+		for _, f := range s.files[old] {
+			s.filesBytes -= len(f.Content)
+		}
+		delete(s.files, old)
+	}
+	if n <= filesBudget {
+		s.files[rid] = out
+		s.filesOrder = append(s.filesOrder, rid)
+		s.filesBytes += n
+	}
+	s.filesMu.Unlock()
+	return out
+}
+
+// FilesMatching returns the files at a ref whose path keep accepts, inflating
+// only those (query.PathFilesReader).
+func (s *Store) FilesMatching(repo, ref string, keep func(path string) bool) []query.File {
+	rid, ok := s.lookupRef(repo, ref)
+	if !ok {
+		return nil
+	}
+	s.filesMu.Lock()
+	if all, ok := s.files[rid]; ok {
+		s.filesMu.Unlock()
+		var out []query.File
+		for _, f := range all {
+			if keep(f.Path) {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	s.filesMu.Unlock()
+	return s.readFiles(rid, keep)
+}
+
+func (s *Store) readFiles(rid int64, keep func(string) bool) []query.File {
 	byPath := map[string]*query.File{}
 	var order []string
-	rows, err := s.db.Query(`SELECT n.s, b.z FROM ref_files_v2 f
-		JOIN blobs b ON b.id = f.blob_id JOIN names n ON n.id = f.path_id WHERE f.ref_id=? ORDER BY n.s`, rid)
+	q := `SELECT n.s, b.z FROM ref_files_v2 f
+		JOIN blobs b ON b.id = f.blob_id JOIN names n ON n.id = f.path_id WHERE f.ref_id=? ORDER BY n.s`
+	args := []any{rid}
+	if keep != nil {
+		// paths first, then only the kept blobs: skipping a row after reading
+		// its compressed blob would still read the whole ref from disk
+		prow, err := s.db.Query(`SELECT n.s, f.path_id FROM ref_files_v2 f JOIN names n ON n.id = f.path_id
+			WHERE f.ref_id=?`, rid)
+		if err != nil {
+			return nil
+		}
+		var ids []string
+		for prow.Next() {
+			var path string
+			var id int64
+			if prow.Scan(&path, &id) == nil && keep(path) {
+				ids = append(ids, fmt.Sprint(id))
+			}
+		}
+		prow.Close()
+		if len(ids) == 0 {
+			return nil
+		}
+		q = `SELECT n.s, b.z FROM ref_files_v2 f
+			JOIN blobs b ON b.id = f.blob_id JOIN names n ON n.id = f.path_id
+			WHERE f.ref_id=? AND f.path_id IN (` + strings.Join(ids, ",") + `) ORDER BY n.s`
+	}
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil
 	}
@@ -860,6 +954,9 @@ func (s *Store) Files(repo, ref string) []query.File {
 		var path string
 		var z []byte
 		if rows.Scan(&path, &z) == nil {
+			if keep != nil && !keep(path) {
+				continue
+			}
 			cont, err := inflate(z)
 			if err != nil {
 				continue // a corrupt blob is skipped, never served as empty content
