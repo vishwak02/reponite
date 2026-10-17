@@ -220,7 +220,14 @@ func cmdIndex(args []string) {
 // under the current ruleset (resume: an interrupted batch re-run skips what
 // is done; a second label for the same commit copies rows, not work).
 func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt processing.IndexOptions, force bool) {
-	if !force {
+	if !force && len(opt.Excludes) > 0 {
+		// --exclude makes this label a different file set from another label of
+		// the same commit: only the label itself, already indexed, is skipped.
+		if st.RefAtCommit(repo, rv.Label, rv.Commit, version.IndexVer) {
+			fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))
+			return
+		}
+	} else if !force {
 		if have, ok := st.RefByCommit(repo, rv.Commit, version.IndexVer); ok {
 			if have == rv.Label {
 				fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))

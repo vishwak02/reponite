@@ -134,7 +134,13 @@ func (r TermIDFRanker) Rank(query string, docs []SemanticDoc, limit int) ([]Sema
 		score := cosine(qw, weighted(sv.vec))
 		if score > 0 {
 			h := sv.hit
-			h.Score = score
+			var matched float64
+			for t, w := range qw {
+				if sv.vec[t] > 0 {
+					matched += w
+				}
+			}
+			h.Score = adjustScore(score, h.Path, h.Symbol, qw, matched)
 			hits = append(hits, h)
 		}
 	}
@@ -401,8 +407,11 @@ func termSearch(s Store, repo, ref, q string, limit int, cache TermIndexCache) S
 			if dot == 0 {
 				continue
 			}
-			var ss float64
+			var ss, matched float64
 			for i, id := range d.IDs {
+				if w, ok := qloc[id]; ok {
+					matched += w
+				}
 				if idfLocal[id] < 0 {
 					idfLocal[id] = idf(r.ix.Terms[id])
 				}
@@ -413,8 +422,9 @@ func termSearch(s Store, repo, ref, q string, limit int, cache TermIndexCache) S
 			if ss != 0 {
 				dn = math.Sqrt(ss)
 			}
-			hits = append(hits, SemanticHit{Repo: r.repo, Path: r.ix.Paths[d.Path], Symbol: d.Symbol, Line: int(d.Line),
-				Score: dot / (qnorm * dn)})
+			p := r.ix.Paths[d.Path]
+			hits = append(hits, SemanticHit{Repo: r.repo, Path: p, Symbol: d.Symbol, Line: int(d.Line),
+				Score: adjustScore(dot/(qnorm*dn), p, d.Symbol, qw, matched)})
 		}
 	}
 	SortSemanticHits(hits)
@@ -423,6 +433,61 @@ func termSearch(s Store, repo, ref, q string, limit int, cache TermIndexCache) S
 	}
 	res.Hits = hits
 	return res
+}
+
+// adjustScore turns a cosine into a ranking score. Cosine alone favors the
+// shortest documents — a one-line destructor named after the query's first
+// word outranks the function that does what was asked — so the score is
+// scaled by how much of the query (idf-weighted) the symbol covers, raised
+// when the query's words are in the symbol's own name, and lowered for code
+// that is rarely the answer: tests, destructors, and sections of content
+// files.
+func adjustScore(cos float64, path, symbol string, qw map[string]float64, matched float64) float64 {
+	var total, inName float64
+	for _, w := range qw {
+		total += w
+	}
+	if total == 0 {
+		return cos
+	}
+	nameTerms := map[string]bool{}
+	forEachTerm(symbol, func(t string) { nameTerms[t] = true })
+	for t, w := range qw {
+		if nameTerms[t] {
+			inName += w
+		}
+	}
+	score := cos * (0.25 + 0.75*matched/total) * (1 + 0.5*inName/total)
+	leaf := symbol
+	if i := strings.LastIndexAny(leaf, ".:"); i >= 0 {
+		leaf = leaf[i+1:]
+	}
+	switch {
+	case IsTestPath(path) || IsTestName(leaf):
+		score *= 0.6
+	case strings.HasPrefix(leaf, "~"):
+		score *= 0.5
+	}
+	if contentLangOf(path) {
+		score *= 0.7
+	}
+	return score
+}
+
+// contentLangOf reports a file whose symbols are sections, not code.
+func contentLangOf(path string) bool {
+	switch strings.ToLower(pathExt(path)) {
+	case ".yaml", ".yml", ".json", ".md", ".markdown", ".rst", ".adoc", ".toml", ".ini", ".cfg", ".conf", ".xml", ".rviz":
+		return true
+	}
+	return false
+}
+
+func pathExt(p string) string {
+	if i := strings.LastIndexAny(p, "./"); i >= 0 && p[i] == '.' {
+		return p[i:]
+	}
+	return ""
 }
 
 // SortSemanticHits orders by score desc, then (repo, path, symbol) for

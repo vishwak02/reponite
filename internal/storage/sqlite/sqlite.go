@@ -386,6 +386,14 @@ func (s *Store) RefByCommit(repo, commit string, indexVer int) (string, bool) {
 	return ref, true
 }
 
+// RefAtCommit reports whether ref of repo is indexed at commit under ruleset indexVer.
+func (s *Store) RefAtCommit(repo, ref, commit string, indexVer int) bool {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM refs_v2 WHERE repo=? AND ref=? AND commit_hash=? AND index_ver=?`,
+		repo, ref, commit, indexVer).Scan(&n)
+	return err == nil && n > 0
+}
+
 // AliasRef makes `to` another label for the already-indexed ref `from` (same
 // commit): its per-ref rows are copied — integers pointing at shared records —
 // so the new label costs a few kilobytes and no re-parse.
