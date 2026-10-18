@@ -534,10 +534,11 @@ func appendUnique(xs []string, x string) []string {
 	return append(xs, x)
 }
 
-// locateSymbol finds qid's file and span at a ref like symbolSource, but
-// disambiguates a method by its class: of several same-named spans in the
-// package, the one nested in a span named after the qid's class segment wins
-// (`pkg.Cart.add` is the `add` inside `Cart`, not the first `add` in the dir).
+// locateSymbol finds qid's file and span at a ref, disambiguating a method by
+// its class: of several same-named spans in the package, the one nested in a
+// span named after the qid's class segment, or defined out of class as
+// `Class::name` (C++) or on a `Class` receiver (Go), wins — `pkg.Cart.add` is
+// Cart's add, not the first `add` in the directory.
 func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 	base := baseName(qid)
 	owner := ""
@@ -561,13 +562,8 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 				continue
 			}
 			sc := score
-			if owner != "" {
-				for _, o := range f.Symbols {
-					if o.Name == owner && o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine && o != sp {
-						sc++
-						break
-					}
-				}
+			if owner != "" && ownedBy(f, sp, owner, base) {
+				sc++
 			}
 			if sc > bestScore {
 				bestPath, bestSpan, bestScore = f.Path, sp, sc
@@ -575,4 +571,48 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 		}
 	}
 	return bestPath, bestSpan, bestScore >= 0
+}
+
+// ownedBy reports whether span sp (named base) in f belongs to class owner:
+// nested in a span named owner, or defined out of class on its first line.
+func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
+	for _, o := range f.Symbols {
+		if o.Name == owner && o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine && o != sp {
+			return true
+		}
+	}
+	line := lineAt(f.Content, sp.StartLine)
+	return strings.Contains(line, owner+"::"+base) || strings.Contains(line, owner+") "+base)
+}
+
+// definitionCount is how many definitions in qid's package carry its name and
+// class — more than one for C++/Java overloads, which share one id (their
+// edges are merged). Declarations (a line ending in ";") do not count.
+func definitionCount(files []File, qid string) int {
+	base := baseName(qid)
+	owner := ""
+	if rest := strings.TrimSuffix(qid, "."+base); rest != qid {
+		owner = baseName(rest)
+	}
+	dir := ""
+	for _, f := range files {
+		if p := pkgFromPath(f.Path); p != "" && len(p) > len(dir) && strings.HasPrefix(qid, p+".") {
+			dir = p
+		}
+	}
+	n := 0
+	for _, f := range files {
+		if pkgFromPath(f.Path) != dir {
+			continue
+		}
+		for _, sp := range f.Symbols {
+			if sp.Name != base || owner != "" && !ownedBy(f, sp, owner, base) {
+				continue
+			}
+			if !strings.HasSuffix(strings.TrimSpace(lineAt(f.Content, sp.StartLine)), ";") {
+				n++
+			}
+		}
+	}
+	return n
 }

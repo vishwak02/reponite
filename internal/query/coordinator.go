@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/vishwak02/reponite/internal/version"
 )
 
 // RepoRef identifies a repository at a ref.
@@ -31,6 +33,46 @@ type Meta struct {
 // phrased in: "HEAD" on an answer read at a release tag is a lie about what
 // was analyzed. A fleet-wide answer lists every repo's ref in Refs.
 func NewMeta(s Store, repo, ref string) Meta {
+	m := pinnedMeta(s, repo, ref)
+	m.Warnings = append(m.Warnings, staleIndexWarnings(s, repo, ref, m)...)
+	return m
+}
+
+// staleIndexWarnings says when an answer reads a ref indexed by an older
+// reponite: rules added since (more file kinds stored, new edges, new links)
+// are missing from it, so the answer is quietly incomplete otherwise.
+func staleIndexWarnings(s Store, repo, ref string, m Meta) []string {
+	iv, ok := s.(IndexVersioner)
+	if !ok {
+		return nil
+	}
+	if repo != FleetRepo && repo != "" {
+		if v, ok := iv.IndexVersion(repo, m.Ref); ok && v < version.IndexVer {
+			return []string{fmt.Sprintf("%s@%s was indexed by an older reponite (ruleset v%d; this build is v%d): what newer rules extract — more file kinds, edges and links — is missing from it; reindex the ref",
+				repo, m.Ref, v, version.IndexVer)}
+		}
+		return nil
+	}
+	var stale []string
+	for _, r := range s.Repos() {
+		rf := ref
+		if m.Refs[r] != "" {
+			rf = m.Refs[r]
+		}
+		if v, ok := iv.IndexVersion(r, rf); ok && v < version.IndexVer {
+			stale = append(stale, fmt.Sprintf("%s (v%d)", r, v))
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	sort.Strings(stale)
+	return []string{fmt.Sprintf("%d repo(s) were indexed by an older reponite (this build is ruleset v%d), so answers miss what newer rules extract from them; reindex: %s",
+		len(stale), version.IndexVer, strings.Join(firstN(stale, 8), ", "))}
+}
+
+// pinnedMeta resolves the ref each repo is read at.
+func pinnedMeta(s Store, repo, ref string) Meta {
 	m := Meta{Repo: repo, Ref: ref}
 	p, ok := s.(RefPinner)
 	if !ok {

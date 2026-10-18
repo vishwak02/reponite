@@ -226,8 +226,15 @@ func repoLinks(s Store, repo, ref string) []Link {
 				}
 				for _, m := range linkNameKey.FindAllStringSubmatch(ln, -1) {
 					v := m[2]
+					qualified := false
 					if j := strings.LastIndexAny(v, ":/."); j >= 0 && j < len(v)-1 {
 						v = v[j+1:] // pkg/Class, ns::Class -> Class
+						qualified = true
+					}
+					// a plain lowercase word ("default", "file") is a value, not
+					// a name that happens to match some method
+					if !qualified && !strings.ContainsAny(v, "ABCDEFGHIJKLMNOPQRSTUVWXYZ_") {
+						continue
 					}
 					if q, ok := symByName[v]; ok && !ambiguous[v] && !seen["sym:"+q] {
 						seen["sym:"+q] = true

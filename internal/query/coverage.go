@@ -76,6 +76,12 @@ func Coverage(s Store, repo, ref string) CoverageResult {
 		if canSkip {
 			sk := sr.Skipped(rp, eff)
 			c.Recorded = len(sk) > 0 || c.Stored > 0
+			// skips are recorded from ruleset 11 on; an older ref has none to show
+			if iv, ok := s.(IndexVersioner); ok {
+				if v, ok := iv.IndexVersion(rp, eff); ok && v < 11 {
+					c.Recorded = false
+				}
+			}
 			for _, x := range sk {
 				reason := x.Reason
 				kind(coverageKind(x.Path)).Skipped[reason]++

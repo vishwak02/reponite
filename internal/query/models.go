@@ -17,8 +17,6 @@ import (
 	"path"
 	"sort"
 	"strings"
-
-	"github.com/vishwak02/reponite/internal/version"
 )
 
 // DefaultModelsBudget is the token budget when the caller passes <= 0.
@@ -173,9 +171,6 @@ func Models(s Store, repo, ref, name string, opt ModelsOptions) ModelsResult {
 		res.Frameworks[m.Framework]++
 	}
 	res.Total = len(all)
-	if w := oldRulesetWarning(s, repo, ref); w != "" {
-		res.Meta.Warnings = append(res.Meta.Warnings, w)
-	}
 	if name == "" {
 		listModels(&res, all, sers, opt)
 		return res
@@ -208,25 +203,6 @@ func Models(s Store, repo, ref, name string, opt ModelsOptions) ModelsResult {
 }
 
 const recognizedFrameworks = "recognized: Django, DRF serializers, SQLAlchemy/SQLModel, Pydantic, dataclasses, TypeORM/MikroORM/sequelize-typescript, Prisma, GORM, SQL DDL (.sql), protobuf"
-
-// oldRulesetWarning: a ref indexed before schema/config files were stored
-// has no .sql/.proto/.prisma/.env/Dockerfile/CI files to read.
-func oldRulesetWarning(s Store, repo, ref string) string {
-	iv, ok := s.(IndexVersioner)
-	if !ok {
-		return ""
-	}
-	var old []string
-	for _, rp := range reposFor(s, repo) {
-		if v, ok := iv.IndexVersion(rp, EffectiveRef(s, rp, ref)); ok && v < 6 {
-			old = append(old, fmt.Sprintf("%s (ruleset v%d)", rp, v))
-		}
-	}
-	if len(old) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("indexed before ruleset v6 (current v%d), so .sql/.proto/.prisma, .env, Dockerfile and CI files were not stored: %s — re-index to include them", version.IndexVer, strings.Join(old, ", "))
-}
 
 var modelKindRank = map[string]int{KindTable: 0, KindView: 1, KindAbstract: 2, KindSchema: 3, KindWire: 4}
 

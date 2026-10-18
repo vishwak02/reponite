@@ -102,7 +102,7 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 	if hidden > 0 {
 		warns = append(warns, fmt.Sprintf("%d test caller(s)/callee(s) hidden — add --tests to include them", hidden))
 	}
-	meta.Warnings = warns
+	meta.Warnings = append(meta.Warnings, warns...)
 	return ContextResult{Symbol: sym, Ref: meta.Ref, Callers: callers, Callees: callees,
 		CallerEdges: callerEdges, CalleeEdges: edges, Meta: meta}
 }

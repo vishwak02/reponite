@@ -93,9 +93,6 @@ func Config(s Store, repo, ref, key string, opt ConfigOptions) ConfigResult {
 		opt.Budget = DefaultConfigBudget
 	}
 	res := ConfigResult{Query: key, Counts: map[string]int{}, Meta: NewMeta(s, repo, ref)}
-	if w := oldRulesetWarning(s, repo, ref); w != "" {
-		res.Meta.Warnings = append(res.Meta.Warnings, w)
-	}
 	keys := collectConfig(s, repo, ref)
 	for _, k := range keys {
 		res.Counts[k.Kind]++

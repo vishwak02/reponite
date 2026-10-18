@@ -128,3 +128,59 @@ func contains(ss []string, s string) bool {
 	}
 	return false
 }
+
+// Two classes in one directory each define run() out of class (C++): a brief
+// of one must read its own body, not the first run() in the directory.
+func TestBriefPicksTheClassOfAnOutOfClassMethod(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("nav", "HEAD", "planner/src.PlannerExecution.run", rec("p", "p", "makePlan"))
+	m.Put("nav", "HEAD", "planner/src.ControllerExecution.run", rec("c", "c", "computeCmd"))
+	m.PutFile("nav", "HEAD", query.File{
+		Path:    "planner/src/controller_execution.cpp",
+		Content: "void ControllerExecution::run()\n{\n  computeCmd();\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "run", StartLine: 1, EndLine: 4}},
+	})
+	m.PutFile("nav", "HEAD", query.File{
+		Path:    "planner/src/planner_execution.cpp",
+		Content: "void PlannerExecution::run()\n{\n  makePlan();\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "run", StartLine: 1, EndLine: 4}},
+	})
+	b := query.Brief(m, "nav", "HEAD", "planner/src.PlannerExecution.run", 0, nil)
+	if b.Target.Path != "planner/src/planner_execution.cpp" || !strings.Contains(b.Target.Body, "makePlan") {
+		t.Fatalf("brief read the wrong run(): %s\n%s", b.Target.Path, b.Target.Body)
+	}
+}
+
+// staleStore reports every ref as indexed by an old ruleset.
+type staleStore struct{ *storage.Mem }
+
+func (staleStore) IndexVersion(repo, ref string) (int, bool) { return 4, true }
+
+// An answer read from a ref indexed by an older reponite says so.
+func TestBriefWarnsOnAnOldRuleset(t *testing.T) {
+	b := query.Brief(staleStore{briefStore()}, "billing", "HEAD", "Charge", 0, nil)
+	joined := strings.Join(b.Meta.Warnings, "\n")
+	if !strings.Contains(joined, "older reponite") || !strings.Contains(joined, "v4") {
+		t.Fatalf("no stale-ruleset warning: %q", joined)
+	}
+}
+
+// C++ overloads share one id; the brief says their edges are merged.
+func TestBriefFlagsOverloads(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("loc", "HEAD", "src.Listener.getState", rec("g", "g", "lookup", "convert"))
+	m.PutFile("loc", "HEAD", query.File{
+		Path: "src/listener.cpp",
+		Content: "bool Listener::getState(double t)\n{\n  lookup();\n}\n" +
+			"bool Listener::getState(const Time& t)\n{\n  convert();\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "getState", StartLine: 1, EndLine: 4}, {Name: "getState", StartLine: 5, EndLine: 8}},
+	})
+	b := query.Brief(m, "loc", "HEAD", "src.Listener.getState", 0, nil)
+	if !strings.Contains(strings.Join(b.Meta.Warnings, "\n"), "2 overloads") {
+		t.Fatalf("overloads not flagged: %q", b.Meta.Warnings)
+	}
+	one := query.Brief(briefStore(), "billing", "HEAD", "Charge", 0, nil)
+	if strings.Contains(strings.Join(one.Meta.Warnings, "\n"), "overloads") {
+		t.Fatalf("a single definition flagged as overloaded: %q", one.Meta.Warnings)
+	}
+}

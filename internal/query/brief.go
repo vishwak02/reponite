@@ -10,6 +10,7 @@
 package query
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -91,7 +92,7 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 	names := ResolveSymbol(s, repo, ref, symbol)
 	if len(names) == 0 {
 		m := NewMeta(s, repo, ref)
-		m.Warnings = []string{"symbol not found at " + m.Ref}
+		m.Warnings = append(m.Warnings, "symbol not found at "+m.Ref)
 		return BriefResult{Symbol: symbol, Ref: m.Ref, Meta: m}
 	}
 	qid := names[0]
@@ -112,6 +113,9 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 
 	// 1. Target: full body (always attempted; body truncated if it alone overflows).
 	path, span, body, ok := symbolSource(files, qid)
+	if n := definitionCount(files, qid); n > 1 {
+		warns = append(warns, fmt.Sprintf("%d overloads share the name %s: their callers and callees are merged, and the body shown is the one at %s:%d", n, baseName(qid), path, span.StartLine))
+	}
 	res.Target = BriefTarget{Name: baseName(qid), Path: path, Exported: isExported(baseName(qid)), StartLine: span.StartLine, EndLine: span.EndLine}
 	if ok {
 		if estTokens(body) > tokenBudget {
@@ -202,7 +206,7 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 	}
 
 	res.Meta = NewMeta(s, repo, ref)
-	res.Meta.Warnings = warns
+	res.Meta.Warnings = append(res.Meta.Warnings, warns...)
 	return res
 }
 
@@ -216,37 +220,20 @@ func neighbor(files []File, qid string) BriefNeighbor {
 	return n
 }
 
-// symbolSource locates a symbol's file, line span, and source text at a ref by
-// reconstructing the indexer's qid scheme (pkgOf(path) prefix + bare name). It
-// picks the file whose package prefixes the qid (most specific wins). Same class
-// of same-package same-name-method ambiguity as ResolveSymbol; returns the first
-// such match. ok is false when the symbol's source isn't indexed.
+// symbolSource locates a symbol's file, line span, and source text at a ref
+// (locateSymbol: the most specific package, then the span owned by the qid's
+// class).
 func symbolSource(files []File, qid string) (path string, span SymbolSpan, body string, ok bool) {
-	base := baseName(qid)
-	best := -1
+	path, span, ok = locateSymbol(files, qid)
+	if !ok {
+		return "", SymbolSpan{}, "", false
+	}
 	for _, f := range files {
-		p := pkgFromPath(f.Path)
-		var score int
-		switch {
-		case p != "" && strings.HasPrefix(qid, p+"."):
-			score = len(p)
-		case p == "" && qid == base:
-			score = 0
-		default:
-			continue
-		}
-		for _, sp := range f.Symbols {
-			if sp.Name != base {
-				continue
-			}
-			if score > best {
-				best = score
-				path, span, body, ok = f.Path, sp, sliceLines(f.Content, sp.StartLine, sp.EndLine), true
-			}
-			break
+		if f.Path == path {
+			return path, span, sliceLines(f.Content, span.StartLine, span.EndLine), true
 		}
 	}
-	return path, span, body, ok
+	return "", SymbolSpan{}, "", false
 }
 
 // pkgFromPath mirrors processing.pkgOf: the file's directory, "" at repo root.
