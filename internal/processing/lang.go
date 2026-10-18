@@ -123,7 +123,7 @@ var JavaScriptRules = LangRules{
 	TypeDecl:    []string{"class_declaration"},
 	NameTypes:   []string{"identifier", "property_identifier"},
 	BodyTypes:   []string{"statement_block"},
-	CallTypes:   append([]string{"call_expression"}, jsxElementTypes...),
+	CallTypes:   append([]string{"call_expression", "new_expression"}, jsxElementTypes...), // new X() calls X's constructor
 	Builtins:    jsBuiltins,
 	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
@@ -142,7 +142,7 @@ var TypeScriptRules = LangRules{
 	TypeDecl:    []string{"class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
 	NameTypes:   []string{"identifier", "property_identifier", "type_identifier"},
 	BodyTypes:   []string{"statement_block"},
-	CallTypes:   append([]string{"call_expression"}, jsxElementTypes...), // .tsx: the tsx grammar; .ts never holds JSX
+	CallTypes:   append([]string{"call_expression", "new_expression"}, jsxElementTypes...), // .tsx: the tsx grammar; .ts never holds JSX
 	Builtins:    jsBuiltins,
 	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
@@ -153,8 +153,10 @@ var JavaRules = LangRules{
 	TypeDecl:   []string{"class_declaration", "interface_declaration", "enum_declaration", "record_declaration"},
 	NameTypes:  []string{"identifier"},
 	BodyTypes:  []string{"block", "constructor_body"},
-	CallTypes:  []string{"method_invocation"},
-	Builtins:   map[string]bool{},
+	CallTypes:  []string{"method_invocation", "object_creation_expression"}, // new Foo() calls Foo's constructor
+	// a constructor call names its class by type_identifier
+	CallNameTypes: []string{"identifier", "type_identifier"},
+	Builtins:      map[string]bool{},
 }
 
 var cBuiltins = map[string]bool{

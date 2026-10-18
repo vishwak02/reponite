@@ -46,6 +46,47 @@ func importsByLocal(bindings []ImportBinding) map[string]ImportBinding {
 	return m
 }
 
+// moduleLevelImports drops the bindings written inside a function body: they
+// bind names for that function only (withLocalImports adds them back there).
+func moduleLevelImports(all []ImportBinding, syms []Symbol) []ImportBinding {
+	local := map[ImportBinding]int{}
+	for _, s := range syms {
+		for _, b := range s.LocalImports {
+			local[b]++
+		}
+	}
+	if len(local) == 0 {
+		return all
+	}
+	var out []ImportBinding
+	for _, b := range all {
+		if local[b] > 0 {
+			local[b]-- // one occurrence inside a function; a same import at module level stays
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+// withLocalImports is a function's view of the file's imports: the module's,
+// with the function's own imports shadowing them.
+func withLocalImports(module map[string]ImportBinding, local []ImportBinding) map[string]ImportBinding {
+	if len(local) == 0 {
+		return module
+	}
+	out := make(map[string]ImportBinding, len(module)+len(local))
+	for k, v := range module {
+		out[k] = v
+	}
+	for _, b := range local {
+		if b.Local != "" {
+			out[b.Local] = b
+		}
+	}
+	return out
+}
+
 // Imports extracts a file's import bindings per its language rules. Relative
 // or intra-package imports (Python "from . import x", a JS "./x" or "/x"
 // specifier) are skipped: they resolve inside the same repo, not to an
@@ -174,19 +215,23 @@ func pyImportStatement(stmt content.AST) []ImportBinding {
 	return out
 }
 
-// pyImportFromStatement handles "from <module> import a, b as c". Relative
-// imports ("from . import x", "from ..pkg import y") resolve inside the
-// repo, not to an external module — skipped entirely (§8B.2).
+// pyImportFromStatement handles "from <module> import a, b as c". A relative
+// import ("from . import x", "from ..pkg import y") keeps its leading dots:
+// it names a module of the repo, which call resolution follows, and is never
+// an external dependency (resolveImportedCall skips it).
 func pyImportFromStatement(stmt content.AST) []ImportBinding {
-	if firstChildAny(stmt, []string{"relative_import"}) != nil {
-		return nil
+	var mod string
+	seenModule := false
+	if rel := firstChildAny(stmt, []string{"relative_import"}); rel != nil {
+		mod = strings.TrimSpace(rel.Text())
+		seenModule = true // the module is inside relative_import; dotted_name children are imported names
+	} else {
+		mod = nameOfNode(stmt, []string{"dotted_name"}, false)
 	}
-	mod := nameOfNode(stmt, []string{"dotted_name"}, false)
 	if mod == "" {
 		return nil
 	}
 	var out []ImportBinding
-	seenModule := false
 	for _, c := range stmt.Children() {
 		switch c.Type() {
 		case "dotted_name":
@@ -239,8 +284,8 @@ func jsImports(root content.AST) []ImportBinding {
 
 func jsImportStatement(stmt content.AST) []ImportBinding {
 	mod := jsModulePath(stmt)
-	if mod == "" || isRelativeModule(mod) {
-		return nil
+	if mod == "" {
+		return nil // a relative module ("./x") is kept: call resolution follows it
 	}
 	clause := firstChildAny(stmt, []string{"import_clause"})
 	if clause == nil {

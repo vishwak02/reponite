@@ -11,6 +11,7 @@ package query
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -540,11 +541,7 @@ func appendUnique(xs []string, x string) []string {
 // `Class::name` (C++) or on a `Class` receiver (Go), wins — `pkg.Cart.add` is
 // Cart's add, not the first `add` in the directory.
 func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
-	base := baseName(qid)
-	owner := ""
-	if rest := strings.TrimSuffix(qid, "."+base); rest != qid {
-		owner = baseName(rest)
-	}
+	base, owner := baseName(qid), qidOwner(qid)
 	bestPath, bestSpan, bestScore := "", SymbolSpan{}, -1
 	for _, f := range files {
 		p := pkgFromPath(f.Path)
@@ -562,10 +559,16 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 				continue
 			}
 			sc := score
-			if owner != "" && ownedBy(f, sp, owner, base) {
+			switch {
+			case owner != "" && ownedBy(f, sp, owner, base):
 				sc++
+			case owner == "" && looksLikeMethod(f, sp, base):
+				sc-- // a free function's id: prefer a span that is not some type's method
 			}
-			if sc > bestScore {
+			// Python: a later definition of the name replaces an earlier one
+			// (typing.overload stubs come first, the implementation last)
+			later := sc == bestScore && f.Path == bestPath && strings.HasSuffix(f.Path, ".py")
+			if sc > bestScore || later {
 				bestPath, bestSpan, bestScore = f.Path, sp, sc
 			}
 		}
@@ -573,9 +576,40 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 	return bestPath, bestSpan, bestScore >= 0
 }
 
-// ownedBy reports whether span sp (named base) in f belongs to class owner:
-// nested in a span named owner, or defined out of class on its first line.
+// qidOwner is the class segment of a qid ("dir.Class.method" -> "Class"), ""
+// for a free function ("dir.func"). A directory is never an owner.
+func qidOwner(qid string) string {
+	rest := strings.TrimSuffix(qid, "."+baseName(qid))
+	if rest == qid {
+		return ""
+	}
+	seg := rest[strings.LastIndex(rest, "/")+1:]
+	if i := strings.LastIndex(seg, "."); i >= 0 {
+		return seg[i+1:]
+	}
+	if !strings.Contains(rest, "/") {
+		return seg // a root-level "Class.method" (or a top-level dir; spans decide)
+	}
+	return ""
+}
+
+// looksLikeMethod: the span's first line declares base as some type's method
+// (Go "func (r T) base(", C++ "T::base(").
+func looksLikeMethod(f File, sp SymbolSpan, base string) bool {
+	if fileModuleStem(f.Path) != "" && nestedInClass(f, sp) {
+		return true // a def/method inside a class body
+	}
+	line := lineAt(f.Content, sp.StartLine)
+	return strings.Contains(line, "::"+base+"(") || strings.Contains(line, ") "+base+"(") && strings.HasPrefix(strings.TrimSpace(line), "func (")
+}
+
+// ownedBy reports whether span sp (named base) in f belongs to owner: a class
+// it is nested in or defined out of (Class::name), or — in Python and
+// JavaScript, whose module is the file — the module the file is.
 func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
+	if fileModuleStem(f.Path) == owner && !nestedInClass(f, sp) {
+		return true
+	}
 	for _, o := range f.Symbols {
 		if o.Name == owner && o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine && o != sp {
 			return true
@@ -589,11 +623,7 @@ func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
 // class — more than one for C++/Java overloads, which share one id (their
 // edges are merged). Declarations (a line ending in ";") do not count.
 func definitionCount(files []File, qid string) int {
-	base := baseName(qid)
-	owner := ""
-	if rest := strings.TrimSuffix(qid, "."+base); rest != qid {
-		owner = baseName(rest)
-	}
+	base, owner := baseName(qid), qidOwner(qid)
 	dir := ""
 	for _, f := range files {
 		if p := pkgFromPath(f.Path); p != "" && len(p) > len(dir) && strings.HasPrefix(qid, p+".") {
@@ -606,7 +636,7 @@ func definitionCount(files []File, qid string) int {
 			continue
 		}
 		for _, sp := range f.Symbols {
-			if sp.Name != base || owner != "" && !ownedBy(f, sp, owner, base) {
+			if sp.Name != base || owner != "" && !ownedBy(f, sp, owner, base) || owner == "" && looksLikeMethod(f, sp, base) {
 				continue
 			}
 			if !strings.HasSuffix(strings.TrimSpace(lineAt(f.Content, sp.StartLine)), ";") {
@@ -615,4 +645,48 @@ func definitionCount(files []File, qid string) int {
 		}
 	}
 	return n
+}
+
+// LocateSymbol finds the file and line span defining qid among files (the
+// spans the index stored), disambiguating methods by class like every query
+// does. ok is false when the symbol's source is not indexed.
+func LocateSymbol(files []File, qid string) (path string, start, end int, ok bool) {
+	p, sp, ok := locateSymbol(files, qid)
+	return p, sp.StartLine, sp.EndLine, ok
+}
+
+// fileModuleStem is the module segment a Python/JavaScript file adds to its
+// symbols' ids (the indexer's pkgOfFile): its base name without extension,
+// other dots as underscores; "" for other languages and for __init__.py and
+// index.* (a directory's own module).
+func fileModuleStem(p string) string {
+	b := path.Base(p)
+	i := strings.Index(b, ".")
+	if i < 0 {
+		return ""
+	}
+	ext := b[i:]
+	switch strings.ToLower(path.Ext(b)) {
+	case ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte":
+	default:
+		return ""
+	}
+	stem := b[:i]
+	if strings.Count(ext, ".") > 1 {
+		stem += "_" + strings.ReplaceAll(strings.TrimSuffix(strings.TrimPrefix(ext, "."), path.Ext(ext)), ".", "_")
+	}
+	if stem == "__init__" || stem == "index" {
+		return ""
+	}
+	return stem
+}
+
+// nestedInClass: another span strictly encloses sp (a method in a class body).
+func nestedInClass(f File, sp SymbolSpan) bool {
+	for _, o := range f.Symbols {
+		if o != sp && o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine && (o.StartLine < sp.StartLine || o.EndLine > sp.EndLine) {
+			return true
+		}
+	}
+	return false
 }

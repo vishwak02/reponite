@@ -68,13 +68,16 @@ type ParsedFile struct {
 // directory) so distinct definitions sharing a bare name (e.g. storage.Mem.Put
 // vs sqlite.Store.Put) are distinct nodes and never conflated (correctness).
 func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error {
-	return indexFiles(w, repo, ref, normVer, files, nil, nil)
+	return indexFiles(w, repo, ref, normVer, files, nil, nil, nil)
 }
 
 // indexFiles is IndexFiles with an optional precise edge map (callerQID -> base
 // callee name -> type-checker-proven callee QID) that upgrades matching edges to
 // go-types confidence; nil precise means pure name-based resolution.
-func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string]string, peers query.Store) error {
+// goMods maps each Go module's directory to its module path (goModules), so
+// a Go call through an import resolves to the imported package's directory;
+// nil when the tree has no go.mod.
+func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string][]string, peers query.Store, goMods map[string]string) error {
 	type computed struct {
 		sym        Symbol
 		pkg        string
@@ -83,6 +86,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		symbolHash content.Hash
 		sigHash    content.Hash
 		imports    map[string]ImportBinding // the defining file's import bindings
+		path       string                   // the defining file
 	}
 	var order []string              // qualified ids, first-seen order
 	byQID := map[string]computed{}  // qid -> facts
@@ -90,13 +94,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	var extRefs []query.ExternalRef // cross-repo dependency edges (§8B)
 	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
 	linkRobotEmbedded(files)
+	mods := newModuleIndex(files)
 	for _, f := range files {
-		pkg := pkgOf(f.Path)
 		lang := f.Lang
 		if lang == "" {
 			lang = "go" // back-compat: pure callers/tests predate the Lang field
 		}
-		byLocal := importsByLocal(f.Imports)
+		pkg := pkgOfFile(f.Path, lang)
+		byLocal := importsByLocal(moduleLevelImports(f.Imports, f.Symbols))
 		for _, s := range f.Symbols {
 			// Methods qualify by receiver too (pkg.Recv.name) so same-named methods
 			// on different types are distinct; edge resolution still keys off the
@@ -105,7 +110,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			if s.Recv != "" {
 				local = s.Recv + "." + s.Name
 			}
-			qid := qualify(pkg, local)
+			qid := qualifyModule(pkg, local)
 			id := content.SymbolIdentity{Repo: repo, Lang: lang, Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
 			if _, dup := byQID[qid]; !dup {
 				order = append(order, qid)
@@ -115,9 +120,10 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			if sh == "" {
 				sh = content.SymbolHash(normVer, id)
 			}
-			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: byLocal}
-			if len(byLocal) > 0 {
-				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, byLocal)...)
+			imports := withLocalImports(byLocal, s.LocalImports)
+			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: imports, path: f.Path}
+			if len(imports) > 0 {
+				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, imports)...)
 			}
 			if mon := f.SCIP.Defs[s.Name]; mon != "" {
 				monikers[qid] = mon
@@ -127,7 +133,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		// global identity, so these need no module/name guessing (§8B.4).
 		for _, r := range f.SCIP.Refs {
 			extRefs = append(extRefs, query.ExternalRef{
-				From: qualify(pkg, r.From), TargetSymbol: r.Symbol,
+				From: qualifyModule(pkg, r.From), TargetSymbol: r.Symbol,
 				ResolutionMethod: MethodSCIP, Confidence: ConfSCIP,
 			})
 		}
@@ -150,7 +156,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	dirs := map[string]bool{}
 	for _, c := range byQID {
-		dirs[c.pkg] = true
+		dirs[pkgOf(c.path)] = true
 	}
 	inRepo := func(module string) bool { return moduleInRepo(module, dirs) }
 
@@ -196,13 +202,24 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		v := viewFor(c.lang)
 		x.nodeSet, x.byBase = v.nodeSet, v.byBase
 		nodeSet, byBase := v.nodeSet, v.byBase
-		if len(c.sym.CallSites) > 0 {
+		if c.lang == "go" && len(c.sym.QualifiedCalls) > 0 {
+			callees = resolveGoCalls(c.pkg, c.sym.Recv, c.sym.QualifiedCalls, c.imports, goMods, x, precise[qid])
+		} else if len(c.sym.CallSites) > 0 {
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
-			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo)
+			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
+			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo, modPkg)
 			callees = resolveSiteEdgesLang(c.pkg, c.sym.Recv, c.lang, sites, x)
 		} else {
-			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, precise[qid])
+			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, nil)
+		}
+		// An unresolved target is a NAME, not a symbol: when it equals a real
+		// symbol id (a function in a root-level file is just "save"), mark it
+		// so no query mistakes it for that symbol.
+		for i, ce := range callees {
+			if (ce.ResolutionMethod == MethodExternal || ce.ResolutionMethod == MethodAmbiguous) && byQID[ce.Name].sym.Name != "" {
+				callees[i].Name = "(" + unresolvedLabel(ce.ResolutionMethod) + ")." + ce.Name
+			}
 		}
 		resolved[qid] = callees
 		for _, ce := range callees {

@@ -61,7 +61,12 @@ const (
 	//      Lua, Scala, Dart, Groovy, Perl, R, Elixir, Julia, Zig) get heuristic
 	//      symbols, spans and calls; Java, Kotlin, Scala and Groovy resolve
 	//      calls into each other.
-	IndexVer = 12
+	//  13: Go calls resolve by Go's scoping (F in the caller's package,
+	//      pkg.F through the import, x.M by method name only) and a git
+	//      revision is type-checked like a working tree; member calls only
+	//      reach methods the caller's language can call; an unresolved call
+	//      target that equals a symbol id is stored marked, never as that id.
+	IndexVer = 13
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

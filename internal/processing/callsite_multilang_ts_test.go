@@ -33,13 +33,13 @@ export class Helper { onlyHere(n: number) { return n; } }`,
 		"scripts/check.ts": `export function error(msg: string) { return msg; }`,
 	}
 	edges := indexAndEdges(t, files)
-	s := edges["src/store.watchAgent"]
+	s := edges["src/store.sagas.watchAgent"]
 	if s == nil {
 		t.Fatalf("watchAgent not indexed; have %v", symKeys(edges))
 	}
 	for name, c := range s {
 		switch {
-		case name == "src/utils.KVHelper.put" || name == "scripts.error":
+		case name == "src/utils.kv.KVHelper.put" || name == "scripts.check.error":
 			t.Errorf("imported/global call pinned on repo code: %s %+v", name, c)
 		}
 	}
@@ -47,9 +47,9 @@ export class Helper { onlyHere(n: number) { return n; } }`,
 	wantMethod(t, s, "console::error", MethodExternal)
 	wantMethod(t, s, "src/api.fetchMap", MethodResolved) // '@/api' is the repo's own alias
 	wantMethod(t, s, "map", MethodAmbiguous)             // builtin array member vs KVHelper.map
-	wantMethod(t, s, "src/utils.Helper.onlyHere", MethodMember)
+	wantMethod(t, s, "src/utils.kv.Helper.onlyHere", MethodMember)
 	// this.get() inside a class method: its own class.
-	wantMethod(t, edges["src/utils.KVHelper.put"], "src/utils.KVHelper.get", MethodResolved)
+	wantMethod(t, edges["src/utils.kv.KVHelper.put"], "src/utils.kv.KVHelper.get", MethodResolved)
 }
 
 func TestPythonCallSiteResolution(t *testing.T) {
@@ -73,16 +73,16 @@ def post(u):
 `,
 	}
 	edges := indexAndEdges(t, files)
-	s := edges["pkg.Worker.run"]
+	s := edges["pkg.worker.Worker.run"]
 	if s == nil {
 		t.Fatalf("run not indexed; have %v", symKeys(edges))
 	}
-	if _, bad := s["pkg.post"]; bad {
+	if _, bad := s["pkg.util.post"]; bad {
 		t.Error("requests.post pinned on the repo's post()")
 	}
-	wantMethod(t, s, "pkg.Worker.step", MethodResolved)
+	wantMethod(t, s, "pkg.worker.Worker.step", MethodResolved)
 	wantMethod(t, s, "requests::post", MethodExternal)
-	wantMethod(t, s, "pkg.helper", MethodResolved) // absolute import of the repo's own package
+	wantMethod(t, s, "pkg.util.helper", MethodResolved) // absolute import of the repo's own package
 }
 
 func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]string {
@@ -157,16 +157,16 @@ class Old extends React.Component {
 export function format(n: number) { return String(n); }`,
 	}
 	edges := indexAndEdges(t, files)
-	for _, want := range []string{"src/components.Loading", "src/components.Keyboard", "src/components.Pure",
-		"src/components.short", "src/components.Old.onClick"} {
+	for _, want := range []string{"src/components.ui.Loading", "src/components.ui.Keyboard", "src/components.ui.Pure",
+		"src/components.ui.short", "src/components.ui.Old.onClick"} {
 		if _, ok := edges[want]; !ok {
 			t.Errorf("missing symbol %s (have %v)", want, symKeys(edges))
 		}
 	}
-	if _, ok := edges["src/components.handler"]; ok {
+	if _, ok := edges["src/components.ui.handler"]; ok {
 		t.Error("a non-function value (new Topic(...)) must not become a function symbol")
 	}
-	wantMethod(t, edges["src/components.Loading"], "src/components.format", MethodResolved)
-	wantMethod(t, edges["src/components.short"], "src/components.format", MethodResolved)
-	wantMethod(t, edges["src/components.Old.onClick"], "src/components.Old.save", MethodResolved)
+	wantMethod(t, edges["src/components.ui.Loading"], "src/components.ui.format", MethodResolved)
+	wantMethod(t, edges["src/components.ui.short"], "src/components.ui.format", MethodResolved)
+	wantMethod(t, edges["src/components.ui.Old.onClick"], "src/components.ui.Old.save", MethodResolved)
 }

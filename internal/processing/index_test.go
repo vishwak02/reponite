@@ -263,7 +263,7 @@ func TestIndexFilesCapturesTargetSignatureFromPeers(t *testing.T) {
 		}},
 		Imports: []ImportBinding{{Local: "user", Module: "github.com/acme/api/pkg/user"}},
 	}}
-	if err := indexFiles(local, "web", "HEAD", 1, files, nil, peer); err != nil {
+	if err := indexFiles(local, "web", "HEAD", 1, files, nil, peer, nil); err != nil {
 		t.Fatal(err)
 	}
 	hits := local.ExternalRefsTo("github.com/acme/api", "GetUser")
@@ -276,7 +276,7 @@ func TestIndexFilesCapturesTargetSignatureFromPeers(t *testing.T) {
 
 	// Without peers the same index captures nothing — unknown, never guessed.
 	solo := storage.NewMem()
-	if err := indexFiles(solo, "web", "HEAD", 1, files, nil, nil); err != nil {
+	if err := indexFiles(solo, "web", "HEAD", 1, files, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if h := solo.ExternalRefsTo("github.com/acme/api", "GetUser"); len(h) != 1 || h[0].TargetSignatureHash != "" {
@@ -351,13 +351,13 @@ func TestIndexFilesLanguageGatedResolution(t *testing.T) {
 		}
 		return snap.Callees[caller][0]
 	}
-	if c := callee("app.start"); c.ResolutionMethod != MethodExternal {
+	if c := callee("app.run.start"); c.ResolutionMethod != MethodExternal {
 		t.Errorf("python logger.info() resolved across languages: %+v", c)
 	}
 	if c := callee("ops.deploy"); c.Name != "info" || c.ResolutionMethod != MethodResolved {
 		t.Errorf("shell → shell must still resolve: %+v", c)
 	}
-	if c := callee("tests.open_door_test"); c.Name != "lib.open_door" {
+	if c := callee("tests.open_door_test"); c.Name != "lib.door.open_door" {
 		t.Errorf("robot → python library keyword: %+v", c)
 	}
 }

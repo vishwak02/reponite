@@ -98,7 +98,7 @@ func resolveEdges(callerPkg string, callees []string, nodeSet map[string]bool, b
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTypes, Confidence: ConfTypes})
 			continue
 		}
-		if q := qualify(callerPkg, base); nodeSet[q] {
+		if q := qualifyModule(callerPkg, base); nodeSet[q] {
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 			continue
 		}
@@ -148,6 +148,13 @@ func resolveExternalRefs(caller string, qcalls []QualifiedCall, byLocal map[stri
 }
 
 func resolveImportedCall(qc QualifiedCall, byLocal map[string]ImportBinding) (module, name string, ok bool) {
+	// a relative import names the repo's own code, never an external module
+	if b, found := byLocal[qc.Qualifier]; qc.Qualifier != "" && found && isRelativeModule(b.Module) {
+		return "", "", false
+	}
+	if b, found := byLocal[qc.Name]; qc.Qualifier == "" && found && isRelativeModule(b.Module) {
+		return "", "", false
+	}
 	if qc.Qualifier != "" {
 		b, found := byLocal[qc.Qualifier]
 		if !found {
@@ -204,9 +211,13 @@ const (
 	ConfOverride   = 0.6
 )
 
+// bareNameSkipsClass: languages whose unqualified call is looked up in the
+// function's and module's scope, not the enclosing class's.
+var bareNameSkipsClass = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true}
+
 // siteKindRank orders a name's call-site kinds when one function calls the same
 // name several ways: the most specific claim about the target wins.
-var siteKindRank = map[CallKind]int{CallTyped: 0, CallSelf: 0, CallPlain: 1, CallScoped: 2, CallExternal: 3, CallMember: 4}
+var siteKindRank = map[CallKind]int{CallTyped: 0, CallSelf: 0, CallModule: 0, CallPlain: 1, CallScoped: 2, CallExternal: 3, CallMember: 4}
 
 // resolveSiteEdges resolves C/C++ call sites by their shape (callsite.go):
 //   - this->f() / f() inside a method of A: A's own f first (same class);
@@ -225,7 +236,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	for _, s := range sites {
 		s = typeSite(s, callerRecv, x)
 		key := s.Name
-		if s.Kind == CallTyped {
+		if s.Kind == CallTyped || s.Kind == CallModule {
 			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
 		}
 		cur, ok := best[key]
@@ -259,7 +270,9 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(c)
 			}
 		case CallSelf, CallPlain:
-			if callerRecv != "" {
+			// a bare name never reaches the enclosing class's own methods in
+			// Python or JavaScript: those need self. / this.
+			if callerRecv != "" && (s.Kind == CallSelf || !bareNameSkipsClass[lang]) {
 				if q, ok := pickOne(x.byRecv[callerRecv+"."+name], x); ok {
 					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 					for _, o := range overrides(callerRecv, name, x) {
@@ -289,6 +302,14 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				continue
 			}
 			if q, ok := pickOne(x.byRecv[s.Scope+"."+name], x); ok {
+				add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				continue
+			}
+			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
+		case CallModule:
+			// a name imported from (or called on) a module of the repo: that
+			// module's definition; a re-export falls back to the name rules
+			if q := qualifyModule(s.Scope, name); x.nodeSet[q] {
 				add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 				continue
 			}
@@ -361,7 +382,12 @@ func overrides(cls, name string, x siteIndex) []query.Callee {
 
 // memberCalleeLang resolves obj.name() with the object's type unknown.
 func memberCalleeLang(name, lang string, x siteIndex) query.Callee {
-	cands := x.methods[name]
+	var cands []string
+	for _, q := range x.methods[name] {
+		if x.nodeSet == nil || x.nodeSet[q] { // only methods the caller's language can call
+			cands = append(cands, q)
+		}
+	}
 	switch {
 	case len(cands) == 0:
 		// Only a method can be a member call's target, and no repo class has one:
@@ -403,7 +429,16 @@ func testish(isTest bool, pkg, recv string) bool {
 
 // pickOne chooses among a (Recv, name)'s definitions: the only one, else the
 // one in the caller's own package; several elsewhere stay unresolved.
-func pickOne(cands []string, x siteIndex) (string, bool) {
+func pickOne(all []string, x siteIndex) (string, bool) {
+	cands := all
+	if x.nodeSet != nil { // only definitions the caller's language can call
+		cands = nil
+		for _, q := range all {
+			if x.nodeSet[q] {
+				cands = append(cands, q)
+			}
+		}
+	}
 	switch len(cands) {
 	case 0:
 		return "", false

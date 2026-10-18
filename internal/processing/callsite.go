@@ -21,6 +21,7 @@ const (
 	CallSelf   CallKind = "self"   // this->f(x), (*this).f(x): the caller's own class
 	CallMember CallKind = "member" // obj.f(x), ptr->f(x): a member of an object whose type is not known here
 	CallScoped CallKind = "scoped" // A::f(x), ns::A::f(x): named through a namespace or class scope
+	CallModule CallKind = "module" // f() imported from, or m.f() on, a module of the repo (Scope: its package)
 )
 
 // CallSite is one call site reduced to what resolution needs.
@@ -253,7 +254,12 @@ const CallExternal CallKind = "external"
 // the caller file's import bindings. Before this, a plain `put(...)` that
 // redux-saga's effects module bound, or `console.error(...)`, was matched to
 // whatever repo function happened to share the bare name.
-func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, lang string, inRepo func(module string) bool) []CallSite {
+// modPkg resolves an import's module to the package of a repo module (nil:
+// no module resolution).
+func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, lang string, inRepo func(module string) bool, modPkg func(module string) (string, bool)) []CallSite {
+	if modPkg == nil {
+		modPkg = func(string) (string, bool) { return "", false }
+	}
 	globals := langGlobals[lang]
 	seen := map[CallSite]bool{}
 	var out []CallSite
@@ -264,20 +270,43 @@ func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, l
 		}
 	}
 	for _, qc := range qcs {
+		b, imported := byLocal[qc.Qualifier]
 		switch {
+		case qc.Qualifier == selfQualifier:
+			add(CallSite{Name: qc.Name, Kind: CallSelf})
 		case qc.Qualifier == "":
-			if b, ok := byLocal[qc.Name]; ok && !inRepo(b.Module) {
-				add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: b.Module})
+			if b, ok := byLocal[qc.Name]; ok {
+				if pkg, ok := modPkg(b.Module); ok {
+					name := b.Symbol
+					if name == "" {
+						name = qc.Name // a default import names the module's default export
+					}
+					add(CallSite{Name: name, Kind: CallModule, Scope: pkg})
+				} else if !isRelativeModule(b.Module) && !inRepo(b.Module) {
+					add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: b.Module})
+				} else {
+					add(CallSite{Name: qc.Name, Kind: CallPlain})
+				}
 			} else {
 				add(CallSite{Name: qc.Name, Kind: CallPlain})
 			}
+		case imported && qc.Chain <= 2 && moduleCall(b, lang, modPkg) != "":
+			// m.f() on an imported repo module (import x as m, * as m,
+			// from pkg import submodule)
+			add(CallSite{Name: qc.Name, Kind: CallModule, Scope: moduleCall(b, lang, modPkg)})
 		case globals[qc.Qualifier]:
 			add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: qc.Qualifier})
 		default:
 			if b, ok := byLocal[qc.Qualifier]; ok {
-				if inRepo(b.Module) {
+				_, repoModule := modPkg(b.Module)
+				switch {
+				case (repoModule || isRelativeModule(b.Module)) && b.Symbol != "" && qc.Chain <= 2 && isTypeName(b.Symbol):
+					add(CallSite{Name: qc.Name, Kind: CallScoped, Scope: b.Symbol}) // Cls.method() on an imported repo class
+				case repoModule || isRelativeModule(b.Module):
+					add(CallSite{Name: qc.Name, Kind: CallMember}) // f().then(), obj.method(): a method on a value
+				case inRepo(b.Module):
 					add(CallSite{Name: qc.Name, Kind: CallPlain}) // a namespace import of repo code
-				} else {
+				default:
 					add(CallSite{Name: qc.Name, Kind: CallExternal, Scope: b.Module})
 				}
 				continue
@@ -286,6 +315,28 @@ func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, l
 		}
 	}
 	return out
+}
+
+// moduleCall is the package of the repo module a qualifier names: the module
+// itself for a whole-module import, or a submodule imported by name; "" when
+// the qualifier is not a module of the repo.
+func moduleCall(b ImportBinding, lang string, modPkg func(string) (string, bool)) string {
+	if b.Symbol == "" {
+		if pkg, ok := modPkg(b.Module); ok {
+			return pkg
+		}
+		return ""
+	}
+	if lang == "python" {
+		sub := b.Module + "." + b.Symbol
+		if strings.HasSuffix(b.Module, ".") {
+			sub = b.Module + b.Symbol // from . import users
+		}
+		if pkg, ok := modPkg(sub); ok {
+			return pkg
+		}
+	}
+	return ""
 }
 
 // langGlobals are receivers that always name the runtime, never repo code.
@@ -357,12 +408,16 @@ func selfAsPlain(qcs []QualifiedCall) []QualifiedCall {
 	for _, q := range qcs {
 		switch q.Qualifier {
 		case "self", "this", "cls", "super":
-			q.Qualifier = ""
+			q.Qualifier = selfQualifier
 		}
 		out = append(out, q)
 	}
 	return out
 }
+
+// selfQualifier marks a self./this./cls. call: it resolves on the caller's
+// own class, unlike a bare call in Python or JavaScript.
+const selfQualifier = "\x00self"
 
 // moduleInRepo says whether an import names the repo's own code: an absolute
 // Python import of one of its packages (mypkg.utils), or a JS/TS path alias
@@ -423,3 +478,7 @@ func aliasInRepo(module string, dirs map[string]bool) bool {
 	}
 	return false
 }
+
+// isTypeName: an identifier written like a class (CamelCase).
+func isTypeName(s string) bool { return s != "" && s[0] >= 'A' && s[0] <= 'Z' }
+

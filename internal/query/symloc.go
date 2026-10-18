@@ -82,6 +82,12 @@ func (x *spanIndex) locate(qid string) (symLoc, bool) {
 	}
 	if len(parts) >= 2 {
 		class := parts[len(parts)-2]
+		// dir.module.func in Python/JavaScript: the module is the file
+		for _, c := range cands {
+			if fileModuleStem(c.Path) == class && !nestedInClass(*x.byPath[c.Path], c.Span) {
+				return c, true
+			}
+		}
 		// A method declared inside its class's span.
 		for _, c := range cands {
 			f := x.byPath[c.Path]

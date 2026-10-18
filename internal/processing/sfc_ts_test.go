@@ -236,7 +236,7 @@ func hasStr(xs []string, x string) bool {
 func TestJSXRenderEdges(t *testing.T) {
 	m := indexShop(t)
 	got := calleesOf(m, "web/src/pages.CartPage")
-	for _, want := range []string{"web/src/components.CartItem", "web/src/components.OrderForm", "web/src/api.fetchCart"} {
+	for _, want := range []string{"web/src/components.CartItem", "web/src/components.OrderForm", "web/src/api.cart.fetchCart"} {
 		if !hasStr(got, want) {
 			t.Errorf("CartPage callees %v: missing %s", got, want)
 		}
@@ -256,11 +256,11 @@ func TestSFCIndexed(t *testing.T) {
 	if _, ok := syms["web2/src/components.CartSummary"]; !ok {
 		t.Fatalf("CartSummary component symbol missing; have %v", keysOfSyms(syms))
 	}
-	if _, ok := syms["web2/src/components.checkout"]; !ok {
+	if _, ok := syms["web2/src/components.CartSummary.checkout"]; !ok {
 		t.Fatalf("script function checkout missing")
 	}
 	got := calleesOf(m, "web2/src/components.CartSummary")
-	if !hasStr(got, "web2/src/components.CartLine") || !hasStr(got, "web2/src/components.checkout") {
+	if !hasStr(got, "web2/src/components.CartLine") || !hasStr(got, "web2/src/components.CartSummary.checkout") {
 		t.Errorf("CartSummary callees = %v, want CartLine (template) and checkout (handler)", got)
 	}
 	var lines []query.SymbolSpan

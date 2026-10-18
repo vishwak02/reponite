@@ -27,6 +27,9 @@ type Symbol struct {
 	// cross-repo dependencies against import bindings (external_refs, §8B); the
 	// behavior graph still keys off Callees, so this never perturbs any hash.
 	QualifiedCalls []QualifiedCall
+	// LocalImports are the imports written inside this function's body: they
+	// bind names for its calls only (Python `from .x import Y as cls`).
+	LocalImports []ImportBinding
 	// CallSites keeps each call's shape for languages with CallSiteKinds
 	// (C/C++): resolution uses it instead of the bare names (callsite.go).
 	CallSites []CallSite
@@ -59,6 +62,10 @@ func sealSymbols(repo, lang string, normVer int, syms []Symbol) {
 type QualifiedCall struct {
 	Qualifier string
 	Name      string
+	// Chain is how many identifiers the callee expression had: 2 for
+	// pkg.Do(), 3 or more for a.b.Do() or pkg.New().Run() — where the
+	// qualifier is not the thing Do is looked up on.
+	Chain int
 }
 
 func isCommentType(t string) bool { return strings.Contains(t, "comment") }
@@ -144,10 +151,12 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	var callees []string
 	var qcalls []QualifiedCall
 	var sites []CallSite
+	var localImports []ImportBinding
 	if body := firstChildAny(fn, r.BodyTypes); body != nil {
 		canonBody = content.Canon(body, normVer)
 		callees = calleesWithRules(body, r)
 		qcalls = qualifiedCallsWithRules(body, r)
+		localImports = Imports(body, r)
 		if r.CallSiteKinds {
 			var vars map[string]string
 			if r.Name == "cpp" {
@@ -175,6 +184,7 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		Doc:            doc,
 		Callees:        callees,
 		QualifiedCalls: qcalls,
+		LocalImports:   localImports,
 		CallSites:      sites,
 	}
 }
@@ -257,7 +267,7 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		if len(ids) == 0 {
 			continue
 		}
-		qc := QualifiedCall{Name: ids[len(ids)-1]}
+		qc := QualifiedCall{Name: ids[len(ids)-1], Chain: len(ids)}
 		if len(ids) >= 2 {
 			qc.Qualifier = ids[0]
 		}

@@ -93,7 +93,20 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	}
 	// Peers let index time capture each cross-repo reference's target contract
 	// (§8B.3 skew) — the same as a working-tree index, not silently "unknown".
-	if err := indexFiles(w, repo, ref, normVer, files, nil, opt.Peers); err != nil {
+	goMods := goModules(manifests)
+	var precise map[string]map[string][]string
+	if len(goMods) > 0 {
+		// type-check the revision's Go code like a working tree's
+		precise = typeCheckTree(files, manifests, func(p string) (string, bool) {
+			f, ferr := tree.File(p)
+			if ferr != nil {
+				return "", false
+			}
+			s, cerr := f.Contents()
+			return s, cerr == nil
+		})
+	}
+	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers, goMods); err != nil {
 		return "", err
 	}
 	if err := recordSkipped(w, repo, ref, skipped); err != nil {

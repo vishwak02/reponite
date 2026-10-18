@@ -95,11 +95,11 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	// Refine Go edges with the type checker where it can prove a concrete target
 	// (best-effort; only worth loading go/packages when the repo contains Go —
 	// other languages fall back to name-based resolution).
-	var precise map[string]map[string]string
+	var precise map[string]map[string][]string
 	if hasGo {
 		precise = TypeResolvedEdges(dir)
 	}
-	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers); err != nil {
+	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers, goModules(manifests)); err != nil {
 		return err
 	}
 	// Report where the index came from. A repo that vendors third-party code

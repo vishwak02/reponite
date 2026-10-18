@@ -11,18 +11,79 @@
 package processing
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
+	"os"
+	"path"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
 
-// TypeResolvedEdges returns callerQID -> (base callee name -> precise callee QID)
+// offlineGoEnv keeps type-checking local: no module downloads during
+// indexing. Dependencies already in the module cache are used; a missing one
+// leaves its callers' calls to the name rules.
+func offlineGoEnv() []string {
+	// the toolchain is left to go.mod: a cached one that matches is used, and
+	// with the proxy off none is downloaded
+	return append(os.Environ(), "GOPROXY=off", "GOFLAGS=-mod=mod", "GOWORK=off")
+}
+
+// typeCheckTree type-checks a git revision's Go code: it writes the
+// revision's Go files and module files to a temporary directory and runs the
+// same resolver as a working tree. read returns a tracked file's content.
+func typeCheckTree(files []ParsedFile, manifests map[string][]byte, read func(string) (string, bool)) map[string]map[string][]string {
+	tmp, err := os.MkdirTemp("", "reponite-gotypes-")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(tmp)
+	write := func(rel, content string) bool {
+		dst := filepath.Join(tmp, filepath.FromSlash(rel))
+		if os.MkdirAll(filepath.Dir(dst), 0o755) != nil {
+			return false
+		}
+		return os.WriteFile(dst, []byte(content), 0o644) == nil
+	}
+	for p, b := range manifests {
+		if path.Base(p) != "go.mod" {
+			continue
+		}
+		if !write(p, string(b)) {
+			return nil
+		}
+		if sum, ok := read(path.Join(path.Dir(p), "go.sum")); ok {
+			write(path.Join(path.Dir(p), "go.sum"), sum)
+		}
+	}
+	n := 0
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, ".go") {
+			continue
+		}
+		c, ok := read(f.Path)
+		if !ok || !write(f.Path, c) {
+			continue
+		}
+		n++
+	}
+	if n == 0 {
+		return nil
+	}
+	return TypeResolvedEdges(tmp)
+}
+
+// TypeResolvedEdges returns callerQID -> (base callee name -> precise callee QIDs)
 // for calls the type checker resolves to a concrete in-repo target. QIDs match
-// IndexFiles' scheme (package directory relative to dir, plus receiver).
-func TypeResolvedEdges(dir string) map[string]map[string]string {
-	out := map[string]map[string]string{}
+// IndexFiles' scheme (package directory relative to dir, plus receiver). Every
+// function of a package that type-checked without errors has an entry, empty
+// when it calls nothing in the repo: its other calls are proven to go to a
+// library or through an interface, and are never guessed by name. Test files
+// are checked too.
+func TypeResolvedEdges(dir string) map[string]map[string][]string {
+	out := map[string]map[string][]string{}
 	// Absolute base: go/packages reports absolute GoFiles, and IndexFiles keys
 	// packages by their directory relative to the indexed root — relate the two
 	// against an absolute dir (Rel against a relative "." would fail silently).
@@ -33,11 +94,26 @@ func TypeResolvedEdges(dir string) map[string]map[string]string {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedDeps | packages.NeedImports,
-		Dir: absDir,
+		Dir:   absDir,
+		Env:   offlineGoEnv(),
+		Tests: true,
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "reponite: Go type check unavailable (%v); Go calls are resolved by name\n", err)
 		return out
+	}
+	failed, firstErr := 0, ""
+	for _, p := range pkgs {
+		if len(p.Errors) > 0 {
+			failed++
+			if firstErr == "" {
+				firstErr = p.Errors[0].Error()
+			}
+		}
+	}
+	if failed > 0 {
+		fmt.Fprintf(os.Stderr, "reponite: Go type check incomplete in %d of %d packages (%s); their calls are resolved by name\n", failed, len(pkgs), firstErr)
 	}
 
 	// Directory (relative to absDir) of each type-checked package, so callee
@@ -86,6 +162,9 @@ func TypeResolvedEdges(dir string) map[string]map[string]string {
 					continue
 				}
 				caller := callerQID(dRel, fd)
+				if len(p.Errors) == 0 && out[caller] == nil {
+					out[caller] = map[string][]string{} // checked: no guessing for this caller
+				}
 				ast.Inspect(fd, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
 					if !ok {
@@ -97,9 +176,12 @@ func TypeResolvedEdges(dir string) map[string]map[string]string {
 					}
 					if qid, ok := qidOf(fn); ok {
 						if out[caller] == nil {
-							out[caller] = map[string]string{}
+							out[caller] = map[string][]string{}
 						}
-						out[caller][fn.Name()] = qid
+						// one name may reach several targets (a.F and b.F)
+						if !containsStr(out[caller][fn.Name()], qid) {
+							out[caller][fn.Name()] = append(out[caller][fn.Name()], qid)
+						}
 					}
 					return true
 				})
