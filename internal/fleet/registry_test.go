@@ -122,3 +122,16 @@ func TestSaveAtomicLeavesNoTemp(t *testing.T) {
 		t.Fatal("temp file must be renamed away, not left behind")
 	}
 }
+
+// The default registry spans every repo indexed on the machine; a query run
+// in one repo sees its workspace: the repos checked out beside it.
+func TestWorkspace(t *testing.T) {
+	es := []Entry{
+		{Repo: "api", Dir: "/w/acme/api"}, {Repo: "web", Dir: "/w/acme/web"},
+		{Repo: "flask", Dir: "/w/oss/flask"}, {Repo: "lib", Dir: "/w/acme/api/third_party/lib"},
+	}
+	got := Workspace(es, "/w/acme/api")
+	if len(got) != 3 || got[0].Repo != "api" || got[1].Repo != "web" || got[2].Repo != "lib" {
+		t.Fatalf("workspace of /w/acme/api = %+v, want api, web and its submodule lib", got)
+	}
+}

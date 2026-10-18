@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -164,6 +165,23 @@ func (r Registry) LiveAt(indexPath func(dir string) string) (live, stale []Entry
 }
 
 // Dirs is the directory list of the given entries, for mounting.
+// Workspace keeps the entries that share root's parent directory — the
+// repositories checked out beside it (~/work/acme/api next to
+// ~/work/acme/web) — root's own entry, and the repositories inside it (its
+// submodules).
+func Workspace(entries []Entry, root string) []Entry {
+	root = filepath.Clean(root)
+	parent := filepath.Dir(root)
+	var out []Entry
+	for _, e := range entries {
+		d := filepath.Clean(e.Dir)
+		if filepath.Dir(d) == parent || d == root || strings.HasPrefix(d, root+string(filepath.Separator)) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func Dirs(entries []Entry) []string {
 	out := make([]string, 0, len(entries))
 	for _, e := range entries {

@@ -697,6 +697,14 @@ Naming directories explicitly always beats the registry, and a registered repo w
 has been deleted or moved is **reported as stale**, never silently skipped. Any command can
 take `--local` to ignore the fleet and answer for the current repo alone.
 
+**Which repos a command reads.** The default registry collects every repo you have indexed
+on the machine, not one system. So a command run **inside a repo** reads that repo's
+*workspace*: the registered repos checked out beside it (`~/work/acme/api` and
+`~/work/acme/web`) and the repos inside it (its submodules); a project elsewhere
+(`~/oss/flask`) stays out. Run **outside any repo**, a command reads the whole registry.
+`REPONITE_FLEET=<file>` names a registry for one system — a deployed product's repositories
+— and is always read whole; `--local` narrows any command to the current repo.
+
 ### SCIP: symbol-precise cross-repo edges
 
 Cross-repo links normally match on `(module path, name)` — precise about the module, but

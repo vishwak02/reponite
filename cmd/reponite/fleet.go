@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/vishwak02/reponite/internal/fleet"
 )
@@ -47,7 +48,34 @@ func fleetDirs() (dirs []string, stale []fleet.Entry, err error) {
 		return nil, nil, err
 	}
 	live, stale := reg.LiveAt(dbPathFor)
+	// The default registry holds every repo ever indexed on the machine, not
+	// one system: inside a repo, the fleet is that repo's workspace — the
+	// registered repos beside it. An explicit REPONITE_FLEET names a system
+	// and is used whole, as is the registry outside any repo.
+	if os.Getenv(fleet.EnvPath) == "" {
+		if root := gitRoot("."); root != "" {
+			live = fleet.Workspace(live, root)
+		}
+	}
 	return fleet.Dirs(live), stale, nil
+}
+
+// gitRoot is the top of the git work tree containing dir, "" outside one.
+func gitRoot(dir string) string {
+	d, err := filepath.Abs(dir)
+	if err != nil {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+		d = parent
+	}
 }
 
 // resolveDirs turns a command's positional dirs into the set to mount: explicit
