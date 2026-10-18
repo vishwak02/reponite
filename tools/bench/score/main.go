@@ -83,8 +83,13 @@ func main() {
 	repo := flag.String("repo", "", "repo name")
 	ref := flag.String("ref", "HEAD", "indexed ref")
 	tf := flag.String("truth", "", "ground truth JSON")
+	rf := flag.String("routes", "", "golden endpoint list (tools/bench/golden/routes): score routes instead")
 	jsonOut := flag.Bool("json", false, "print JSON")
 	flag.Parse()
+	if *rf != "" {
+		scoreRoutes(*storeDir, *repo, *ref, *rf)
+		return
+	}
 	var t truth
 	b, err := os.ReadFile(*tf)
 	must(err)
@@ -254,3 +259,109 @@ func must(err error) {
 		os.Exit(1)
 	}
 }
+
+// scoreRoutes compares reponite's server routes for a repo with a golden list.
+func scoreRoutes(storeDir, repo, ref, golden string) {
+	b, err := os.ReadFile(golden)
+	must(err)
+	type ep struct{ method, path, handler string }
+	var want []ep
+	for _, ln := range strings.Split(string(b), "\n") {
+		f := strings.Fields(ln)
+		if len(f) < 2 {
+			continue
+		}
+		h := "-"
+		if len(f) > 2 {
+			h = f[2]
+		}
+		want = append(want, ep{f[0], normPath(f[1]), h})
+	}
+	st, err := sqlite.Open(storeDir + "/" + repo + "/index.db")
+	must(err)
+	defer st.Close()
+	res := query.Routes(st, repo, ref, "", 1<<20)
+	var got []ep
+	for _, l := range res.Links {
+		r := l.Route
+		got = append(got, ep{strings.ToUpper(r.Method), normPath(r.Pattern), baseOf(r.Handler)})
+	}
+	wantPath := map[string]bool{}
+	wantExact := map[string]ep{}
+	for _, w := range want {
+		wantPath[w.path] = true
+		wantExact[w.method+" "+w.path] = w
+	}
+	gotExact, gotPath := map[string]ep{}, map[string]bool{}
+	var extra []string
+	matched := 0
+	for _, g := range got {
+		gotPath[g.path] = true
+		if g.method != "*" {
+			gotExact[g.method+" "+g.path] = g
+		}
+		ok := false
+		if g.method == "*" {
+			ok = wantPath[g.path]
+		} else {
+			_, ok = wantExact[g.method+" "+g.path]
+			if !ok {
+				_, ok = wantExact["* "+g.path]
+			}
+		}
+		if ok {
+			matched++
+		} else {
+			extra = append(extra, g.method+" "+g.path+" "+g.handler)
+		}
+	}
+	var pathHit, exactHit, handlerHit, handlerTotal int
+	var missing []string
+	for _, w := range want {
+		if gotPath[w.path] {
+			pathHit++
+		}
+		g, ok := gotExact[w.method+" "+w.path]
+		if ok || w.method == "*" && gotPath[w.path] {
+			exactHit++
+		} else {
+			missing = append(missing, w.method+" "+w.path)
+		}
+		if ok && w.handler != "-" {
+			handlerTotal++
+			if g.handler == w.handler {
+				handlerHit++
+			}
+		}
+	}
+	fmt.Printf("%s@%s routes (%d golden, %d found)\n", repo, ref, len(want), len(got))
+	fmt.Printf("  path recall            %s\n", ratio{pathHit, len(want)})
+	fmt.Printf("  method+path recall     %s\n", ratio{exactHit, len(want)})
+	fmt.Printf("  precision              %s\n", ratio{matched, len(got)})
+	fmt.Printf("  handler names          %s\n", ratio{handlerHit, handlerTotal})
+	sort.Strings(missing)
+	sort.Strings(extra)
+	for _, m := range missing {
+		fmt.Printf("  MISSING %s\n", m)
+	}
+	for i, e := range extra {
+		if i >= 20 {
+			fmt.Printf("  … %d more extra\n", len(extra)-20)
+			break
+		}
+		fmt.Printf("  EXTRA   %s\n", e)
+	}
+}
+
+// normPath makes route paths comparable: placeholders as {}, no trailing
+// slash, a leading slash.
+func normPath(p string) string {
+	segs := strings.Split(strings.Trim(p, "/"), "/")
+	for i, s := range segs {
+		if strings.HasPrefix(s, ":") || strings.HasPrefix(s, "{") || strings.HasPrefix(s, "<") || strings.HasPrefix(s, "[") {
+			segs[i] = "{}"
+		}
+	}
+	return "/" + strings.Join(segs, "/")
+}
+

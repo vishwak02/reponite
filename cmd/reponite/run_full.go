@@ -753,7 +753,9 @@ func cmdRoutes(args []string) {
 	var limit int
 	var gateways, upstreams string
 	var rf refFlags
-	pos := parseCmd("routes", "routes [path substring] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+	var testRoutes bool
+	pos := parseCmd("routes", "routes [path substring] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--limit N] [--local] [--tests]", args, func(fs *flag.FlagSet) {
+		fs.BoolVar(&testRoutes, "tests", false, "also list routes only test code serves (test servers, test doubles of other services)")
 		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 50, "max routes")
@@ -766,6 +768,7 @@ func cmdRoutes(args []string) {
 	if err != nil {
 		fail(err)
 	}
+	opt.Tests = testRoutes
 	filter := ""
 	if len(pos) > 0 {
 		filter = pos[0]

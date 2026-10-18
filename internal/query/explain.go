@@ -567,6 +567,9 @@ func sortEdges(es []ExplainEdge, callers bool) {
 	})
 }
 
+// viewsetMethod is the HTTP method a DRF router sends to each standard action.
+var viewsetMethod = map[string]string{"list": "GET", "create": "POST", "retrieve": "GET", "update": "PUT", "partial_update": "PATCH", "destroy": "DELETE"}
+
 // reachOf finds the runtime paths into a symbol: HTTP routes whose handler
 // is it (or its class), ROS endpoints it publishes/subscribes in or is the
 // callback of, and UI event props bound to it.
@@ -605,7 +608,7 @@ func reachOf(s Store, repo, ref, qid, kind, path string) []Reach {
 				// A class-based view/viewset routed as a whole: only its standard
 				// action and HTTP-verb methods are reached through the class.
 				detail := strings.HasSuffix(strings.TrimSuffix(r.Pattern, "/"), "{}")
-				if act, std := viewsetActions[base]; std && act == detail ||
+				if act, std := viewsetActions[base]; std && act == detail && (r.Method == "*" || viewsetMethod[base] == r.Method) ||
 					httpVerbs[base] && (r.Method == "*" || strings.EqualFold(r.Method, base)) {
 					viaClass = append(viaClass, hit{l, " (via its class " + class + ")"})
 				}

@@ -217,4 +217,3 @@ func qualifyModule(pkg, local string) string {
 	}
 	return qualify(pkg, local)
 }
-

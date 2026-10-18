@@ -824,29 +824,7 @@ func truncStr(s string, n int) string {
 // and a few example routes. Spring request mappings, which routes does not
 // pair with clients, are counted here lexically.
 func httpEntries(repo string, files []File) []EntryPoint {
-	var routes []Route
-	routes = append(routes, djangoRoutes(repo, files)...)
-	for _, f := range files {
-		switch codeExts[strings.ToLower(filepath.Ext(f.Path))] {
-		case "py":
-			routes = append(routes, pyDecoratorRoutes(repo, f, files)...)
-		case "js", "go":
-			routes = append(routes, jsGoRoutes(repo, f, codeExts[strings.ToLower(filepath.Ext(f.Path))])...)
-		}
-		if filepath.Ext(f.Path) == ".java" {
-			for _, m := range reSpringMapping.FindAllStringSubmatchIndex(f.Content, -1) {
-				method := strings.ToUpper(f.Content[m[2]:m[3]])
-				if method == "REQUEST" {
-					method = "*"
-				}
-				pat := ""
-				if m[4] >= 0 {
-					pat = f.Content[m[4]:m[5]]
-				}
-				routes = append(routes, Route{Repo: repo, Path: f.Path, Line: lineOf(f.Content, m[0]), Method: method, Pattern: normURL(pat), Framework: "spring"})
-			}
-		}
-	}
+	routes := serverRoutes(repo, files)
 	byFW := map[string][]Route{}
 	for _, r := range routes {
 		if IsTestPath(r.Path) {

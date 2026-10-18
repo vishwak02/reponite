@@ -164,6 +164,7 @@ func (t *ToolServer) Call(tool string, args map[string]string) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		opt.Tests = includeTests
 		res := query.RoutesWith(t.Store, discoverRepo, ref, args["path"], limit, opt)
 		if discoverRepo == query.FleetRepo {
 			res.Note = res.Note + " — " + coverage()

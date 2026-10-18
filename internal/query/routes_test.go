@@ -96,12 +96,17 @@ export const gone = () => inv.get('v1/nowhere/at/all/');`
 	}}
 	r := Routes(s, FleetRepo, "v1", "", 0)
 	byPat := map[string]RouteLink{}
+	byPatMethod := map[string]RouteLink{} // a path served with several methods (a viewset)
 	for _, l := range r.Links {
 		byPat[l.Route.Pattern] = l
+		byPatMethod[l.Route.Pattern+" "+l.Route.Method] = l
 	}
 	want := func(pattern, method string, clientLine int) {
 		t.Helper()
-		l, ok := byPat[pattern]
+		l, ok := byPatMethod[pattern+" "+method]
+		if !ok {
+			l, ok = byPat[pattern]
+		}
 		if !ok {
 			var have []string
 			for p := range byPat {
@@ -124,7 +129,7 @@ export const gone = () => inv.get('v1/nowhere/at/all/');`
 	}
 	want("v1/store/labels/", "*", 5)                      // include() chain + a named URL constant
 	want("v1/store/labels/{}/reprint/", "*", 6)           // re_path group, template literal
-	want("v1/store/containers/{}/", "*", 7)               // DRF router under include(router.urls), concatenation
+	want("v1/store/containers/{}/", "GET", 7)             // DRF router under include(router.urls), concatenation
 	want("/api/orders/{}", "GET", 8)                      // FastAPI router prefix + include_router prefix, fetch
 	want("/api/orders/upload", "POST", 11)                // fetch options on the next line; a same-named constant in another object
 	want("v1/store/containers/apply:dry_run/", "POST", 0) // DRF @action, list-level, url_path

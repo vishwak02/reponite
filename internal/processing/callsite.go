@@ -481,4 +481,3 @@ func aliasInRepo(module string, dirs map[string]bool) bool {
 
 // isTypeName: an identifier written like a class (CamelCase).
 func isTypeName(s string) bool { return s != "" && s[0] >= 'A' && s[0] <= 'Z' }
-

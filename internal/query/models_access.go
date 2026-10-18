@@ -466,10 +466,10 @@ func rawSQL(files map[string][]File, m DataModel, syms func(string) map[string]S
 // modelRoutes: the routes of the model's repo whose handler (or its
 // decorator) mentions the model or one of its serializers.
 func modelRoutes(repo string, files []File, names []string) []DataRoute {
-	routes := djangoRoutes(repo, files)
-	for _, f := range files {
-		if codeExts[strings.ToLower(path.Ext(f.Path))] == "py" {
-			routes = append(routes, pyDecoratorRoutes(repo, f, files)...)
+	var routes []Route
+	for _, r := range serverRoutes(repo, files) {
+		if !r.Test {
+			routes = append(routes, r)
 		}
 	}
 	if len(routes) == 0 || len(names) == 0 {

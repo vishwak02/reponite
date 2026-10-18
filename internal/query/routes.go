@@ -29,6 +29,11 @@ type Route struct {
 	Pattern    string // full path as mounted ("v1/store/labels/{}"), placeholders as {}
 	Handler    string
 	Framework  string
+	// Partial: a mount prefix above this route could not be followed, so
+	// Pattern is the path below it.
+	Partial bool `json:",omitempty"`
+	// Test: defined in test code (a test server), not served by the app.
+	Test bool `json:",omitempty"`
 }
 
 // ClientCall is one HTTP call site whose URL could be resolved.
@@ -68,15 +73,9 @@ type RoutesResult struct {
 var (
 	djInclude    = regexp.MustCompile(`^include\(\s*\(?\s*(?:["']([\w.]+)["']|([\w.]+))`)
 	drfPlusEq    = regexp.MustCompile(`urlpatterns\s*\+=\s*(\w+)\.urls`)
-	pyDecorator  = regexp.MustCompile(`^\s*@(\w+)\.(get|post|put|patch|delete|route|api_route|websocket)\(\s*f?["']([^"']*)["'](.*)`)
-	pyRouterDef  = regexp.MustCompile(`\b(\w+)\s*=\s*(?:APIRouter|Blueprint|FastAPI|Flask)\((.*)`)
-	pyPrefixArg  = regexp.MustCompile(`(?:url_)?prefix\s*=\s*["']([^"']*)["']`)
-	pyIncRouter  = regexp.MustCompile(`\.(?:include_router|register_blueprint)\(\s*([\w.]+)(.*)`)
 	pyMethods    = regexp.MustCompile(`methods\s*=\s*\[([^\]]*)\]`)
 	pyDef        = regexp.MustCompile(`^\s*(?:async\s+)?def\s+(\w+)`)
 	expressRoute = regexp.MustCompile(`\b(app|router|server|routes?|api)\.(get|post|put|patch|delete|all)\(\s*['"` + "`" + `](/[^'"` + "`" + `]*)['"` + "`" + `]`)
-	goHandle     = regexp.MustCompile(`\.(HandleFunc|Handle)\(\s*"(/[^"]*)"`)
-	goVerb       = regexp.MustCompile(`\.(GET|POST|PUT|PATCH|DELETE|Get|Post|Put|Patch|Delete)\(\s*"(/[^"]*)"`)
 	jsFetch      = regexp.MustCompile(`\bfetch\(\s*(.*)`)
 	clientCall   = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?)\.(get|post|put|patch|delete|head|request)\s*(?:<[^()]*>)?\(\s*(.*)`)
 	jsConst      = regexp.MustCompile(`(?:^|[\s,{(])([A-Za-z_$][\w$]*)\s*[:=]\s*(['"` + "`" + `])([^'"` + "`" + `\n]*/[^'"` + "`" + `\n]*)['"` + "`" + `]`)
@@ -90,6 +89,8 @@ var (
 type RoutesOptions struct {
 	Gateways  []GatewayMount    // from ParseCaddyJSON
 	Upstreams map[string]string // explicit upstream dial -> repo ("localhost:8003=wms")
+	// Tests includes routes defined in test files (test servers).
+	Tests bool
 }
 
 // Routes maps HTTP clients to routes fleet-wide at ref. filter (optional)
@@ -115,16 +116,14 @@ func routesWith(s Store, repo, ref, filter string, limit int, opt RoutesOptions)
 	var clients []ClientCall
 	for _, rp := range reposFor(s, repo) {
 		files := s.Files(rp, ref)
-		routes = append(routes, djangoRoutes(rp, files)...)
+		for _, r := range serverRoutes(rp, files) {
+			if !r.Test || opt.Tests {
+				routes = append(routes, r) // a test file's server is not the app's
+			}
+		}
 		consts := urlConstants(files)
 		for _, f := range files {
 			lang := codeExts[strings.ToLower(filepath.Ext(f.Path))]
-			switch lang {
-			case "py":
-				routes = append(routes, pyDecoratorRoutes(rp, f, files)...)
-			case "js", "go":
-				routes = append(routes, jsGoRoutes(rp, f, lang)...)
-			}
 			if lang == "py" || lang == "js" {
 				clients = append(clients, clientCalls(rp, f, lang, consts)...)
 			}
@@ -521,7 +520,7 @@ func djangoRoutes(repo string, files []File) []Route {
 			continue
 		}
 		d := &djFile{file: f, module: strings.ReplaceAll(strings.TrimSuffix(f.Path, ".py"), "/", "."), routers: map[string]bool{}}
-		parseDjango(d, stripPyComments(f.Content))
+		parseDjango(d, blankPyDocstrings(stripPyComments(f.Content)))
 		if len(d.entries) > 0 || len(d.includes) > 0 {
 			mods = append(mods, d)
 		}
@@ -670,116 +669,7 @@ func drfActions(repo string, files []File, viewsets map[string][]string) []Route
 
 // --- FastAPI / Flask --------------------------------------------------------
 
-func pyDecoratorRoutes(repo string, f File, files []File) []Route {
-	if !strings.Contains(f.Content, "@") {
-		return nil
-	}
-	lines := strings.Split(f.Content, "\n")
-	prefix := map[string]string{} // router var -> its own prefix
-	for _, ln := range lines {
-		if m := pyRouterDef.FindStringSubmatch(ln); m != nil {
-			if p := pyPrefixArg.FindStringSubmatch(m[2]); p != nil {
-				prefix[m[1]] = p[1]
-			} else {
-				prefix[m[1]] = ""
-			}
-		}
-	}
-	var out []Route
-	for i, ln := range lines {
-		if !strings.HasPrefix(strings.TrimSpace(ln), "@") {
-			continue
-		}
-		dec := ln // a decorator's arguments may span lines: @router.get(\n    "/me", …)
-		for j := i + 1; j < len(lines) && j < i+10 && strings.Count(dec, "(") > strings.Count(dec, ")"); j++ {
-			dec += " " + strings.TrimSpace(lines[j])
-		}
-		m := pyDecorator.FindStringSubmatch(dec)
-		if m == nil {
-			continue
-		}
-		if _, ok := prefix[m[1]]; !ok && m[1] != "app" && m[1] != "router" && m[1] != "bp" && m[1] != "blueprint" {
-			continue // not a router/app this file defines (a mock.patch…)
-		}
-		method := strings.ToUpper(m[2])
-		if method == "ROUTE" || method == "API_ROUTE" {
-			method = "*"
-			if mm := pyMethods.FindStringSubmatch(m[4]); mm != nil {
-				method = strings.ToUpper(strings.Trim(strings.Split(mm[1], ",")[0], ` "'`))
-			}
-		}
-		handler := ""
-		for j := i + 1; j < len(lines) && j < i+14; j++ {
-			if d := pyDef.FindStringSubmatch(lines[j]); d != nil {
-				handler = d[1]
-				break
-			}
-		}
-		mounts := []string{prefix[m[1]]}
-		if ext := includePrefixes(files, m[1]); len(ext) > 0 {
-			mounts = nil
-			for _, e := range ext {
-				mounts = append(mounts, e+prefix[m[1]])
-			}
-		}
-		for _, p := range mounts {
-			out = append(out, Route{Repo: repo, Path: f.Path, Line: i + 1, Method: method,
-				Pattern: normURL(p + m[3]), Handler: handler, Framework: "fastapi/flask"})
-		}
-	}
-	return out
-}
-
-// includePrefixes: the prefixes app.include_router(<name>, prefix=…) mounts a
-// router variable under anywhere in the repo.
-func includePrefixes(files []File, name string) []string {
-	var out []string
-	for _, f := range files {
-		if filepath.Ext(f.Path) != ".py" || !strings.Contains(f.Content, "include_router") && !strings.Contains(f.Content, "register_blueprint") {
-			continue
-		}
-		for _, ln := range strings.Split(f.Content, "\n") {
-			m := pyIncRouter.FindStringSubmatch(ln)
-			if m == nil {
-				continue
-			}
-			v := m[1]
-			if i := strings.LastIndex(v, "."); i >= 0 {
-				v = v[i+1:]
-			}
-			if v != name {
-				continue
-			}
-			p := ""
-			if pm := pyPrefixArg.FindStringSubmatch(m[2]); pm != nil {
-				p = pm[1]
-			}
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // --- Express / Go -----------------------------------------------------------
-
-func jsGoRoutes(repo string, f File, lang string) []Route {
-	var out []Route
-	for i, ln := range strings.Split(f.Content, "\n") {
-		if lang == "js" {
-			if m := expressRoute.FindStringSubmatch(ln); m != nil && strings.Contains(ln, "req") {
-				out = append(out, Route{Repo: repo, Path: f.Path, Line: i + 1, Method: strings.ToUpper(m[2]),
-					Pattern: normURL(m[3]), Framework: "express"})
-			}
-			continue
-		}
-		if m := goHandle.FindStringSubmatch(ln); m != nil {
-			out = append(out, Route{Repo: repo, Path: f.Path, Line: i + 1, Method: "*", Pattern: normURL(m[2]), Framework: "net/http"})
-		} else if m := goVerb.FindStringSubmatch(ln); m != nil {
-			out = append(out, Route{Repo: repo, Path: f.Path, Line: i + 1, Method: strings.ToUpper(m[1]), Pattern: normURL(m[2]), Framework: "gin/echo/chi"})
-		}
-	}
-	return out
-}
 
 // --- clients ----------------------------------------------------------------
 
