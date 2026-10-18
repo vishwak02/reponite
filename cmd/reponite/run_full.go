@@ -816,7 +816,7 @@ func cmdRepos(args []string) {
 	parseCmd("repos", "repos", args, nil)
 	f := openFleet(false)
 	defer f.Close()
-	printJSON(interfaces.OverviewJSON(query.Overview(f), nil))
+	printJSON(interfaces.OverviewJSON(query.Overview(f.Store), nil))
 }
 
 func cmdBrief(args []string) {

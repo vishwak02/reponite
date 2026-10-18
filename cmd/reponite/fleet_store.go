@@ -84,15 +84,7 @@ func openFleet(local bool) *fleetStore {
 	// REPONITE_REFS pins repos to refs for every fleet-backed command (context,
 	// brief, blast-radius, search, grep, usages, topics, ...), so a caller that
 	// knows which versions a deployed system runs sets it once.
-	if pins := os.Getenv(refsEnv); pins != "" {
-		p, err := storage.ParsePins(pins)
-		if err != nil {
-			fail(fmt.Errorf("%s: %w", refsEnv, err))
-		}
-		// The pins stand in for the default ref only: an explicit other ref
-		// (a compat target, `context X 5.6.7`) is read as asked.
-		f.Store = &storage.Pinned{Inner: f.Store, Pins: p, Only: "HEAD"}
-	}
+	f.Store, _ = applyPins(f.Store, os.Getenv(refsEnv), refsEnv)
 	if hideTests() {
 		f.Store = &storage.NoTests{Inner: f.Store}
 	}
@@ -109,6 +101,38 @@ func (f *fleetStore) ExternalRefsFrom(repo, ref string) []query.ExternalRefHit {
 	}
 	return nil
 }
+
+// The optional fast paths below are forwarded too: the embedded interface
+// hides every method query.Store does not declare, and without them a query
+// decodes every file of a repo to read a few paths, or loads a whole ref to
+// count it.
+func (f *fleetStore) FilesMatching(repo, ref string, keep func(string) bool) []query.File {
+	if r, ok := f.Store.(query.PathFilesReader); ok {
+		return r.FilesMatching(repo, ref, keep)
+	}
+	var out []query.File
+	for _, x := range f.Store.Files(repo, ref) {
+		if keep(x.Path) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func (f *fleetStore) Skipped(repo, ref string) []query.SkippedPath {
+	if r, ok := f.Store.(query.SkipReader); ok {
+		return r.Skipped(repo, ref)
+	}
+	return nil
+}
+
+func (f *fleetStore) RefCounts(repo, ref string) (int, int, int, bool) {
+	if r, ok := f.Store.(query.RefCounter); ok {
+		return r.RefCounts(repo, ref)
+	}
+	return 0, 0, 0, false
+}
+
 func (f *fleetStore) IndexVersion(repo, ref string) (int, bool) {
 	if iv, ok := f.Store.(query.IndexVersioner); ok {
 		return iv.IndexVersion(repo, ref)
@@ -117,7 +141,6 @@ func (f *fleetStore) IndexVersion(repo, ref string) (int, bool) {
 }
 
 // noTestsEnv hides test code from the commands that take --no-tests.
-const noTestsEnv = "REPONITE_NO_TESTS"
 
 // noTestsFlag is --no-tests; noTestsCmd marks a command that honors it (and
 // the env), so a command whose answer IS about tests (brief's covering tests,
@@ -134,18 +157,8 @@ func hideTests() bool {
 	if !noTestsCmd {
 		return false
 	}
-	if noTestsFlag {
-		return true
-	}
-	switch strings.ToLower(os.Getenv(noTestsEnv)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
+	return noTestsFlag || noTestsFromEnv()
 }
-
-// refsEnv pins repos to refs fleet-wide: "repoA=ref1,repoB=ref2".
-const refsEnv = "REPONITE_REFS"
 
 // openPeers opens every registered repo EXCEPT the one at dir, as a read-only
 // view for index-time cross-repo lookups (§8B.3 contract capture). Returns an

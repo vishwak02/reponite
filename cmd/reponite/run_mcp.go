@@ -6,6 +6,7 @@ import (
 	"github.com/vishwak02/reponite/internal/interfaces"
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/storage"
+	"os"
 )
 
 func mcpCommand(args []string) {
@@ -26,6 +27,11 @@ func mcpCommand(args []string) {
 	store := stores[0]
 	if len(stores) > 1 {
 		store = storage.NewMultiStore(stores...)
+	}
+	// the same pins and test filter as every other command
+	store, _ = applyPins(store, os.Getenv(refsEnv), refsEnv)
+	if noTestsFromEnv() {
+		store = &storage.NoTests{Inner: store}
 	}
 	ts := &interfaces.ToolServer{Store: store, Repo: repos[0], Intent: newIntentProvider(dirs[0]), ParseSymbols: newSymbolParser(), Ranker: semanticRanker()}
 	ts.History = newHistoryProvider(dirs)

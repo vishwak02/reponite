@@ -840,6 +840,21 @@ func (s *Store) symbolsAt(rid int64) map[string]query.SymbolRef {
 	return out
 }
 
+// RefCounts counts a ref's symbols, call edges and files (query.RefCounter).
+func (s *Store) RefCounts(repo, ref string) (symbols, edges, files int, ok bool) {
+	rid, found := s.lookupRef(repo, ref)
+	if !found {
+		return 0, 0, 0, false
+	}
+	if s.db.QueryRow(`SELECT COUNT(*) FROM ref_syms WHERE ref_id=?`, rid).Scan(&symbols) != nil ||
+		s.db.QueryRow(`SELECT COUNT(*) FROM ref_syms r JOIN syms s ON s.id = r.sym_id
+			JOIN edges e ON e.set_id = s.edge_set WHERE r.ref_id=?`, rid).Scan(&edges) != nil ||
+		s.db.QueryRow(`SELECT COUNT(*) FROM ref_files_v2 WHERE ref_id=?`, rid).Scan(&files) != nil {
+		return 0, 0, 0, false
+	}
+	return symbols, edges, files, true
+}
+
 func (s *Store) Snapshot(repo, ref string) query.RefSnapshot {
 	snap := query.RefSnapshot{Symbols: map[string]query.SymbolFacts{}, Callees: map[string][]query.Callee{}}
 	rid, ok := s.lookupRef(repo, ref)

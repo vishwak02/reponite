@@ -35,12 +35,16 @@ func Overview(s Store) []RepoOverview {
 		sort.Strings(refs)
 		for _, ref := range refs {
 			rs := RefStat{Ref: ref}
-			rs.Symbols = len(s.SymbolsAt(repo, ref))
-			snap := s.Snapshot(repo, ref)
-			for _, callees := range snap.Callees {
-				rs.Edges += len(callees)
+			if n, e, f, ok := refCounts(s, repo, ref); ok {
+				rs.Symbols, rs.Edges, rs.Files = n, e, f
+			} else {
+				rs.Symbols = len(s.SymbolsAt(repo, ref))
+				snap := s.Snapshot(repo, ref)
+				for _, callees := range snap.Callees {
+					rs.Edges += len(callees)
+				}
+				filesMatching(s, repo, ref, func(string) bool { rs.Files++; return false })
 			}
-			rs.Files = len(s.Files(repo, ref))
 			if man, ok := s.Manifest(repo, ref); ok {
 				rs.Commit = man.Commit
 			}
@@ -49,4 +53,18 @@ func Overview(s Store) []RepoOverview {
 		out = append(out, ov)
 	}
 	return out
+}
+
+// RefCounter is optional on a Store: a ref's symbol, edge and file counts
+// without loading them. Loading every ref of a fleet just to count it cost
+// seconds and gigabytes.
+type RefCounter interface {
+	RefCounts(repo, ref string) (symbols, edges, files int, ok bool)
+}
+
+func refCounts(s Store, repo, ref string) (int, int, int, bool) {
+	if rc, ok := s.(RefCounter); ok {
+		return rc.RefCounts(repo, ref)
+	}
+	return 0, 0, 0, false
 }

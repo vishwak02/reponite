@@ -48,13 +48,10 @@ func serveCommand(args []string) {
 	if len(stores) > 1 {
 		store = storage.NewMultiStore(stores...)
 	}
-	if refs != "" {
-		pins, err := storage.ParsePins(refs)
-		if err != nil {
-			fail(err)
-		}
-		// HEAD (the dashboard's default ref) means "each repo at its pin"
-		store = &storage.Pinned{Inner: store, Pins: pins, Only: "HEAD"}
+	// HEAD (the dashboard's default ref) means "each repo at its pin"
+	store, defaulted := applyPins(store, refs, "--refs")
+	if defaulted > 0 {
+		fmt.Printf("reponite serve: %d repo(s) have no HEAD indexed and are read at their newest indexed ref (--refs repo=ref chooses)\n", defaulted)
 	}
 	h := &interfaces.WebHandler{
 		Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0]), RepoStores: repoStores,

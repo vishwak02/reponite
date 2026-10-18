@@ -61,6 +61,14 @@ func (m *MultiStore) IndexVersion(repo, ref string) (int, bool) {
 	return 0, false
 }
 
+// RefCounts forwards to the owning store (query.RefCounter).
+func (m *MultiStore) RefCounts(repo, ref string) (int, int, int, bool) {
+	if rc, ok := m.owner[repo].(query.RefCounter); ok {
+		return rc.RefCounts(repo, ref)
+	}
+	return 0, 0, 0, false
+}
+
 func (m *MultiStore) Refs(repo string) []string {
 	if s := m.owner[repo]; s != nil {
 		return s.Refs(repo)

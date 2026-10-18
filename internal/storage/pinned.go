@@ -123,6 +123,14 @@ func (p *Pinned) MonikersAt(repo, ref string) map[string]string {
 }
 
 // IndexVersion forwards the ruleset stamp at the pinned ref.
+// RefCounts forwards at the pinned ref (query.RefCounter).
+func (p *Pinned) RefCounts(repo, ref string) (int, int, int, bool) {
+	if rc, ok := p.Inner.(query.RefCounter); ok {
+		return rc.RefCounts(repo, p.at(repo, ref))
+	}
+	return 0, 0, 0, false
+}
+
 func (p *Pinned) IndexVersion(repo, ref string) (int, bool) {
 	if iv, ok := p.Inner.(query.IndexVersioner); ok {
 		return iv.IndexVersion(repo, p.at(repo, ref))
@@ -149,4 +157,83 @@ func (p *Pinned) Skipped(repo, ref string) []query.SkippedPath {
 		return r.Skipped(repo, p.at(repo, ref))
 	}
 	return nil
+}
+
+// DefaultPins pins every repo that has no pin and no indexed HEAD to
+// its newest indexed ref, so a query at HEAD (every command's default) reads
+// something rather than nothing for a repo indexed only at tags. The repo's own
+// tags are preferred over refs it was indexed under as another repo's
+// submodule ("app@1.2.0"), and refs are ordered as versions (3.10 after 3.9).
+// It returns the pins with the defaults added, and how many were added.
+func DefaultPins(s query.Store, pins map[string]string) (map[string]string, int) {
+	out := make(map[string]string, len(pins))
+	for k, v := range pins {
+		out[k] = v
+	}
+	added := 0
+	for _, repo := range s.Repos() {
+		if _, ok := out[repo]; ok {
+			continue
+		}
+		refs := s.Refs(repo)
+		if len(refs) == 0 || containsRef(refs, "HEAD") {
+			continue
+		}
+		if r := newestRef(refs); r != "" {
+			out[repo] = r
+			added++
+		}
+	}
+	return out, added
+}
+
+func containsRef(refs []string, ref string) bool {
+	for _, r := range refs {
+		if r == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// newestRef is the highest version among the repo's own tags, or among its
+// submodule-of refs when it has no tags of its own.
+func newestRef(refs []string) string {
+	var own, sub []string
+	for _, r := range refs {
+		if isSubmoduleRef(r) {
+			sub = append(sub, r)
+		} else {
+			own = append(own, r)
+		}
+	}
+	pick := own
+	if len(pick) == 0 {
+		pick = sub
+	}
+	best := ""
+	for _, r := range pick {
+		if best == "" || versionLess(best, r) {
+			best = r
+		}
+	}
+	return best
+}
+
+// isSubmoduleRef: "parent@1.2.0", the ref a repo was indexed under as another
+// repo's submodule (a version@sha label like "1.2.0@abc123" is the repo's own).
+func isSubmoduleRef(r string) bool {
+	i := strings.Index(r, "@")
+	return i > 0 && (r[0] < '0' || r[0] > '9') && !(r[0] == 'v' && len(r) > 1 && r[1] >= '0' && r[1] <= '9')
+}
+
+// versionLess orders refs as versions, ignoring a submodule-of prefix.
+func versionLess(a, b string) bool {
+	if i := strings.LastIndex(a, "@"); i >= 0 && isSubmoduleRef(a) {
+		a = a[i+1:]
+	}
+	if i := strings.LastIndex(b, "@"); i >= 0 && isSubmoduleRef(b) {
+		b = b[i+1:]
+	}
+	return query.VersionLess(a, b)
 }

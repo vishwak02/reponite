@@ -79,3 +79,35 @@ func TestPinnedOnlyDefaultRefAndLabels(t *testing.T) {
 		t.Errorf("no pins, no change: %+v", unpinned)
 	}
 }
+
+func TestNewestRef(t *testing.T) {
+	for _, c := range []struct {
+		refs []string
+		want string
+	}{
+		{[]string{"3.3.0-rc17", "3.7.4", "3.7.5-rc0", "3.10.0"}, "3.10.0"},
+		{[]string{"1.2.0", "1.2.0-rc3"}, "1.2.0"},
+		{[]string{"0.4.0", "move_base_flex@0.4.0", "platform@5.4.0-rc.2"}, "0.4.0"},
+		{[]string{"platform@5.5.16", "platform@5.6.8", "platform@5.6.10"}, "platform@5.6.10"},
+		{[]string{"v1.3.3", "v1.4.0", "2.0.1"}, "2.0.1"},
+		{[]string{"10.18.0@afa9b36af6", "10.18.3@410f54e012"}, "10.18.3@410f54e012"},
+	} {
+		if got := newestRef(c.refs); got != c.want {
+			t.Errorf("newestRef(%v) = %q, want %q", c.refs, got, c.want)
+		}
+	}
+}
+
+func TestDefaultPinsLeaveHEADAndExplicitPins(t *testing.T) {
+	m := NewMem()
+	m.Put("app", "HEAD", "app.main", SymbolRecord{})
+	m.Put("lib", "1.0.0", "lib.f", SymbolRecord{})
+	m.Put("lib", "1.1.0", "lib.f", SymbolRecord{})
+	m.Put("tool", "2.0.0", "tool.g", SymbolRecord{})
+	m.Put("tool", "3.0.0", "tool.g", SymbolRecord{})
+	got, n := DefaultPins(m, map[string]string{"tool": "2.0.0"})
+	want := map[string]string{"lib": "1.1.0", "tool": "2.0.0"}
+	if n != 1 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultPins = %v (%d added), want %v", got, n, want)
+	}
+}
