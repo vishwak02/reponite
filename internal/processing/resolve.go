@@ -192,6 +192,7 @@ type siteIndex struct {
 	isTest     map[string]bool     // qid -> defined in test code
 	precise    map[string]string   // base -> type-proven qid (Go only; nil here)
 	types      *typeTable          // C++ classes/fields/bases (nil: none in the ref)
+	classes    *classGraph         // Python/JS/TS classes by module, bases resolved through imports
 	callerPkg  string
 	callerTest bool
 }
@@ -236,7 +237,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	for _, s := range sites {
 		s = typeSite(s, callerRecv, x)
 		key := s.Name
-		if s.Kind == CallTyped || s.Kind == CallModule {
+		if s.Kind == CallTyped || s.Kind == CallModule || s.Scope == superScope {
 			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
 		}
 		cur, ok := best[key]
@@ -270,6 +271,29 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(c)
 			}
 		case CallSelf, CallPlain:
+			// self.f() / this.f() in a class whose module is known: the method
+			// the class's MRO reaches, and any subclass's override of it
+			super := s.Scope == superScope
+			if s.Kind == CallSelf && callerRecv != "" && hasClassBases(lang) {
+				if cls, ok := x.classes.has(callerPkg, callerRecv); ok {
+					if q, found := x.classes.method(cls, name, super, x.nodeSet); found {
+						add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+						if !super { // super() names the base's method itself
+							for _, o := range x.classes.overriders(cls, name, x.nodeSet) {
+								if x.callerTest || !x.isTest[o] {
+									add(query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
+								}
+							}
+						}
+						continue
+					}
+				}
+			}
+			if super {
+				// a base's method, which one unproven: never the caller's own
+				add(memberCalleeLang(name, lang, x))
+				continue
+			}
 			// a bare name never reaches the enclosing class's own methods in
 			// Python or JavaScript: those need self. / this.
 			if callerRecv != "" && (s.Kind == CallSelf || !bareNameSkipsClass[lang]) {

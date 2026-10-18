@@ -274,6 +274,8 @@ func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, l
 		switch {
 		case qc.Qualifier == selfQualifier:
 			add(CallSite{Name: qc.Name, Kind: CallSelf})
+		case qc.Qualifier == superQualifier:
+			add(CallSite{Name: qc.Name, Kind: CallSelf, Scope: superScope})
 		case qc.Qualifier == "":
 			if b, ok := byLocal[qc.Name]; ok {
 				if pkg, ok := modPkg(b.Module); ok {
@@ -401,14 +403,19 @@ var jsMembers = map[string]bool{
 // Go keeps name rules refined by its type checker; C/C++ use clikeCallSites.
 var qualifiedSiteLangs = map[string]bool{"javascript": true, "typescript": true, "python": true, "java": true}
 
-// selfAsPlain turns self./this./cls. calls into unqualified ones, so they
-// resolve on the caller's own class first.
+// selfAsPlain marks self./this./cls. calls, so they resolve on the caller's
+// own class, and super calls, which resolve on its bases. self.x.f() is a
+// call on a field's value, not on the class.
 func selfAsPlain(qcs []QualifiedCall) []QualifiedCall {
 	out := make([]QualifiedCall, 0, len(qcs))
 	for _, q := range qcs {
-		switch q.Qualifier {
-		case "self", "this", "cls", "super":
-			q.Qualifier = selfQualifier
+		if q.Chain <= 2 {
+			switch q.Qualifier {
+			case "self", "this", "cls":
+				q.Qualifier = selfQualifier
+			case "super":
+				q.Qualifier = superQualifier
+			}
 		}
 		out = append(out, q)
 	}
@@ -416,8 +423,12 @@ func selfAsPlain(qcs []QualifiedCall) []QualifiedCall {
 }
 
 // selfQualifier marks a self./this./cls. call: it resolves on the caller's
-// own class, unlike a bare call in Python or JavaScript.
-const selfQualifier = "\x00self"
+// own class, unlike a bare call in Python or JavaScript. superQualifier marks
+// super().f() / super.f(): the caller's bases, never its own class.
+const (
+	selfQualifier  = "\x00self"
+	superQualifier = "\x00super"
+)
 
 // moduleInRepo says whether an import names the repo's own code: an absolute
 // Python import of one of its packages (mypkg.utils), or a JS/TS path alias

@@ -33,6 +33,8 @@ type Symbol struct {
 	// CallSites keeps each call's shape for languages with CallSiteKinds
 	// (C/C++): resolution uses it instead of the bare names (callsite.go).
 	CallSites []CallSite
+	// Bases are the base classes a class names (Python, JS/TS), as written.
+	Bases []QualifiedCall
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -224,6 +226,7 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 	return []Symbol{{
 		Name: name, Kind: "type",
 		Signature: string(content.Canon(withoutChildTypes(decl, r.BodyTypes), normVer)), Doc: doc,
+		Bases: classBases(decl, r.Name),
 	}}
 }
 
@@ -315,9 +318,43 @@ func calleeIdents(call content.AST, r LangRules) []string {
 		if isArgNode(c.Type()) {
 			break
 		}
+		if m := superMember(c); m != "" {
+			return []string{"super", m}
+		}
 		ids = append(ids, identLeaves(c, types)...)
 	}
 	return ids
+}
+
+// superMember is f of a Python super().f / super(Cls, self).f callee: the
+// arguments of super() name the class, not the call's target.
+func superMember(callee content.AST) string {
+	if callee.Type() != "attribute" {
+		return ""
+	}
+	var obj, attr content.AST
+	for _, c := range callee.Children() {
+		if !c.IsNamed() {
+			continue
+		}
+		if obj == nil {
+			obj = c
+		} else {
+			attr = c
+		}
+	}
+	if obj == nil || attr == nil || obj.Type() != "call" || attr.Type() != "identifier" {
+		return ""
+	}
+	for _, c := range obj.Children() {
+		if c.IsNamed() {
+			if c.Type() == "identifier" && c.Text() == "super" {
+				return attr.Text()
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // callNameTypes is the node-type set for callee/member names: CallNameTypes if

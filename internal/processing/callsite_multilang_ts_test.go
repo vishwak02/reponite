@@ -170,3 +170,104 @@ export function format(n: number) { return String(n); }`,
 	wantMethod(t, edges["src/components.ui.short"], "src/components.ui.format", MethodResolved)
 	wantMethod(t, edges["src/components.ui.Old.onClick"], "src/components.ui.Old.save", MethodResolved)
 }
+
+// self.f() / this.f() with f defined on a base class: the base found through
+// the module's imports, in Python's MRO, not a guess among same-named methods.
+func TestInheritedSelfCallResolution(t *testing.T) {
+	files := map[string]string{
+		"app/core/base.py": `class Scaffold:
+    def add_rule(self):
+        pass
+    def setup(self):
+        pass
+class App(Scaffold):
+    def add_rule(self):
+        pass
+`,
+		"app/main.py": `from .core.base import App
+from . import core
+class Flask(App):
+    def __init__(self):
+        self.add_rule()
+        self.setup()
+        self.missing()
+class Left(App):
+    def setup(self):
+        pass
+class Right(App):
+    pass
+class Diamond(Right, Left):
+    def go(self):
+        self.setup()
+    def setup(self):
+        super().setup()
+        self.helper.setup()
+`,
+		"app/other.py": `class App:
+    def add_rule(self):
+        pass
+class Tool(Unknown):
+    def go(self):
+        self.add_rule()
+`,
+		"web/src/base.ts": `export abstract class Repo {
+  save(x: number) { return x; }
+}`,
+		"web/src/users.ts": `import { Repo } from './base';
+export class Users extends Repo {
+  add(x: number) { return this.save(x); }
+}
+export class Admins extends Users {
+  save(x: number) { return super.save(x) + 1; }
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	init := edges["app.main.Flask.__init__"]
+	if init == nil {
+		t.Fatalf("Flask.__init__ not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, init, "app/core.base.App.add_rule", MethodResolved) // App's own, not Scaffold's or other.App's
+	wantMethod(t, init, "app/core.base.Scaffold.setup", MethodResolved)
+	for name := range init {
+		if name == "app.other.App.add_rule" || name == "app/core.base.Scaffold.add_rule" {
+			t.Errorf("self call resolved past the MRO: %s", name)
+		}
+	}
+	// C3: Diamond(Right, Left) -> Right, Left, App: Left.setup runs, not Scaffold's
+	dgo := edges["app.main.Diamond.go"]
+	wantMethod(t, dgo, "app.main.Diamond.setup", MethodResolved)
+	wantMethod(t, edges["app.main.Diamond.setup"], "app.main.Left.setup", MethodResolved)
+	if _, self := edges["app.main.Diamond.setup"]["app.main.Diamond.setup"]; self {
+		t.Error("super().setup() resolved to the caller itself")
+	}
+	// a base outside the repo comes first: its own add_rule may be the one
+	if c, ok := edges["app.other.Tool.go"]["app.other.App.add_rule"]; ok && c == MethodResolved {
+		t.Errorf("self call through an unknown base resolved: %s", c)
+	}
+	add := edges["web/src.users.Users.add"]
+	if add == nil {
+		t.Fatalf("Users.add not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, add, "web/src.base.Repo.save", MethodResolved)
+	wantMethod(t, add, "web/src.users.Admins.save", MethodOverride)
+	wantMethod(t, edges["web/src.users.Admins.save"], "web/src.base.Repo.save", MethodResolved)
+}
+
+func TestPythonTwoArgSuper(t *testing.T) {
+	files := map[string]string{
+		"core/renderers.py": `class Base:
+    def render(self, data):
+        return data
+`,
+		"auth/renderers.py": `from core.renderers import Base
+class User(Base):
+    def render(self, data):
+        return super(User, self).render(data)
+`,
+	}
+	edges := indexAndEdges(t, files)
+	wantMethod(t, edges["auth.renderers.User.render"], "core.renderers.Base.render", MethodResolved)
+	if _, self := edges["auth.renderers.User.render"]["auth.renderers.User.render"]; self {
+		t.Error("super(User, self).render() resolved to the caller itself")
+	}
+}

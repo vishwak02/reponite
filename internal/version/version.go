@@ -66,7 +66,10 @@ const (
 	//      revision is type-checked like a working tree; member calls only
 	//      reach methods the caller's language can call; an unresolved call
 	//      target that equals a symbol id is stored marked, never as that id.
-	IndexVer = 13
+	//  14: Python and JS/TS self.f() / this.f() resolve through the class's
+	//      bases (followed through imports, Python's MRO) to the method that
+	//      runs; TypeScript abstract classes are symbols.
+	IndexVer = 14
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

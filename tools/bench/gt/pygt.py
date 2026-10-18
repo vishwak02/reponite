@@ -4,8 +4,9 @@ Reads every .py file under a directory with the standard library's ast module
 and prints JSON: each function/method definition with its span, the calls that
 can be resolved statically (a module-level function of the same module, a
 function imported by name or through an imported module, a method on self/cls
-found in the class or an in-repo base class, a class called as a constructor
-goes to its __init__ when defined), and for every definition the names it calls
+found in the class or an in-repo base class in method resolution order, super()
+calls on the bases, a class called as a constructor), and for every definition
+the names it calls
 at all — so a scorer can tell a contradicted edge (the name is never called)
 from an undetermined one (called on an object whose type is not static).
 
@@ -169,25 +170,92 @@ def main():
                         b[local] = ("class", (src, a.name))
         return b
 
-    def lineage(key, seen=None):
-        """the class and its in-repo bases, nearest first"""
-        seen = seen or set()
-        if key in seen or key not in classes:
-            return []
-        seen.add(key)
-        out = [key]
+    INERT = {"object", "ABC", "Generic", "Protocol"}
+
+    def bases_of(key):
+        """the class's bases as keys; None for a base outside the repo"""
         rel = key[0]
         imp = imports_of(rel, files[rel])
+        out = []
         for b in classes[key]:
-            if isinstance(b, ast.Name):
-                if (rel, b.id) in classes:
-                    out += lineage((rel, b.id), seen)
-                elif imp.get(b.id, (None,))[0] == "class":
-                    out += lineage(imp[b.id][1], seen)
+            if isinstance(b, ast.Subscript):
+                b = b.value
+            name = b.id if isinstance(b, ast.Name) else (b.attr if isinstance(b, ast.Attribute) else None)
+            if name in INERT:
+                continue
+            if isinstance(b, ast.Name) and (rel, b.id) in classes:
+                out.append((rel, b.id))
+            elif isinstance(b, ast.Name) and imp.get(b.id, (None,))[0] == "class":
+                out.append(imp[b.id][1])
+            elif isinstance(b, ast.Attribute) and isinstance(b.value, ast.Name) and \
+                    imp.get(b.value.id, (None,))[0] == "module" and (imp[b.value.id][1], b.attr) in classes:
+                out.append((imp[b.value.id][1], b.attr))
+            else:
+                out.append(None)
         return out
 
-    def method_on(key, name):
-        for k in lineage(key):
+    mro_memo = {}
+
+    def mro(key, visiting=()):
+        """C3 linearization as Python computes it; None marks an external base"""
+        if key in mro_memo:
+            return mro_memo[key]
+        if key in visiting:
+            return None
+        seqs = []
+        direct = bases_of(key)
+        for b in direct:
+            if b is None:
+                seqs.append([None])
+                continue
+            m = mro(b, visiting + (key,))
+            if m is None:
+                return None
+            seqs.append(list(m))
+        seqs.append(list(direct))
+        out = [key]
+        while True:
+            seqs = [s for s in seqs if s]
+            if not seqs:
+                break
+            for s in seqs:
+                head = s[0]
+                if not any(head in t[1:] for t in seqs):
+                    break
+            else:
+                return None  # no consistent order
+            out.append(head)
+            seqs = [s[1:] if s[0] == head else s for s in seqs]
+        mro_memo[key] = out
+        return out
+
+    derived = {}
+    for key in classes:
+        for b in bases_of(key):
+            if b is not None:
+                derived.setdefault(b, []).append(key)
+
+    def overriders(key, name):
+        """name defined on classes deriving from key: on a subclass instance,
+        self.name() runs one of these (dynamic dispatch)"""
+        out, todo, seen_cls = [], list(derived.get(key, [])), {key}
+        while todo:
+            k = todo.pop()
+            if k in seen_cls:
+                continue
+            seen_cls.add(k)
+            if name in methods.get(k, {}):
+                out.append(methods[k][name])
+            todo += derived.get(k, [])
+        return out
+
+    def method_on(key, name, skip_own=False):
+        order = mro(key)
+        if order is None:
+            return None
+        for k in order[1:] if skip_own else order:
+            if k is None:
+                return None  # an external base may define it
             if name in methods.get(k, {}):
                 return methods[k][name]
         return None
@@ -207,15 +275,28 @@ def main():
             if local_imports:
                 fimp.update(imports_of(rel, files[rel], local_imports))
             local_names = {a.arg for a in node.args.args + node.args.kwonlyargs}
-            for sub in ast.walk(node):
+            # decorators and default values run where the function is
+            # defined, not when it is called: only the body's calls count
+            body = [n for stmt in node.body for n in ast.walk(stmt)]
+            for sub in body:
                 if isinstance(sub, (ast.Assign, ast.AnnAssign)):
                     for t in (sub.targets if isinstance(sub, ast.Assign) else [sub.target]):
                         if isinstance(t, ast.Name):
                             local_names.add(t.id)
-            for sub in ast.walk(node):
+            for sub in body:
                 if not isinstance(sub, ast.Call):
                     continue
                 chain, name = call_name(sub.func)
+                f = sub.func
+                if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Call) and \
+                        isinstance(f.value.func, ast.Name) and f.value.func.id == "super" and cls and \
+                        (not f.value.args or (isinstance(f.value.args[0], ast.Name) and f.value.args[0].id == cls)):
+                    called.add(f.attr)
+                    to = method_on((rel, cls), f.attr, skip_own=True)
+                    if to and (frm, to) not in seen:
+                        seen.add((frm, to))
+                        edges.append({"from": frm, "to": to, "kind": "static", "line": sub.lineno})
+                    continue
                 if name is None:
                     continue
                 called.add(name)
@@ -230,6 +311,11 @@ def main():
                         to = class_ids.get(key)  # Cls(...) constructs Cls
                 elif chain and len(chain) == 1 and chain[0] in ("self", "cls") and cls:
                     to = method_on((rel, cls), name)
+                    if to:
+                        for o in overriders((rel, cls), name):
+                            if (frm, o) not in seen:
+                                seen.add((frm, o))
+                                edges.append({"from": frm, "to": o, "kind": "dispatch", "line": sub.lineno})
                 elif chain and len(chain) == 1 and fimp.get(chain[0], (None,))[0] == "module":
                     m = fimp[chain[0]][1]
                     to = funcs.get(m, {}).get(name)

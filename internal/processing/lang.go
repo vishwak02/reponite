@@ -114,18 +114,21 @@ var PythonRules = LangRules{
 	Builtins:  pyBuiltins,
 }
 
-var jsBuiltins = map[string]bool{"require": true, "Boolean": true, "Number": true, "String": true, "Array": true, "Object": true}
+var jsBuiltins = map[string]bool{"require": true, "Boolean": true, "Number": true, "String": true, "Array": true, "Object": true,
+	"super": true} // super(...) runs the base constructor, not a function named super
 
 var JavaScriptRules = LangRules{
 	Name: "javascript", Exts: []string{".js", ".jsx", ".mjs", ".cjs"},
-	FuncDecl:    []string{"function_declaration", "generator_function_declaration"},
-	MethodDecl:  []string{"method_definition"},
-	TypeDecl:    []string{"class_declaration"},
-	NameTypes:   []string{"identifier", "property_identifier"},
-	BodyTypes:   []string{"statement_block"},
-	CallTypes:   append([]string{"call_expression", "new_expression"}, jsxElementTypes...), // new X() calls X's constructor
-	Builtins:    jsBuiltins,
-	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
+	FuncDecl:   []string{"function_declaration", "generator_function_declaration"},
+	MethodDecl: []string{"method_definition"},
+	TypeDecl:   []string{"class_declaration"},
+	NameTypes:  []string{"identifier", "property_identifier"},
+	// this/super as a callee's qualifier: this.f() resolves on the class
+	CallNameTypes: []string{"identifier", "property_identifier", "this", "super"},
+	BodyTypes:     []string{"statement_block"},
+	CallTypes:     append([]string{"call_expression", "new_expression"}, jsxElementTypes...), // new X() calls X's constructor
+	Builtins:      jsBuiltins,
+	VarFuncDecl:   []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
 
 // jsxElementTypes are the JSX nodes that RENDER a component. `<CartItem …/>` is
@@ -137,14 +140,15 @@ var jsxElementTypes = []string{"jsx_opening_element", "jsx_self_closing_element"
 
 var TypeScriptRules = LangRules{
 	Name: "typescript", Exts: []string{".ts", ".tsx"},
-	FuncDecl:    []string{"function_declaration", "generator_function_declaration"},
-	MethodDecl:  []string{"method_definition", "method_signature"},
-	TypeDecl:    []string{"class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
-	NameTypes:   []string{"identifier", "property_identifier", "type_identifier"},
-	BodyTypes:   []string{"statement_block"},
-	CallTypes:   append([]string{"call_expression", "new_expression"}, jsxElementTypes...), // .tsx: the tsx grammar; .ts never holds JSX
-	Builtins:    jsBuiltins,
-	VarFuncDecl: []string{"variable_declarator", "public_field_definition", "field_definition"},
+	FuncDecl:      []string{"function_declaration", "generator_function_declaration"},
+	MethodDecl:    []string{"method_definition", "method_signature"},
+	TypeDecl:      []string{"class_declaration", "abstract_class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
+	NameTypes:     []string{"identifier", "property_identifier", "type_identifier"},
+	CallNameTypes: []string{"identifier", "property_identifier", "type_identifier", "this", "super"},
+	BodyTypes:     []string{"statement_block"},
+	CallTypes:     append([]string{"call_expression", "new_expression"}, jsxElementTypes...), // .tsx: the tsx grammar; .ts never holds JSX
+	Builtins:      jsBuiltins,
+	VarFuncDecl:   []string{"variable_declarator", "public_field_definition", "field_definition"},
 }
 
 var JavaRules = LangRules{

@@ -95,6 +95,13 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
 	linkRobotEmbedded(files)
 	mods := newModuleIndex(files)
+	classes := newClassGraph()
+	type classDecl struct {
+		key, path, lang string
+		bases           []QualifiedCall
+		byLocal         map[string]ImportBinding
+	}
+	var classDecls []classDecl
 	for _, f := range files {
 		lang := f.Lang
 		if lang == "" {
@@ -128,6 +135,10 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			if mon := f.SCIP.Defs[s.Name]; mon != "" {
 				monikers[qid] = mon
 			}
+			if s.Kind == "type" && s.Recv == "" && hasClassBases(lang) {
+				k := classes.define(pkg, s.Name)
+				classDecls = append(classDecls, classDecl{key: k, path: f.Path, lang: lang, bases: s.Bases, byLocal: byLocal})
+			}
 		}
 		// SCIP references are symbol-resolved: the moniker IS the target's
 		// global identity, so these need no module/name guessing (§8B.4).
@@ -159,6 +170,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		dirs[pkgOf(c.path)] = true
 	}
 	inRepo := func(module string) bool { return moduleInRepo(module, dirs) }
+	for _, d := range classDecls {
+		d := d
+		modPkg := func(module string) (string, bool) { return mods.resolve(d.lang, d.path, module) }
+		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepo, modPkg))
+	}
+	x.classes = classes
 
 	// A call resolves only to a definition its language can call: a Python
 	// logger.info() must never land on a shell function info() elsewhere in the
