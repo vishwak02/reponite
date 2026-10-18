@@ -85,7 +85,7 @@ export async function verifyEdit(path: string, repo: string, ref: string, conten
 // /api/search answers either a hit list or, when nothing matches, a
 // suggestion envelope; normalize to hits.
 export async function searchSymbols(q: string, repo: string, ref: string, signal?: AbortSignal): Promise<SearchHit[]> {
-  const d = await api<SearchHit[] | { suggestions?: { name: string; repo?: string }[] }>("search", { q, repo, ref }, signal);
+  const d = await api<SearchHit[] | { found: false; did_you_mean?: { name: string; repo?: string }[] }>("search", { q, repo, ref }, signal);
   if (Array.isArray(d)) return d;
-  return (d.suggestions ?? []).map((s) => ({ repo: s.repo ?? repo, name: s.name, ref }));
+  return (d.did_you_mean ?? []).map((s) => ({ repo: s.repo ?? repo, name: s.name, ref }));
 }

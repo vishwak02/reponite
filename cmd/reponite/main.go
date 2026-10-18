@@ -139,6 +139,6 @@ index-backed (build with `+"`make cli`"+`):
   mcp [dir...]         serve the tools over MCP (stdio) for an AI agent (no dir = the registered fleet)
   setup [dir]         register reponite as an MCP server in your agent config
   watch [dir]         auto-reindex HEAD on source changes (fsnotify); keeps a mounted server fresh
-  serve [dir...] [--addr host:port]   web dashboard + JSON API (default 127.0.0.1:8899); no dir = the registered fleet
+  serve [dir...] [--addr host:port] [--refs repo=ref,...]   web dashboard + JSON API (default 127.0.0.1:8899); no dir = the registered fleet; --refs reads each repo at its pinned version
 `)
 }

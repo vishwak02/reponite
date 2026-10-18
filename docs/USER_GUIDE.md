@@ -11,7 +11,7 @@ This guide covers everything reponite does and how to use it. To install it, see
 - [Data models and configuration](#data-models-and-configuration)
 - [Working with many repos](#working-with-many-repos)
 - [AI agents (MCP)](#ai-agents-mcp)
-- [Web dashboard](#web-dashboard)
+- [Web dashboard](#web-dashboard) · [JSON API](#json-api)
 - [Configuration](#configuration)
 - [Command reference](#command-reference)
 - [Languages and file types](#languages-and-file-types)
@@ -822,6 +822,49 @@ directed diagrams, Sigma for the large force-directed maps, CodeMirror for code)
 rebuilds it into `internal/interfaces/webui/dist`, which the Go build embeds; `npm run dev` in
 `web/` serves it with hot reload against a running `reponite serve`.
 
+### JSON API
+
+The dashboard reads everything from the same server's JSON API, which scripts can call too.
+Every endpoint is a `GET` except `verify_edit`; answers are JSON with snake_case fields.
+
+Two parameters apply throughout:
+
+- **`repo`** — the repository. Omitted, it is the repo `serve` was started on; the endpoints
+  marked *fleet* below search every repo instead.
+- **`ref`** — the version, default `HEAD`. Under `--refs`/`REPONITE_REFS`, `HEAD` means each
+  repo's pinned version.
+
+| Endpoint | Parameters | Returns |
+|---|---|---|
+| `/api/repos` | — | every repository in the store |
+| `/api/overview` | — | per repo: module, database path and table sizes, and each ref's commit, symbols, edges and files |
+| `/api/refs` | `repo` | the repo's indexed refs (`HEAD` first when pinned) |
+| `/api/search` | `q`, `repo` (`*` = fleet), `ref`, `tests=true` | symbols whose name contains `q`, as a list; when none match, `{found: false, message, did_you_mean}` with near names |
+| `/api/brief` | `symbol`, `repo`, `ref`, `budget` | one symbol: body, callers and callees with previews, tests that reach it |
+| `/api/context` | `symbol`, `repo`, `ref`, `tests=true` | direct callers and callees, each with `resolution_method` and `confidence` |
+| `/api/graph` | `symbol`, `repo`, `ref`, `depth` (1–4), `limit`, `tests=true`, `external=true` | the call-graph neighborhood as `nodes` and `edges` |
+| `/api/compat` | `symbol`, `repo`, `ref` | the symbol's verdict in every other indexed ref of the repo |
+| `/api/diff` | `from`, `to`, `repo`, `changed_only=true`, `package`, `confidence_min` | symbols added, removed, shape- or behavior-changed between two refs |
+| `/api/rootcause` | `symbol`, `from`, `to`, `repo` | a behavior change drilled down to the mutation sites |
+| `/api/ximpact` | `symbol`, `ref` | who across the fleet calls the symbol, and whether their expected signature is stale |
+| `/api/blast_radius` | `symbol`, `repo`, `ref` | callers, fleet callers, covering tests and contract state before an edit |
+| `/api/usages` | `symbol`, `repo` (*fleet*), `ref` | every call site with its line and enclosing function |
+| `/api/topics` | `topic`, `repo` (*fleet*), `ref` | the ROS communication graph, or one topic's producers and consumers |
+| `/api/links` | `target`, `repo` (*fleet*), `ref` | references written as data to and from a file or symbol; every link of the repo when `target` is omitted |
+| `/api/coverage` | `repo` (*fleet*), `ref` | files stored and skipped per repo, by kind and reason |
+| `/api/fleetmap` | `ref` | every repo with its summary, languages and size, and the cross-repo links |
+| `/api/grep` | `pattern`, `fixed=true`, `repo` (*fleet*), `ref`, `limit`, `offset` | matching lines with their enclosing symbol; `total` and `truncated` for paging |
+| `/api/investigate` | `q`, `repo` (*fleet*), `ref`, `budget` | a cited dossier answering a question about the code |
+| `/api/file` | `path`, `repo`, `ref` | one stored file's `content`; 404 when the path is not stored |
+| `/api/verify_edit` | `POST`, query `path`, `repo`, `ref`; form field `content` | what saving `content` to `path` would add, change, remove and break |
+
+An unknown symbol is not an error: `search` and `blast_radius` answer `found: false` with
+`did_you_mean` near names, `graph` answers no nodes and a `note`, and the other symbol endpoints
+answer empty lists. `compat` answers `400` with the reason as text when the symbol is not at the
+ref, and `file` answers `404` for a path that is not stored. `verify_edit` needs a build with
+the tree-sitter parser and answers `501` without one.
+
+
 ---
 
 ## Configuration
@@ -950,7 +993,7 @@ reponite <command> [arguments] [flags]
 
 | Command | Description |
 |---|---|
-| `serve [dir…]` | Web dashboard + JSON API. `--addr` to change the bind address |
+| `serve [dir…]` | Web dashboard + [JSON API](#json-api). `--addr host:port` to change the bind address (default `127.0.0.1:8899`); `--refs repo=ref,…` (or `REPONITE_REFS`) reads each repo at its pinned version |
 | `mcp [dir…]` | MCP server over stdio, for an AI agent |
 | `setup [dir]` | Register reponite in your agent's config file |
 
