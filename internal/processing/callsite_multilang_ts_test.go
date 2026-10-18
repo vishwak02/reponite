@@ -97,6 +97,8 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 			ext = ".tsx"
 		case strings.HasSuffix(path, ".rs"):
 			ext = ".rs"
+		case strings.HasSuffix(path, ".java"):
+			ext = ".java"
 		}
 		rules, _ := RulesForExt(ext)
 		root, spans, err := parseFileRules([]byte(src), ext, rules)
@@ -377,4 +379,51 @@ impl Sender {
 	wantMethod(t, send, "WalkBuilder::threads", MethodExternal)
 	wantMethod(t, send, "Vec::lock", MethodExternal)
 	wantMethod(t, send, "extern::lock", MethodExternal) // on what a library method returned
+}
+
+// Java: a call's receiver typed from fields, parameters and locals; an
+// interface call reaches the declaration and the implementations; a library
+// object's method is never the repo's method of the same name.
+func TestJavaReceiverTyping(t *testing.T) {
+	files := map[string]string{
+		"app/repo/ArticleRepository.java": `package app.repo;
+public interface ArticleRepository {
+  Optional<Article> findBySlug(String slug);
+  void save(Article a);
+}`,
+		"app/infra/MyBatisArticleRepository.java": `package app.infra;
+public class MyBatisArticleRepository implements ArticleRepository {
+  public Optional<Article> findBySlug(String slug) { return null; }
+  public void save(Article a) {}
+}`,
+		"app/query/ArticleQueryService.java": `package app.query;
+public class ArticleQueryService {
+  public Optional<ArticleData> findBySlug(String slug, User user) { return null; }
+  public String format(String s) { return s; }
+}`,
+		"app/api/ArticleApi.java": `package app.api;
+public class ArticleApi {
+  private ArticleQueryService articleQueryService;
+  private ArticleRepository articleRepository;
+  public Object article(String slug, User user) {
+    articleQueryService.findBySlug(slug, user);
+    articleRepository.findBySlug(slug);
+    String s = slug;
+    s.format("x");
+    ArticleQueryService q = new ArticleQueryService();
+    q.format(s);
+    return null;
+  }
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	a := edges["app/api.ArticleApi.article"]
+	if a == nil {
+		t.Fatalf("ArticleApi.article not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, a, "app/query.ArticleQueryService.findBySlug", MethodTyped)
+	wantMethod(t, a, "app/repo.ArticleRepository.findBySlug", MethodTyped)
+	wantMethod(t, a, "app/infra.MyBatisArticleRepository.findBySlug", MethodOverride)
+	wantMethod(t, a, "app/query.ArticleQueryService.format", MethodTyped)
+	wantMethod(t, a, "String::format", MethodExternal)
 }

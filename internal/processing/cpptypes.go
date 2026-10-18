@@ -60,6 +60,9 @@ func typeFactsFor(root content.AST, r LangRules) *TypeFacts {
 	if r.Name == "rust" && root != nil {
 		return RustTypeFacts(root)
 	}
+	if r.Name == "java" && root != nil {
+		return JavaTypeFacts(root)
+	}
 	return CppTypeFacts(root, r)
 }
 

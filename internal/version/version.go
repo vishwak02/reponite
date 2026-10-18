@@ -68,7 +68,10 @@ const (
 	//      target that equals a symbol id is stored marked, never as that id.
 	//  14: Python and JS/TS self.f() / this.f() resolve through the class's
 	//      bases (followed through imports, Python's MRO) to the method that
-	//      runs; TypeScript abstract classes are symbols.
+	//      runs; TypeScript abstract classes are symbols. Rust calls resolve
+	//      by shape (Type::f, module paths, self.f) and receiver type; Java
+	//      receivers are typed from fields, parameters and locals, imports
+	//      resolve to package directories, new Foo() is the class.
 	IndexVer = 14
 
 	// GoTarget documents the intended production Go toolchain. The build

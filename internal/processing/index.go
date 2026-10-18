@@ -109,6 +109,15 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 		pkg := pkgOfFile(f.Path, lang)
 		byLocal := importsByLocal(moduleLevelImports(f.Imports, f.Symbols))
+		if lang == "java" {
+			// import a.b.C binds C to class C of package a.b
+			for k, b := range byLocal {
+				if b.Symbol == "" && isTypeName(b.Local) {
+					b.Symbol = b.Local
+					byLocal[k] = b
+				}
+			}
+		}
 		for _, s := range f.Symbols {
 			// Methods qualify by receiver too (pkg.Recv.name) so same-named methods
 			// on different types are distinct; edge resolution still keys off the
@@ -238,6 +247,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
 			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo, modPkg)
+			if c.lang == "java" {
+				for i, s := range sites {
+					if s.Kind == CallMember && s.Recv != "" {
+						if t := c.sym.Vars[s.Recv]; t != "" {
+							sites[i].Recv = "v:" + t
+						} else {
+							sites[i].Recv = "f:" + s.Recv // a field of the method's class
+						}
+					}
+				}
+			}
 			callees = resolveSiteEdgesLang(c.pkg, c.sym.Recv, c.lang, sites, x)
 		} else {
 			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, nil)

@@ -237,8 +237,8 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	best := map[string]CallSite{}
 	var order []string
 	for _, s := range sites {
-		if lang == "rust" {
-			s = rustTypeSite(s, callerRecv, x)
+		if lang == "rust" || lang == "java" {
+			s = declaredTypeSite(s, callerRecv, x)
 		} else {
 			s = typeSite(s, callerRecv, x)
 		}
@@ -327,6 +327,11 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			}
 			if lang == "rust" {
 				add(rustPlainCallee(callerPkg, s, x))
+				continue
+			}
+			if lang == "java" && isTypeName(name) {
+				// new Foo(): the class, not one of its constructors
+				add(resolveEdges(callerPkg, []string{name}, x.nodeSet, map[string][]string{name: x.nonMethods(name)}, x.precise)[0])
 				continue
 			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
@@ -548,22 +553,29 @@ func rustPlainCallee(callerPkg string, s CallSite, x siteIndex) query.Callee {
 			}
 		}
 	}
-	var free []string
-	for _, q := range x.byBase[s.Name] {
-		if !x.isMethod[q] {
-			free = append(free, q)
-		}
-	}
-	return resolveEdges(callerPkg, []string{s.Name}, x.nodeSet, map[string][]string{s.Name: free}, x.precise)[0]
+	return resolveEdges(callerPkg, []string{s.Name}, x.nodeSet, map[string][]string{s.Name: x.nonMethods(s.Name)}, x.precise)[0]
 }
 
-// rustTypeSite types a Rust method call's receiver: a crate type makes it a
-// typed call on that type; a library type makes it the library's method.
-func rustTypeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
+// nonMethods are the definitions of name that are not some type's member:
+// free functions and types.
+func (x siteIndex) nonMethods(name string) []string {
+	var out []string
+	for _, q := range x.byBase[name] {
+		if !x.isMethod[q] {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// declaredTypeSite types a Rust or Java method call's receiver: a repo type
+// makes it a typed call on that type; a library type makes it the library's
+// method.
+func declaredTypeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 	if s.Kind != CallMember || s.Recv == "" || x.types == nil {
 		return s
 	}
-	t, ext := x.types.rustEval(s.Recv, callerRecv)
+	t, ext := x.types.evalDeclared(s.Recv, callerRecv)
 	switch {
 	case ext:
 		if t == "" {

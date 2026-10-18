@@ -324,18 +324,19 @@ func rustRecvExpr(n content.AST, vars map[string]string) string {
 	return ""
 }
 
-// rustEval evaluates receiver tokens in a method of callerRecv: the crate
-// type the value has (ext false), a library type (ext true; its name, or
-// "" when only its being foreign is known), or ("", false) when unknown.
-func (tt *typeTable) rustEval(expr, callerRecv string) (string, bool) {
-	t := tt.rustEvalRaw(expr, callerRecv)
+// evalDeclared evaluates receiver tokens (Rust, Java) in a method of
+// callerRecv: the repo type the value has (ext false), a library type (ext
+// true; its name, or "" when only its being foreign is known), or ("",
+// false) when unknown.
+func (tt *typeTable) evalDeclared(expr, callerRecv string) (string, bool) {
+	t := tt.evalDeclaredRaw(expr, callerRecv)
 	if strings.HasPrefix(t, rustExt) {
 		return strings.TrimPrefix(t, rustExt+":"), true
 	}
 	return t, false
 }
 
-func (tt *typeTable) rustEvalRaw(expr, callerRecv string) string {
+func (tt *typeTable) evalDeclaredRaw(expr, callerRecv string) string {
 	toks := strings.Fields(expr)
 	if len(toks) == 0 {
 		return ""

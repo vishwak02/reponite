@@ -313,7 +313,11 @@ func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, l
 				}
 				continue
 			}
-			add(CallSite{Name: qc.Name, Kind: CallMember})
+			cs := CallSite{Name: qc.Name, Kind: CallMember}
+			if lang == "java" && qc.Chain == 2 {
+				cs.Recv = qc.Qualifier // typed later from the method's variables or its class's fields
+			}
+			add(cs)
 		}
 	}
 	return out

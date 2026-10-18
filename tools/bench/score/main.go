@@ -396,6 +396,7 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 	}
 	var callers []loc
 	want := map[loc]map[loc]bool{}
+	allowed := map[loc]map[loc]bool{} // ~ lines: possible runtime targets
 	var cur loc
 	for _, ln := range strings.Split(string(b), "\n") {
 		t := strings.TrimSpace(ln)
@@ -403,16 +404,24 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 			continue
 		}
 		f := strings.Fields(t)
+		opt := f[0] == "~"
+		if opt {
+			f = f[1:]
+		}
 		if len(f) < 2 {
 			continue
 		}
 		if !strings.HasPrefix(ln, " ") {
 			cur = parse(f)
 			callers = append(callers, cur)
-			want[cur] = map[loc]bool{}
+			want[cur], allowed[cur] = map[loc]bool{}, map[loc]bool{}
 			continue
 		}
-		want[cur][parse(f)] = true
+		if opt {
+			allowed[cur][parse(f)] = true
+		} else {
+			want[cur][parse(f)] = true
+		}
 	}
 	st, err := sqlite.Open(storeDir + "/" + repo + "/index.db")
 	must(err)
@@ -429,6 +438,33 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 		l := loc{p, s, baseOf(q)}
 		at[q] = l
 		byLoc[l] = q
+	}
+	// a golden line is the declaration's own line; a symbol's span may start
+	// at its annotations or doc attributes a few lines above
+	canon := func(l loc) loc {
+		for d := 0; d <= 8; d++ {
+			c := loc{l.path, l.line - d, l.name}
+			if _, ok := byLoc[c]; ok {
+				return c
+			}
+		}
+		return l
+	}
+	for _, c := range callers {
+		w, a := map[loc]bool{}, map[loc]bool{}
+		for x := range want[c] {
+			w[canon(x)] = true
+		}
+		for x := range allowed[c] {
+			a[canon(x)] = true
+		}
+		cc := canon(c)
+		delete(want, c)
+		delete(allowed, c)
+		want[cc], allowed[cc] = w, a
+	}
+	for i, c := range callers {
+		callers[i] = canon(c)
 	}
 	snap := st.Snapshot(repo, ref)
 	prec := map[string]ratio{}
@@ -452,7 +488,7 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 			bd := band(e.Confidence)
 			r := prec[bd]
 			r.Total++
-			if want[c][to] {
+			if want[c][to] || allowed[c][to] {
 				r.Hit++
 			} else {
 				falses = append(falses, fmt.Sprintf("[%s %.2f] %s:%d %s -> %s:%d %s", e.ResolutionMethod, e.Confidence,

@@ -1,0 +1,77 @@
+# spring-boot-realworld-example-app (Java) at ee17e31. Written by reading
+# each method: for every caller, every call it makes (lambdas included) to a
+# method or constructor defined in the repo. A constructor call names the
+# class's declaration line. Methods Lombok generates (getters) have no source
+# and are not listed. A line starting with ~ is a possible runtime target of
+# an interface call (an implementation): allowed, not required.
+
+src/main/java/io/spring/api/ArticleApi.java:36 article
+  src/main/java/io/spring/application/ArticleQueryService.java:42 findBySlug
+  src/main/java/io/spring/api/ArticleApi.java:81 articleResponse
+  ~ src/main/java/io/spring/api/exception/ResourceNotFoundException.java:7 ResourceNotFoundException
+
+src/main/java/io/spring/api/ArticleApi.java:45 updateArticle
+  src/main/java/io/spring/core/article/ArticleRepository.java:11 findBySlug
+  ~ src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:49 findBySlug
+  src/main/java/io/spring/core/service/AuthorizationService.java:8 canWriteArticle
+  src/main/java/io/spring/api/exception/NoAuthorizationException.java:7 NoAuthorizationException
+  src/main/java/io/spring/application/article/ArticleCommandService.java:30 updateArticle
+  src/main/java/io/spring/api/ArticleApi.java:81 articleResponse
+  src/main/java/io/spring/application/ArticleQueryService.java:42 findBySlug
+  ~ src/main/java/io/spring/api/exception/ResourceNotFoundException.java:7 ResourceNotFoundException
+
+src/main/java/io/spring/api/ArticleApi.java:66 deleteArticle
+  src/main/java/io/spring/core/article/ArticleRepository.java:11 findBySlug
+  ~ src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:49 findBySlug
+  src/main/java/io/spring/core/service/AuthorizationService.java:8 canWriteArticle
+  src/main/java/io/spring/api/exception/NoAuthorizationException.java:7 NoAuthorizationException
+  src/main/java/io/spring/core/article/ArticleRepository.java:13 remove
+  ~ src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:54 remove
+  ~ src/main/java/io/spring/api/exception/ResourceNotFoundException.java:7 ResourceNotFoundException
+
+src/main/java/io/spring/api/ArticleApi.java:81 articleResponse
+
+src/main/java/io/spring/application/article/ArticleCommandService.java:18 createArticle
+  src/main/java/io/spring/core/article/Article.java:17 Article
+  src/main/java/io/spring/core/article/ArticleRepository.java:7 save
+  ~ src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:21 save
+
+src/main/java/io/spring/application/article/ArticleCommandService.java:30 updateArticle
+  src/main/java/io/spring/core/article/Article.java:51 update
+  src/main/java/io/spring/core/article/ArticleRepository.java:7 save
+  ~ src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:21 save
+
+src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:21 save
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:12 findById
+  src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:29 createNew
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:22 update
+
+src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:29 createNew
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:14 findTag
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:16 insertTag
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:18 insertArticleTagRelation
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:10 insert
+
+src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:44 findById
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:12 findById
+
+src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:49 findBySlug
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:20 findBySlug
+
+src/main/java/io/spring/infrastructure/repository/MyBatisArticleRepository.java:54 remove
+  src/main/java/io/spring/infrastructure/mybatis/mapper/ArticleMapper.java:24 delete
+
+src/main/java/io/spring/application/ArticleQueryService.java:30 findById
+  src/main/java/io/spring/infrastructure/mybatis/readservice/ArticleReadService.java:12 findById
+  src/main/java/io/spring/application/ArticleQueryService.java:175 fillExtraInfo
+
+src/main/java/io/spring/application/ArticleQueryService.java:42 findBySlug
+  src/main/java/io/spring/infrastructure/mybatis/readservice/ArticleReadService.java:14 findBySlug
+  src/main/java/io/spring/application/ArticleQueryService.java:175 fillExtraInfo
+
+src/main/java/io/spring/application/ArticleQueryService.java:54 findRecentArticlesWithCursor
+  src/main/java/io/spring/infrastructure/mybatis/readservice/ArticleReadService.java:37 findArticlesWithCursor
+  src/main/java/io/spring/application/CursorPager.java:7 CursorPager
+  src/main/java/io/spring/application/CursorPageParameter.java:21 isNext
+  src/main/java/io/spring/infrastructure/mybatis/readservice/ArticleReadService.java:27 findArticles
+  src/main/java/io/spring/application/ArticleQueryService.java:125 fillExtraInfo

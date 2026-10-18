@@ -74,6 +74,8 @@ func (mi moduleIndex) resolve(lang, callerPath, module string) (string, bool) {
 		return mi.resolvePython(callerPath, module)
 	case lang == "rust":
 		return "", false // use paths are resolved by their first segment (rustModules)
+	case lang == "java":
+		return mi.resolveJava(callerPath, module)
 	case fileModuleLangs[lang]:
 		return mi.resolveJS(callerPath, module)
 	}
@@ -221,4 +223,25 @@ func qualifyModule(pkg, local string) string {
 		}
 	}
 	return qualify(pkg, local)
+}
+
+// resolveJava is the directory of a Java package (io.spring.core ->
+// .../io/spring/core). The same package can sit in several source sets
+// (src/main/java, src/test/java): the one nearest the importing file wins.
+func (mi moduleIndex) resolveJava(callerPath, pkg string) (string, bool) {
+	suffix := strings.ReplaceAll(pkg, ".", "/")
+	best, bestShared := "", -1
+	for d := range mi.dirs {
+		if d != suffix && !strings.HasSuffix(d, "/"+suffix) {
+			continue
+		}
+		shared := 0
+		for shared < len(d) && shared < len(callerPath) && d[shared] == callerPath[shared] {
+			shared++
+		}
+		if shared > bestShared || shared == bestShared && d < best {
+			best, bestShared = d, shared
+		}
+	}
+	return best, bestShared >= 0
 }

@@ -35,6 +35,9 @@ type Symbol struct {
 	CallSites []CallSite
 	// Bases are the base classes a class names (Python, JS/TS), as written.
 	Bases []QualifiedCall
+	// Vars are a Java method's parameters and locals with their declared
+	// types, for typing the receivers of its calls.
+	Vars map[string]string
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -184,7 +187,12 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	if recv == "" && r.ScopedDefs {
 		recv = declScope(fn, r) // out-of-class C++ definition: void A::f()
 	}
+	var vars map[string]string
+	if r.Name == "java" {
+		vars = javaVarTypes(fn)
+	}
 	return Symbol{
+		Vars:           vars,
 		Name:           nameOf(fn, r),
 		Recv:           recv,
 		Kind:           kind,
