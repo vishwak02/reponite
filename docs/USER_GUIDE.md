@@ -463,6 +463,36 @@ file's own), and a JSX element or template tag is a call edge — `context CartP
 components it renders, `usages CartItem` where it is rendered. `query.UIEdges` returns the
 same render / handler / API edges as a flat list for other queries.
 
+### HTTP routes — which client call reaches which handler — `routes`
+
+```bash
+reponite routes                          # every server route, with the client calls that reach it
+reponite routes /api/articles            # one endpoint: its handler and every caller
+reponite routes --gateway caddy.json     # follow requests through a reverse proxy's mounts
+reponite routes --tests                  # also routes only test code serves
+```
+
+Server routes are read per framework, with the full path as served — every mount and
+group prefix above a route is followed, across files and packages:
+
+| Language | Frameworks |
+|---|---|
+| Go | `net/http`, gin, echo, chi, gorilla/mux, fiber, httprouter (groups and sub-routers through variables, function parameters and packages) |
+| JavaScript / TypeScript | Express (routers, `app.use` mounts across imports), NestJS controllers, Next.js `app/` and `pages/` route files |
+| Python | Django `path`/`re_path`/`url` through `include()`, DRF routers with the methods each view, viewset or `@api_view` serves; FastAPI and Flask routers and blueprints with their prefixes across modules |
+| Java / Kotlin | Spring MVC and WebFlux mappings, JAX-RS `@Path` with `@GET`/`@POST`/… |
+
+Client calls (`fetch`, axios or any client object's `get`/`post`/…, `requests`, `httpx`, test
+clients) are resolved from literals, template strings, f-strings, concatenation and named URL
+constants, then paired with routes by path and method. A route whose mount prefix could not be
+followed is marked partial — its path is the part below the mount. A route defined only in
+test code (a test server, a stand-in for another service) is left out unless `--tests` is
+given, and marked `(test server)` when it is.
+
+Measured on the benchmark apps (Go/gin, Express, Django REST, Spring Boot, FastAPI): every
+endpoint found with its method, full path and handler, and no extra routes
+(`tools/bench`, `score -routes`).
+
 ### Trace — "what happens when …", end to end
 
 `trace` walks the call graph from an entry DOWN (what it sets off) or UP (how execution gets
@@ -975,7 +1005,7 @@ reponite <command> [arguments] [flags]
 | `topics [name]` | ROS publisher ↔ subscriber / service / action graph, with launch-declared bindings and rviz displays |
 | `logsite "<log line>"` | Which code printed a log line (format strings matched with placeholders filled) |
 | `impls <Base[::method]>` | Subclasses and plugins of a base class across repos, and their overrides |
-| `routes [path]` | HTTP edges: client calls linked to the server routes that serve them |
+| `routes [path]` | HTTP edges: client calls linked to the server routes that serve them; `--gateway`, `--tests` |
 | `why <symbol> [ref]` | Commits that changed it (git log -L per indexed ref), PR/issue, first ref shipping each, compat history |
 | `errors ["<message>"\|Type\|status] [ref]` | Producers of an error and the handlers that catch it, and catalogue entries that define it as data; no argument = error catalogue |
 | `tests <symbol> [ref]` | Tests exercising it (call graph, HTTP, references), framework, and the command to run just those |

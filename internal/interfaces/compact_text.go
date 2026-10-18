@@ -93,8 +93,15 @@ func RoutesText(r query.RoutesResult) string {
 	var b strings.Builder
 	for _, l := range r.Links {
 		rt := l.Route
-		fmt.Fprintf(&b, "%s /%s → %s  %s [%s]\n", rt.Method, strings.TrimPrefix(rt.Pattern, "/"), rt.Handler,
-			where(rt.Repo, rt.Path, rt.Line), rt.Framework)
+		note := ""
+		if rt.Partial {
+			note += " (a mount prefix above it is unresolved)"
+		}
+		if rt.Test {
+			note += " (test server)"
+		}
+		fmt.Fprintf(&b, "%s /%s → %s  %s [%s]%s\n", rt.Method, strings.TrimPrefix(rt.Pattern, "/"), rt.Handler,
+			where(rt.Repo, rt.Path, rt.Line), rt.Framework, note)
 		for _, c := range l.Clients {
 			fmt.Fprintf(&b, "    ← %s %s  %s (in %s)\n", c.Method, c.URL, where(c.Repo, c.Path, c.Line), c.In)
 		}

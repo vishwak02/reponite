@@ -9,6 +9,36 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 ## [Unreleased]
 
+### Measured accuracy
+
+#### Added
+
+- **`tools/bench`**: ground-truth extractors (Go `go/types`, Python `ast`, the TypeScript
+  checker), hand-written route lists for five public apps, and a scorer that prints
+  precision and recall per repo. Current results are in `docs/quality-plan.md`.
+- **`routes` reads each framework's routing**: Go `net/http`, gin, echo, chi, gorilla/mux,
+  fiber and httprouter with group prefixes across packages; Express routers and mounts across
+  imports, NestJS, Next.js route files; FastAPI/Flask routers with prefixes across modules;
+  Django `include()` chains with each DRF view's methods; Spring and JAX-RS annotations.
+  The same routes feed `map`, `trace`, `explain` and `models`.
+- **`routes --tests`** (MCP `tests="true"`) lists routes only test code serves; they are
+  hidden by default. Text output marks test servers and routes whose mount prefix is
+  unresolved.
+
+#### Changed
+
+- **Call edges (IndexVer 13)**: Go is type-checked when the module builds offline; Python
+  and JS/TS symbols are qualified by module (`pkg.module.func`); a call resolves only within
+  its language family; a name the index cannot pin down is stored as external or ambiguous
+  instead of a guessed edge. Reindex to pick it up — answers from older refs say so.
+- **Scope**: inside a repo, fleet-wide commands answer for that repo's workspace, not every
+  repo ever indexed on the machine.
+
+#### Fixed
+
+- `routes` listed FastAPI routes five times, lost gin group prefixes, missed Spring entirely
+  and reported logger calls as routes.
+
 ### A new dashboard
 
 #### Added

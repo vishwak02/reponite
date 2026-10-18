@@ -93,3 +93,39 @@ Flask (Python library), sealed-secrets (Go + Helm chart) and move_base_flex
 ## Status
 
 Updated as phases land; the scorecard output is the source of truth.
+
+| Phase | State |
+|---|---|
+| 1. Benchmark and scorecard | Ground truth for Go, Python and TypeScript call graphs; golden route lists for five apps; scorer with call-graph and route modes. Golden files for Java/Rust/C++ call edges, ROS and config flow not yet written. |
+| 2. Scope | Inside a repo the default registry is that repo's workspace; fleet-wide is opt-in. Test-only routes hidden by default. |
+| 3. Accuracy fixes | Call edges: type-checked Go, module-qualified Python/JS/TS ids, language-family filtering, colliding unresolved names stored as external/ambiguous. Routes: one engine shared by `routes`, `map`, `trace`, `explain` and `models`. Open: Rust associated functions, Python methods inherited through `self`, constructor calls of classes passed as values. |
+| 4. Packs | Not started. |
+| 5. Private regression | Route engine run on private repositories: all differences were fixes or intended test-route exclusions. Not yet automated. |
+| 6. Gate and docs | Not started. |
+
+### Scorecard
+
+Call edges marked resolved (confidence ≥ 0.85), against the type checker / AST truth:
+
+| Repo | Language | Definitions | Resolved precision | Recall (static) |
+|---|---|---|---|---|
+| golang-gin-realworld-example-app | Go | 100% (167) | 100% (404) | 100% (404) |
+| sealed-secrets | Go | 99.7% (348/349) | 100% (505) | 100% (505) |
+| flask | Python | 99.2% (901/908) | 100% (237) | 98.8% (255/258) |
+| django-realworld-example-app | Python | 100% (108) | 100% (7) | 100% (7) |
+| full-stack-fastapi-template | Python | 100% (162) | 100% (207) | 100% (207) |
+| full-stack-fastapi-template | TypeScript | 100% (266) | 100% (476) | 100% (476) |
+| node-express-realworld-example-app | TypeScript | 100% (32) | 100% (34) | 100% (34) |
+
+Routes, against the golden endpoint lists:
+
+| App | Endpoints | Path + method recall | Precision | Handler names |
+|---|---|---|---|---|
+| golang-gin-realworld-example-app | 20 | 100% | 100% | 100% |
+| node-express-realworld-example-app | 20 | 100% | 100% | n/a |
+| django-realworld-example-app | 20 | 100% | 100% | 100% |
+| spring-boot-realworld-example-app | 19 | 100% | 100% | 100% |
+| full-stack-fastapi-template | 23 | 100% | 100% | 100% |
+
+Before the route engine: Spring 0 routes, gin group prefixes lost, Express 8 of 19
+endpoints, FastAPI routes listed five times, DRF methods unknown.
