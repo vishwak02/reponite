@@ -121,7 +121,11 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 			case containsStr(r.ScopeDecl, t):
 				// A scope block (e.g. Rust `impl T`) qualifies its nested methods by
 				// its own name, but is not itself a symbol.
-				walk(child, nameOf(child, r))
+				scope := nameOf(child, r)
+				if r.Name == "rust" {
+					scope = rustImplType(child) // impl Trait for T: T, not Trait
+				}
+				walk(child, scope)
 			default:
 				walk(child, enclosing)
 			}
@@ -159,6 +163,9 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		callees = calleesWithRules(body, r)
 		qcalls = qualifiedCallsWithRules(body, r)
 		localImports = Imports(body, r)
+		if r.Name == "rust" {
+			sites = rustCallSites(body, rustVarTypes(fn, enclosing))
+		}
 		if r.CallSiteKinds {
 			var vars map[string]string
 			if r.Name == "cpp" {

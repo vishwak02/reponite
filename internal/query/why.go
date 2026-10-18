@@ -596,6 +596,9 @@ func qidOwner(qid string) string {
 // looksLikeMethod: the span's first line declares base as some type's method
 // (Go "func (r T) base(", C++ "T::base(").
 func looksLikeMethod(f File, sp SymbolSpan, base string) bool {
+	if strings.HasSuffix(f.Path, ".rs") {
+		return rustImplOwner(f, sp) != "" // a fn in an impl block
+	}
 	if fileModuleStem(f.Path) != "" && nestedInClass(f, sp) {
 		return true // a def/method inside a class body
 	}
@@ -607,6 +610,11 @@ func looksLikeMethod(f File, sp SymbolSpan, base string) bool {
 // it is nested in or defined out of (Class::name), or — in Python and
 // JavaScript, whose module is the file — the module the file is.
 func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
+	if strings.HasSuffix(f.Path, ".rs") {
+		if o := rustImplOwner(f, sp); o != "" {
+			return o == owner
+		}
+	}
 	if fileModuleStem(f.Path) == owner && !nestedInClass(f, sp) {
 		return true
 	}
@@ -668,6 +676,10 @@ func fileModuleStem(p string) string {
 	ext := b[i:]
 	switch strings.ToLower(path.Ext(b)) {
 	case ".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte":
+	case ".rs":
+		if s := b[:i]; s == "mod" || s == "lib" || s == "main" {
+			return ""
+		}
 	default:
 		return ""
 	}

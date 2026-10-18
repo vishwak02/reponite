@@ -368,7 +368,7 @@ var jsGlobals = map[string]bool{
 // method — the object is at least as likely to be a builtin.
 var memberBuiltins = map[string]map[string]bool{
 	"cpp": stdMembers, "c": stdMembers,
-	"javascript": jsMembers, "typescript": jsMembers,
+	"javascript": jsMembers, "typescript": jsMembers, "rust": rustMembers,
 	"python": {"append": true, "extend": true, "insert": true, "remove": true, "pop": true, "clear": true, "copy": true,
 		"count": true, "index": true, "sort": true, "reverse": true, "get": true, "items": true, "keys": true, "values": true,
 		"update": true, "setdefault": true, "add": true, "discard": true, "split": true, "join": true, "strip": true,
@@ -492,3 +492,16 @@ func aliasInRepo(module string, dirs map[string]bool) bool {
 
 // isTypeName: an identifier written like a class (CamelCase).
 func isTypeName(s string) bool { return s != "" && s[0] >= 'A' && s[0] <= 'Z' }
+
+// rustMembers are methods every standard type has (Vec, Option, Result,
+// String, iterators, Clone/ToString…): on a value of unknown type they are
+// not proven to be the crate's own method of that name.
+var rustMembers = map[string]bool{"new": true, "len": true, "is_empty": true, "push": true, "pop": true, "insert": true,
+	"remove": true, "get": true, "get_mut": true, "contains": true, "iter": true, "iter_mut": true, "into_iter": true,
+	"map": true, "filter": true, "collect": true, "unwrap": true, "expect": true, "unwrap_or": true, "ok": true,
+	"err": true, "clone": true, "to_string": true, "to_owned": true, "as_ref": true, "as_str": true, "into": true,
+	"from": true, "push_str": true, "join": true, "split": true, "trim": true, "starts_with": true, "ends_with": true,
+	"extend": true, "clear": true, "first": true, "last": true, "next": true, "send": true, "recv": true, "lock": true,
+	"read": true, "write": true, "flush": true, "fmt": true, "eq": true, "cmp": true, "partial_cmp": true, "hash": true,
+	"default": true, "build": true, "run": true, "spawn": true, "take": true, "as_path": true, "display": true,
+	"is_some": true, "is_none": true, "is_ok": true, "is_err": true, "and_then": true, "map_err": true, "sort": true}

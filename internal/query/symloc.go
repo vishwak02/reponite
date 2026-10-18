@@ -512,3 +512,65 @@ func firstSentence(s string) string {
 	}
 	return s
 }
+
+// rustImplOwner is the type whose impl block encloses span sp in a Rust
+// file: Batch for a fn inside `impl Batch {`, Foo inside `impl<T> Trait for
+// Foo<T> {`. "" for a free function (or one in a mod block).
+func rustImplOwner(f File, sp SymbolSpan) string {
+	if !strings.HasSuffix(f.Path, ".rs") {
+		return ""
+	}
+	lines := strings.Split(f.Content, "\n")
+	if sp.StartLine < 1 || sp.StartLine > len(lines) {
+		return ""
+	}
+	indent := func(s string) int { return len(s) - len(strings.TrimLeft(s, " \t")) }
+	fnIndent := indent(lines[sp.StartLine-1])
+	for i := sp.StartLine - 2; i >= 0; i-- {
+		ln := lines[i]
+		t := strings.TrimSpace(ln)
+		if t == "" || indent(ln) >= fnIndent {
+			continue
+		}
+		// the first line above at a lower indentation opens the enclosing block
+		if strings.HasPrefix(t, "impl") && (len(t) == 4 || t[4] == ' ' || t[4] == '<') {
+			return rustImplTypeText(t)
+		}
+		if strings.HasPrefix(t, "}") || strings.HasPrefix(t, "#[") || strings.HasPrefix(t, "//") || strings.HasPrefix(t, "where") {
+			continue // attributes, comments and where clauses sit between impl and fn
+		}
+		return ""
+	}
+	return ""
+}
+
+// rustImplTypeText reads the implemented type from an impl header's text.
+func rustImplTypeText(h string) string {
+	h = strings.TrimSpace(strings.TrimPrefix(h, "impl"))
+	if strings.HasPrefix(h, "<") { // impl<'a, T: X<Y>>
+		depth := 0
+		for i := 0; i < len(h); i++ {
+			if h[i] == '<' {
+				depth++
+			} else if h[i] == '>' {
+				depth--
+				if depth == 0 {
+					h = strings.TrimSpace(h[i+1:])
+					break
+				}
+			}
+		}
+	}
+	if i := strings.Index(h, " for "); i >= 0 {
+		h = strings.TrimSpace(h[i+5:])
+	}
+	end := strings.IndexAny(h, "<{ \t")
+	if end >= 0 {
+		h = h[:end]
+	}
+	h = strings.TrimLeft(h, "&")
+	if i := strings.LastIndex(h, "::"); i >= 0 {
+		h = h[i+2:]
+	}
+	return h
+}

@@ -190,9 +190,11 @@ type siteIndex struct {
 	methods    map[string][]string // bare name -> qids that are methods (have a receiver)
 	pkgOfQID   map[string]string   // qid -> package (directory)
 	isTest     map[string]bool     // qid -> defined in test code
+	isMethod   map[string]bool     // qid -> defined with a receiver (a method, an associated function)
 	precise    map[string]string   // base -> type-proven qid (Go only; nil here)
 	types      *typeTable          // C++ classes/fields/bases (nil: none in the ref)
 	classes    *classGraph         // Python/JS/TS classes by module, bases resolved through imports
+	rust       *rustCrate          // Rust module tree (nil: no Rust in the ref)
 	callerPkg  string
 	callerTest bool
 }
@@ -214,7 +216,7 @@ const (
 
 // bareNameSkipsClass: languages whose unqualified call is looked up in the
 // function's and module's scope, not the enclosing class's.
-var bareNameSkipsClass = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true}
+var bareNameSkipsClass = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true, "rust": true}
 
 // siteKindRank orders a name's call-site kinds when one function calls the same
 // name several ways: the most specific claim about the target wins.
@@ -235,9 +237,13 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	best := map[string]CallSite{}
 	var order []string
 	for _, s := range sites {
-		s = typeSite(s, callerRecv, x)
+		if lang == "rust" {
+			s = rustTypeSite(s, callerRecv, x)
+		} else {
+			s = typeSite(s, callerRecv, x)
+		}
 		key := s.Name
-		if s.Kind == CallTyped || s.Kind == CallModule || s.Scope == superScope {
+		if s.Kind == CallTyped || s.Kind == CallModule || s.Kind == CallScoped || s.Scope == superScope {
 			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
 		}
 		cur, ok := best[key]
@@ -319,8 +325,30 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(memberCalleeLang(name, lang, x))
 				continue
 			}
+			if lang == "rust" {
+				add(rustPlainCallee(callerPkg, s, x))
+				continue
+			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
 		case CallScoped:
+			if lang == "rust" {
+				// Type::f(): an associated function or method of that type.
+				// No impl of it in the crate: a library type (Vec::new) or a
+				// trait's default — never another type's f of the same name.
+				scope := s.Scope
+				if scope == "Self" {
+					scope = callerRecv
+				}
+				switch q, ok := pickOne(x.byRecv[scope+"."+name], x); {
+				case ok:
+					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				case len(x.byRecv[scope+"."+name]) > 1:
+					add(query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}) // types of one name in two modules
+				default:
+					add(query.Callee{Name: scope + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+				}
+				continue
+			}
 			if externalScopes[s.Root] {
 				add(query.Callee{Name: s.Root + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 				continue
@@ -504,4 +532,46 @@ func langFamily(lang string) string {
 // and Python library keywords.
 func canCall(caller, target string) bool {
 	return caller == target || caller == "robot" && target == "python"
+}
+
+// rustPlainCallee resolves f() and path::f() in Rust. A bare name is a free
+// function (a method needs self., Self:: or Type::); a path into another
+// crate is external; a path into the crate is the function of that module.
+func rustPlainCallee(callerPkg string, s CallSite, x siteIndex) query.Callee {
+	if s.Root != "" && (x.rust == nil || !x.rust.firsts[s.Root]) {
+		return query.Callee{Name: s.Root + "::" + s.Name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
+	}
+	if s.Scope != "" {
+		if pkg, ok := x.rust.resolveModule(callerPkg, s.Scope); ok {
+			if q := qualifyModule(pkg, s.Name); x.nodeSet[q] {
+				return query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved}
+			}
+		}
+	}
+	var free []string
+	for _, q := range x.byBase[s.Name] {
+		if !x.isMethod[q] {
+			free = append(free, q)
+		}
+	}
+	return resolveEdges(callerPkg, []string{s.Name}, x.nodeSet, map[string][]string{s.Name: free}, x.precise)[0]
+}
+
+// rustTypeSite types a Rust method call's receiver: a crate type makes it a
+// typed call on that type; a library type makes it the library's method.
+func rustTypeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
+	if s.Kind != CallMember || s.Recv == "" || x.types == nil {
+		return s
+	}
+	t, ext := x.types.rustEval(s.Recv, callerRecv)
+	switch {
+	case ext:
+		if t == "" {
+			t = "extern"
+		}
+		return CallSite{Name: s.Name, Kind: CallExternal, Scope: t}
+	case t != "":
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t}
+	}
+	return s
 }

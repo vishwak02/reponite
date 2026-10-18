@@ -1,0 +1,106 @@
+# fd (Rust) at dbfe46b. Written by reading each function: for every caller,
+# every call it makes (closures included) to a function or method defined in
+# the crate, as the callee's definition line. Calls into std and other crates
+# are not listed.
+
+src/main.rs:80 run
+  src/cli.rs:779 gen_completions
+  src/main.rs:121 print_completions
+  src/main.rs:136 set_working_dir
+  src/cli.rs:697 search_paths
+  src/main.rs:174 ensure_search_pattern_is_not_a_path
+  src/main.rs:223 build_pattern_regex
+  src/main.rs:253 construct_config
+  src/main.rs:526 ensure_use_hidden_option_for_leading_dot_pattern
+  src/main.rs:546 build_regex
+  src/walk.rs:717 scan
+
+src/main.rs:136 set_working_dir
+  src/filesystem.rs:38 is_existing_directory
+
+src/main.rs:174 ensure_search_pattern_is_not_a_path
+  src/main.rs:190 ensure_single_search_pattern_is_not_a_path
+
+src/main.rs:190 ensure_single_search_pattern_is_not_a_path
+
+src/main.rs:223 build_pattern_regex
+
+src/main.rs:400 extract_command
+  src/main.rs:417 determine_ls_command
+  src/exec/mod.rs:51 new_batch
+
+src/main.rs:526 ensure_use_hidden_option_for_leading_dot_pattern
+  src/regex_helper.rs:40 pattern_matches_strings_with_leading_dot
+
+src/main.rs:546 build_regex
+
+src/walk.rs:53 new
+
+src/walk.rs:68 into_iter
+  src/walk.rs:59 lock
+
+src/walk.rs:81 new
+  src/walk.rs:53 new
+
+src/walk.rs:100 send
+  src/walk.rs:59 lock
+  src/walk.rs:90 needs_flush
+  src/walk.rs:53 new
+
+src/walk.rs:152 new
+
+src/walk.rs:173 process
+  src/walk.rs:197 poll
+
+src/walk.rs:183 recv
+
+src/walk.rs:197 poll
+  src/walk.rs:183 recv
+  src/walk.rs:269 stream
+  src/walk.rs:251 print
+  src/walk.rs:281 stop
+  src/walk.rs:295 flush
+
+src/walk.rs:251 print
+  src/output.rs:17 print_entry
+  src/walk.rs:295 flush
+
+src/walk.rs:269 stream
+  src/walk.rs:251 print
+  src/walk.rs:295 flush
+
+src/walk.rs:281 stop
+  src/walk.rs:269 stream
+
+src/walk.rs:295 flush
+
+src/walk.rs:317 new
+
+src/walk.rs:329 build_overrides
+
+src/walk.rs:346 build_walker
+  src/walk.rs:329 build_overrides
+
+src/walk.rs:407 receive
+  src/exec/mod.rs:72 in_batch_mode
+  src/exec/job.rs:45 batch
+  src/exec/job.rs:10 job
+  src/exit_codes.rs:46 merge_exitcodes
+  src/walk.rs:152 new
+  src/walk.rs:173 process
+
+src/walk.rs:606 scan
+  src/walk.rs:346 build_walker
+  src/config.rs:140 is_printing
+  src/exit_codes.rs:31 exit
+  src/walk.rs:407 receive
+  src/walk.rs:442 spawn_senders
+
+src/walk.rs:647 broken_symlink_from_err
+  src/dir_entry.rs:36 broken_symlink
+
+src/walk.rs:688 search_str_for_entry
+
+src/walk.rs:717 scan
+  src/walk.rs:317 new
+  src/walk.rs:606 scan

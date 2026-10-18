@@ -95,6 +95,8 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 			ext = ".py"
 		case strings.HasSuffix(path, ".tsx"):
 			ext = ".tsx"
+		case strings.HasSuffix(path, ".rs"):
+			ext = ".rs"
 		}
 		rules, _ := RulesForExt(ext)
 		root, spans, err := parseFileRules([]byte(src), ext, rules)
@@ -102,7 +104,7 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 			t.Fatal(err)
 		}
 		parsed = append(parsed, ParsedFile{Path: path, Content: src, Lang: rules.Name,
-			Symbols: Extract(root, rules, 1), Spans: spans, Imports: Imports(root, rules)})
+			Symbols: Extract(root, rules, 1), Spans: spans, Imports: Imports(root, rules), Types: typeFactsFor(root, rules)})
 	}
 	m := storage.NewMem()
 	if err := IndexFiles(m, "r", "v1", 1, parsed); err != nil {
@@ -270,4 +272,109 @@ class User(Base):
 	if _, self := edges["auth.renderers.User.render"]["auth.renderers.User.render"]; self {
 		t.Error("super(User, self).render() resolved to the caller itself")
 	}
+}
+
+// Rust: Type::f() is that type's function — twelve types with a new() are
+// twelve targets, not one; Self::, self., trait impls and paths into other
+// crates each resolve by their own rule.
+func TestRustCallSiteResolution(t *testing.T) {
+	files := map[string]string{
+		"src/walk.rs": `pub struct Walker { n: usize }
+impl Walker {
+    pub fn new() -> Self { Self::with(0) }
+    fn with(n: usize) -> Self { Walker { n } }
+    pub fn run(&self) { self.step(); helper(); crate::filter::matches(); std::mem::drop(1); }
+    fn step(&self) { let v: Vec<u8> = Vec::new(); v.len(); }
+}
+impl std::fmt::Display for Walker {
+    fn fmt(&self) { self.step(); }
+}
+fn helper() {}
+pub fn scan() { Walker::new().run(); }
+struct State;
+impl State { fn scan(&self) { scan(); } }
+`,
+		"src/main.rs": `mod walk;
+mod filter;
+fn main() { walk::scan(); filter::size::parse(); scan_all(); }
+fn scan_all() {}
+`,
+		"src/filter/size.rs": `pub fn parse() {}
+`,
+		"src/filter.rs": `pub struct Filter;
+impl<T> Filter { pub fn new() -> Self { Filter } }
+pub fn matches() -> bool { let w = crate::walk::Walker::new(); let f = Filter::new(); true }
+`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["src.walk.Walker.run"]
+	if run == nil {
+		t.Fatalf("Walker.run not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, run, "src.walk.Walker.step", MethodResolved)
+	wantMethod(t, run, "src.walk.helper", MethodResolved)
+	wantMethod(t, run, "src.filter.matches", MethodResolved)
+	wantMethod(t, run, "std::drop", MethodExternal)
+	wantMethod(t, edges["src.walk.Walker.new"], "src.walk.Walker.with", MethodResolved)
+	wantMethod(t, edges["src.walk.Walker.fmt"], "src.walk.Walker.step", MethodResolved) // impl Trait for Walker
+	m := edges["src.filter.matches"]
+	wantMethod(t, m, "src.walk.Walker.new", MethodResolved)
+	wantMethod(t, m, "src.filter.Filter.new", MethodResolved) // impl<T> Filter
+	mn := edges["src.main"]
+	if mn == nil {
+		t.Fatalf("main not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, mn, "src.walk.scan", MethodResolved) // the module's function, not State.scan
+	wantMethod(t, mn, "src/filter.size.parse", MethodResolved)
+	wantMethod(t, edges["src.walk.State.scan"], "src.walk.scan", MethodResolved) // a bare call is never a method
+	step := edges["src.walk.Walker.step"]
+	wantMethod(t, step, "Vec::new", MethodExternal)
+	for name := range step {
+		if strings.HasSuffix(name, ".new") {
+			t.Errorf("Vec::new() pinned on a crate type: %s", name)
+		}
+	}
+}
+
+// Rust method calls typed by their receiver: self's fields, parameters,
+// let bindings, constructors' return types; a library value's method is the
+// library's even when the crate defines a method of that name.
+func TestRustReceiverTyping(t *testing.T) {
+	files := map[string]string{
+		"src/batch.rs": `pub struct Batch { items: Vec<u8> }
+impl Batch {
+    pub fn new() -> Self { Batch { items: vec![] } }
+    pub fn lock(&self) -> bool { true }
+}
+pub struct Sender { batch: Batch, limit: usize }
+impl Sender {
+    pub fn build() -> Result<Sender> { Ok(Sender { batch: Batch::new(), limit: 1 }) }
+    pub fn threads(&self) -> usize { self.limit }
+    fn send(&mut self, other: &Batch) {
+        self.batch.lock();
+        other.lock();
+        let b = Batch::new();
+        b.lock();
+        let s = Sender::build()?;
+        s.threads();
+        let mut builder = WalkBuilder::new();
+        builder.threads(4);
+        builder.hidden(true).lock();
+        let v: Vec<u8> = Vec::new();
+        v.lock();
+        Sender::build().unwrap().threads();
+    }
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	send := edges["src.batch.Sender.send"]
+	if send == nil {
+		t.Fatalf("Sender.send not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, send, "src.batch.Batch.lock", MethodTyped)
+	wantMethod(t, send, "src.batch.Sender.threads", MethodTyped)
+	wantMethod(t, send, "WalkBuilder::threads", MethodExternal)
+	wantMethod(t, send, "Vec::lock", MethodExternal)
+	wantMethod(t, send, "extern::lock", MethodExternal) // on what a library method returned
 }

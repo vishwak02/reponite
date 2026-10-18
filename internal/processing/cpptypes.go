@@ -55,6 +55,14 @@ var ptrMembers = map[string]bool{"Ptr": true, "ConstPtr": true, "SharedPtr": tru
 var typeNodeTypes = []string{"type_identifier", "qualified_identifier", "template_type", "primitive_type",
 	"sized_type_specifier", "placeholder_type_specifier", "struct_specifier", "class_specifier"}
 
+// typeFactsFor is a file's type facts, for the languages that have them.
+func typeFactsFor(root content.AST, r LangRules) *TypeFacts {
+	if r.Name == "rust" && root != nil {
+		return RustTypeFacts(root)
+	}
+	return CppTypeFacts(root, r)
+}
+
 // CppTypeFacts collects a C++ file's class, field, base, alias and method
 // return-type facts; nil for other languages.
 func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {

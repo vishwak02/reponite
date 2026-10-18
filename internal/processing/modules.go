@@ -13,7 +13,7 @@ import (
 )
 
 // fileModuleLangs are the languages whose module is the file.
-var fileModuleLangs = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true}
+var fileModuleLangs = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true, "rust": true}
 
 var jsExts = []string{".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte"}
 
@@ -27,6 +27,9 @@ func pkgOfFile(p, lang string) string {
 	stem := moduleStem(p)
 	if stem == "" || stem == "__init__" || stem == "index" {
 		return dir
+	}
+	if lang == "rust" && (stem == "mod" || stem == "lib" || stem == "main") {
+		return dir // the directory's module, or the crate root
 	}
 	return qualify(dir, stem)
 }
@@ -69,6 +72,8 @@ func (mi moduleIndex) resolve(lang, callerPath, module string) (string, bool) {
 	switch {
 	case lang == "python":
 		return mi.resolvePython(callerPath, module)
+	case lang == "rust":
+		return "", false // use paths are resolved by their first segment (rustModules)
 	case fileModuleLangs[lang]:
 		return mi.resolveJS(callerPath, module)
 	}

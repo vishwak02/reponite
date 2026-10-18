@@ -84,10 +84,15 @@ func main() {
 	ref := flag.String("ref", "HEAD", "indexed ref")
 	tf := flag.String("truth", "", "ground truth JSON")
 	rf := flag.String("routes", "", "golden endpoint list (tools/bench/golden/routes): score routes instead")
+	cf := flag.String("calls", "", "golden call list (tools/bench/golden/calls): score those callers' edges instead")
 	jsonOut := flag.Bool("json", false, "print JSON")
 	flag.Parse()
 	if *rf != "" {
 		scoreRoutes(*storeDir, *repo, *ref, *rf)
+		return
+	}
+	if *cf != "" {
+		scoreCalls(*storeDir, *repo, *ref, *cf)
 		return
 	}
 	var t truth
@@ -365,3 +370,126 @@ func normPath(p string) string {
 	return "/" + strings.Join(segs, "/")
 }
 
+// scoreCalls compares the edges of hand-picked callers with a golden list
+// that names, for each caller, every function of the repo it calls:
+//
+//	src/main.rs:80 run
+//	  src/walk.rs:717 scan
+//
+// Locations are definition lines. Since each caller's list is complete, an
+// edge reponite draws from a listed caller to a repo symbol not in its list is
+// false. Edges to names reponite left unresolved (external, ambiguous) are
+// neither: they are counted as recall misses when the golden lists a target.
+func scoreCalls(storeDir, repo, ref, golden string) {
+	b, err := os.ReadFile(golden)
+	must(err)
+	type loc struct {
+		path string
+		line int
+		name string
+	}
+	parse := func(f []string) loc {
+		pl := strings.SplitN(f[0], ":", 2)
+		var n int
+		fmt.Sscanf(pl[1], "%d", &n)
+		return loc{pl[0], n, f[1]}
+	}
+	var callers []loc
+	want := map[loc]map[loc]bool{}
+	var cur loc
+	for _, ln := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(ln)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		f := strings.Fields(t)
+		if len(f) < 2 {
+			continue
+		}
+		if !strings.HasPrefix(ln, " ") {
+			cur = parse(f)
+			callers = append(callers, cur)
+			want[cur] = map[loc]bool{}
+			continue
+		}
+		want[cur][parse(f)] = true
+	}
+	st, err := sqlite.Open(storeDir + "/" + repo + "/index.db")
+	must(err)
+	defer st.Close()
+	files := st.Files(repo, ref)
+	// every symbol by its definition place
+	at := map[string]loc{}
+	byLoc := map[loc]string{}
+	for q := range st.SymbolsAt(repo, ref) {
+		p, s, _, ok := query.LocateSymbol(files, q)
+		if !ok {
+			continue
+		}
+		l := loc{p, s, baseOf(q)}
+		at[q] = l
+		byLoc[l] = q
+	}
+	snap := st.Snapshot(repo, ref)
+	prec := map[string]ratio{}
+	var recall, recallResolved ratio
+	var falses, misses []string
+	for _, c := range callers {
+		q, ok := byLoc[c]
+		if !ok {
+			misses = append(misses, fmt.Sprintf("caller not found: %s:%d %s", c.path, c.line, c.name))
+			recall.Total += len(want[c])
+			recallResolved.Total += len(want[c])
+			continue
+		}
+		got := map[loc]float64{}
+		for _, e := range snap.Callees[q] {
+			to, ok := at[e.Name]
+			if !ok {
+				continue // an unresolved name, not a symbol
+			}
+			got[to] = e.Confidence
+			bd := band(e.Confidence)
+			r := prec[bd]
+			r.Total++
+			if want[c][to] {
+				r.Hit++
+			} else {
+				falses = append(falses, fmt.Sprintf("[%s %.2f] %s:%d %s -> %s:%d %s", e.ResolutionMethod, e.Confidence,
+					c.path, c.line, c.name, to.path, to.line, to.name))
+			}
+			prec[bd] = r
+		}
+		for w := range want[c] {
+			recall.Total++
+			recallResolved.Total++
+			conf, ok := got[w]
+			if ok {
+				recall.Hit++
+			}
+			if ok && conf >= 0.85 {
+				recallResolved.Hit++
+			} else {
+				how := "missing"
+				if ok {
+					how = fmt.Sprintf("at %.2f", conf)
+				}
+				misses = append(misses, fmt.Sprintf("%s %s:%d %s -> %s:%d %s", how, c.path, c.line, c.name, w.path, w.line, w.name))
+			}
+		}
+	}
+	sort.Strings(falses)
+	sort.Strings(misses)
+	fmt.Printf("%s@%s calls (%d callers, %d golden edges)\n", repo, ref, len(callers), recall.Total)
+	for _, bd := range []string{"resolved(>=0.85)", "medium(0.6-0.85)", "low(<0.6)"} {
+		fmt.Printf("  edge precision %-17s %s\n", bd, prec[bd])
+	}
+	fmt.Printf("  recall (any confidence)  %s\n", recall)
+	fmt.Printf("  recall (resolved)        %s\n", recallResolved)
+	for _, x := range falses {
+		fmt.Printf("  FALSE  %s\n", x)
+	}
+	for _, x := range misses {
+		fmt.Printf("  MISSED %s\n", x)
+	}
+}

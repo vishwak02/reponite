@@ -152,7 +152,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	nodeSet := make(map[string]bool, len(order))
 	x := siteIndex{nodeSet: nodeSet, byBase: byBase, byRecv: map[string][]string{},
-		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, types: newTypeTable(files)}
+		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
 	for _, qid := range order {
 		nodeSet[qid] = true
 		c := byQID[qid]
@@ -162,6 +162,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			key := c.sym.Recv + "." + c.sym.Name
 			x.byRecv[key] = append(x.byRecv[key], qid)
 			x.methods[c.sym.Name] = append(x.methods[c.sym.Name], qid)
+			x.isMethod[qid] = true
 		}
 	}
 
@@ -176,6 +177,15 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepo, modPkg))
 	}
 	x.classes = classes
+	var rsPaths []string
+	for _, f := range files {
+		if f.Lang == "rust" {
+			rsPaths = append(rsPaths, f.Path)
+		}
+	}
+	if len(rsPaths) > 0 {
+		x.rust = newRustCrate(rsPaths)
+	}
 
 	// A call resolves only to a definition its language can call: a Python
 	// logger.info() must never land on a shell function info() elsewhere in the
@@ -221,6 +231,8 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		nodeSet, byBase := v.nodeSet, v.byBase
 		if c.lang == "go" && len(c.sym.QualifiedCalls) > 0 {
 			callees = resolveGoCalls(c.pkg, c.sym.Recv, c.sym.QualifiedCalls, c.imports, goMods, x, precise[qid])
+		} else if len(c.sym.CallSites) > 0 && c.lang == "rust" {
+			callees = resolveSiteEdgesLang(c.pkg, c.sym.Recv, c.lang, c.sym.CallSites, x)
 		} else if len(c.sym.CallSites) > 0 {
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
