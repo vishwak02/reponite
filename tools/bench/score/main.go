@@ -61,6 +61,30 @@ type Score struct {
 
 type ratio struct{ Hit, Total int }
 
+var minPrecision, minRecall float64
+var gateFailed []string
+
+// gate records a failure when r is below min percent (min < 0: no gate; an
+// empty ratio passes).
+func gate(what string, r ratio, min float64) {
+	if min < 0 || r.Total == 0 {
+		return
+	}
+	if pct := 100 * float64(r.Hit) / float64(r.Total); pct+1e-9 < min {
+		gateFailed = append(gateFailed, fmt.Sprintf("%s %.1f%% < %.1f%%", what, pct, min))
+	}
+}
+
+func gateExit() {
+	if len(gateFailed) == 0 {
+		return
+	}
+	for _, g := range gateFailed {
+		fmt.Printf("  GATE FAILED: %s\n", g)
+	}
+	os.Exit(1)
+}
+
 func (r ratio) String() string {
 	if r.Total == 0 {
 		return "n/a"
@@ -86,7 +110,10 @@ func main() {
 	rf := flag.String("routes", "", "golden endpoint list (tools/bench/golden/routes): score routes instead")
 	cf := flag.String("calls", "", "golden call list (tools/bench/golden/calls): score those callers' edges instead")
 	jsonOut := flag.Bool("json", false, "print JSON")
+	flag.Float64Var(&minPrecision, "min-precision", -1, "gate: exit 1 when precision of resolved edges (or routes) is below this percent")
+	flag.Float64Var(&minRecall, "min-recall", -1, "gate: exit 1 when recall (static edges, golden calls at any confidence, or method+path routes) is below this percent")
 	flag.Parse()
+	defer gateExit()
 	if *rf != "" {
 		scoreRoutes(*storeDir, *repo, *ref, *rf)
 		return
@@ -226,6 +253,8 @@ func main() {
 		fmt.Printf("  edge precision %-17s %s%s\n", bd, sc.Edges[bd], u)
 	}
 	fmt.Printf("  edge recall (static)   %s\n", sc.EdgeRecall)
+	gate("resolved edge precision", sc.Edges["resolved(>=0.85)"], minPrecision)
+	gate("static edge recall", sc.EdgeRecall, minRecall)
 	fmt.Printf("  reponite symbols with no definition at their place: %d\n", sc.Unmapped)
 	for _, x := range sc.FalseEdges {
 		fmt.Printf("  FALSE  %s\n", x)
@@ -344,6 +373,8 @@ func scoreRoutes(storeDir, repo, ref, golden string) {
 	fmt.Printf("  method+path recall     %s\n", ratio{exactHit, len(want)})
 	fmt.Printf("  precision              %s\n", ratio{matched, len(got)})
 	fmt.Printf("  handler names          %s\n", ratio{handlerHit, handlerTotal})
+	gate("route precision", ratio{matched, len(got)}, minPrecision)
+	gate("method+path recall", ratio{exactHit, len(want)}, minRecall)
 	sort.Strings(missing)
 	sort.Strings(extra)
 	for _, m := range missing {
@@ -533,6 +564,8 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 		fmt.Printf("  edge precision %-17s %s\n", bd, prec[bd])
 	}
 	fmt.Printf("  recall (any confidence)  %s\n", recall)
+	gate("resolved edge precision", prec["resolved(>=0.85)"], minPrecision)
+	gate("golden call recall", recall, minRecall)
 	fmt.Printf("  recall (resolved)        %s\n", recallResolved)
 	for _, x := range falses {
 		fmt.Printf("  FALSE  %s\n", x)

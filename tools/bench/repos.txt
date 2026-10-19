@@ -1,0 +1,15 @@
+# The benchmark: public repositories at pinned commits, and what each is
+# scored on. Columns: name, clone URL, commit, checks.
+#   go / py / ts   call graph against the type checker / ast truth (tools/bench/gt)
+#   routes         routes against golden/routes/<name>.txt
+#   calls          golden call list golden/calls/<name>.txt
+# Gate: resolved precision 100%; recall per check as listed in run.sh.
+golang-gin-realworld-example-app   https://github.com/gothinkster/golang-gin-realworld-example-app.git   626c372d259472148d93303f74aa9b9a1cdcef24  go,routes
+sealed-secrets                     https://github.com/bitnami-labs/sealed-secrets.git                    19227f367fd9f6833dd005bba04a3da98789fb30  go
+flask                              https://github.com/pallets/flask.git                                  d086db856be187255b8ec61ef409357393020f32  py
+django-realworld-example-app       https://github.com/gothinkster/django-realworld-example-app.git       29c9d42831fa0cfc5a4aa7561f674396eacf20a2  py,routes
+full-stack-fastapi-template        https://github.com/fastapi/full-stack-fastapi-template.git            b1125d8839482cb7bbae603ddc6d0081bf87532e  py,ts,routes
+node-express-realworld-example-app https://github.com/gothinkster/node-express-realworld-example-app.git 30b68e1e881462b2f4164ea09ab4c4f5699c7b0b  ts,routes
+spring-boot-realworld-example-app  https://github.com/gothinkster/spring-boot-realworld-example-app.git  ee17e31aafe733d98c4853c8b9a74d7f2f6c924a  routes,calls
+fd                                 https://github.com/sharkdp/fd.git                                     dbfe46bd1d068a7e5b41086298ce23052c8d521f  calls
+move_base_flex                     https://github.com/magazino/move_base_flex.git                        bf203603fbe81e0f1f2e54ca2380e067cefca4a5  calls
