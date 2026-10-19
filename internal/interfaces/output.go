@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 var CompactOutput bool
 
 func marshal(v interface{}) (string, error) {
+	v = emptyNotNull(v)
 	if CompactOutput {
 		b, err := json.Marshal(v)
 		return string(b), err
@@ -890,4 +892,55 @@ func LoadGateways(paths, upstreams string) (query.RoutesOptions, error) {
 		}
 	}
 	return opt, nil
+}
+
+// emptyNotNull returns v with every nil slice in it (struct fields, slice
+// elements, through pointers) made empty, so a list with no entries is []
+// in the JSON, never null — a client iterating it must not have to check.
+// Fields marked omitempty are dropped either way.
+func emptyNotNull(v interface{}) interface{} {
+	if v == nil {
+		return v
+	}
+	rv := reflect.ValueOf(v)
+	cp := reflect.New(rv.Type()).Elem()
+	cp.Set(rv)
+	fillNilSlices(cp, 0)
+	return cp.Interface()
+}
+
+func fillNilSlices(v reflect.Value, depth int) {
+	if depth > 32 {
+		return
+	}
+	switch v.Kind() {
+	case reflect.Ptr:
+		if !v.IsNil() {
+			fillNilSlices(v.Elem(), depth+1)
+		}
+	case reflect.Interface:
+		if !v.IsNil() && v.CanSet() {
+			inner := v.Elem()
+			cp := reflect.New(inner.Type()).Elem()
+			cp.Set(inner)
+			fillNilSlices(cp, depth+1)
+			v.Set(cp)
+		}
+	case reflect.Struct:
+		for i := 0; i < v.NumField(); i++ {
+			if f := v.Field(i); f.CanSet() {
+				fillNilSlices(f, depth+1)
+			}
+		}
+	case reflect.Slice:
+		if v.IsNil() {
+			if v.CanSet() && v.Type().Elem().Kind() != reflect.Uint8 {
+				v.Set(reflect.MakeSlice(v.Type(), 0, 0))
+			}
+			return
+		}
+		for i := 0; i < v.Len(); i++ {
+			fillNilSlices(v.Index(i), depth+1)
+		}
+	}
 }

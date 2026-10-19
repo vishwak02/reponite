@@ -399,9 +399,22 @@ func reposFor(s Store, repo string) []string {
 // code-intelligence queries aren't drowned in test noise.
 func SearchName(s Store, repo, ref, substr string, includeTests bool) []SearchHit {
 	hits := []SearchHit{}
+	// smart case: an all-lowercase query matches any case (handle finds
+	// stageClickHandler); a query with a capital letter matches exactly
+	fold := strings.ToLower(substr) == substr
 	for _, rp := range reposFor(s, repo) {
 		for name, sym := range s.SymbolsAt(rp, ref) {
-			if !strings.Contains(name, substr) {
+			// the symbol's own names (class, function): not the directories
+			// above it, nor the first segment after them (the directory or
+			// module the symbol lives in)
+			own := name[strings.LastIndex(name, "/")+1:]
+			if i := strings.IndexByte(own, '.'); i >= 0 {
+				own = own[i+1:]
+			}
+			if fold {
+				own = strings.ToLower(own)
+			}
+			if !strings.Contains(own, substr) {
 				continue
 			}
 			test := IsTestSymbol(sym, name)
