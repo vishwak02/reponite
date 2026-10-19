@@ -487,6 +487,11 @@ func (s *Store) ClearRef(repo, ref string) error {
 		return nil
 	}
 	return s.withTx(func(tx *sql.Tx) error {
+		// the ref is incomplete until its indexing finishes and sets the
+		// ruleset again: an interrupted re-index must not read as a full one
+		if _, err := tx.Exec(`UPDATE refs_v2 SET index_ver=0 WHERE id=?`, id); err != nil {
+			return err
+		}
 		for _, t := range []string{"ref_syms", "ref_files_v2", "ref_ext_refs", "ref_monikers", "ref_skipped"} {
 			if _, err := tx.Exec(`DELETE FROM `+t+` WHERE ref_id=?`, id); err != nil {
 				return err

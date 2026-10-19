@@ -46,7 +46,7 @@ func (f *fleetStore) Close() {
 func openFleet(local bool) *fleetStore {
 	localRepo := repoName(".")
 	if local {
-		st := openStore(".")
+		st := openIndexedStore(".")
 		return &fleetStore{Store: st, closers: []*sqlite.Store{st}, Names: []string{localRepo}, Local: localRepo}
 	}
 
@@ -67,7 +67,7 @@ func openFleet(local bool) *fleetStore {
 		if seen[repo] {
 			continue
 		}
-		if dir == "." && len(dirs) > 0 {
+		if dir == "." {
 			// the working directory joins the fleet only when it is indexed:
 			// running a query from any other folder must not create an empty
 			// store for it and report it as a searched repo

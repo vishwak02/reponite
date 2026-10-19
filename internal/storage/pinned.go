@@ -176,10 +176,10 @@ func DefaultPins(s query.Store, pins map[string]string) (map[string]string, int)
 			continue
 		}
 		refs := s.Refs(repo)
-		if len(refs) == 0 || containsRef(refs, "HEAD") {
+		if len(refs) == 0 || containsRef(refs, "HEAD") && completeRef(s, repo, "HEAD") {
 			continue
 		}
-		if r := newestRef(refs); r != "" {
+		if r := newestRef(withoutRef(refs, "HEAD")); r != "" {
 			out[repo] = r
 			added++
 		}
@@ -265,4 +265,25 @@ func preferredBranch(refs []string) string {
 		}
 	}
 	return best
+}
+
+// completeRef: the ref's indexing finished (a ruleset is recorded). A HEAD
+// left half-written by an interrupted re-index is not the repo's code.
+func completeRef(s query.Store, repo, ref string) bool {
+	iv, ok := s.(query.IndexVersioner)
+	if !ok {
+		return true
+	}
+	v, ok := iv.IndexVersion(repo, ref)
+	return !ok || v > 0
+}
+
+func withoutRef(refs []string, drop string) []string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		if r != drop {
+			out = append(out, r)
+		}
+	}
+	return out
 }

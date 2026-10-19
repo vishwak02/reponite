@@ -59,3 +59,13 @@ func repoName(dir string) string {
 	}
 	return filepath.Base(abs)
 }
+
+// openIndexedStore opens the index of the repo at dir for reading; with no
+// index there it stops with what to do, instead of creating an empty store
+// that every later fleet query would count as a repo.
+func openIndexedStore(dir string) *sqlite.Store {
+	if _, err := os.Stat(dbPathFor(dir)); err != nil {
+		fail(fmt.Errorf("no index for %s (looked for %s): run `reponite index %s` first, or set %s to where the index is", repoName(dir), dbPathFor(dir), dir, storeDirEnv))
+	}
+	return openStore(dir)
+}

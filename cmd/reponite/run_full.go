@@ -430,7 +430,7 @@ func cmdDiff(args []string) {
 		fail(fmt.Errorf("usage: reponite diff <from-ref> <to-ref> [--changed-only] [--package P] [--confidence-min F]"))
 	}
 	opt := query.DiffOptions{ChangedOnly: changedOnly, Package: pkg, MinConfidence: conf}
-	st := openStore(".")
+	st := openIndexedStore(".")
 	defer st.Close()
 	printJSON(interfaces.DiffJSON(query.DiffRefsBy(st, repoName("."), pos[0], pos[1], opt)))
 }
@@ -514,7 +514,7 @@ func cmdCICheck(args []string) {
 	if baseRef == "" || headRef == "" {
 		fail(fmt.Errorf("usage: reponite ci-check --base <ref> --head <ref>"))
 	}
-	st := openStore(".")
+	st := openIndexedStore(".")
 	defer st.Close()
 	repo := repoName(".")
 
@@ -652,7 +652,7 @@ func cmdVerifyEdit(args []string) {
 	if err != nil {
 		fail(err)
 	}
-	st := openStore(".")
+	st := openIndexedStore(".")
 	defer st.Close()
 	repo := repoName(".")
 	var oldContent string
@@ -877,7 +877,7 @@ func cmdRootCauseTrace(args []string) {
 	if err != nil {
 		fail(err)
 	}
-	st := openStore(".")
+	st := openIndexedStore(".")
 	defer st.Close()
 	printJSON(interfaces.RootCauseTraceJSON(query.RootCauseTrace(st, repoName("."), fromRef, toRef, string(data))))
 }
@@ -906,7 +906,7 @@ func cmdContext(args []string) {
 
 func cmdRefs(args []string) {
 	parseCmd("refs", "refs", args, nil)
-	st := openStore(".")
+	st := openIndexedStore(".")
 	defer st.Close()
 	repo := repoName(".")
 	printJSON(interfaces.RefsJSON(repo, st.Refs(repo)))

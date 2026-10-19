@@ -47,7 +47,9 @@ func staleIndexWarnings(s Store, repo, ref string, m Meta) []string {
 		return nil
 	}
 	if repo != FleetRepo && repo != "" {
-		if v, ok := iv.IndexVersion(repo, m.Ref); ok && v < version.IndexVer {
+		if v, ok := iv.IndexVersion(repo, m.Ref); ok && v == 0 {
+			return []string{fmt.Sprintf("%s@%s is incomplete: its indexing did not finish (interrupted, or still running), so answers miss part of it; reindex the ref", repo, m.Ref)}
+		} else if ok && v < version.IndexVer {
 			return []string{fmt.Sprintf("%s@%s was indexed by an older reponite (ruleset v%d; this build is v%d): what newer rules extract — more file kinds, edges and links — is missing from it; reindex the ref",
 				repo, m.Ref, v, version.IndexVer)}
 		}

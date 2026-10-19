@@ -26,8 +26,8 @@ func newSymbolParser() func(path, content string) []query.EditedSymbol {
 
 // autoIndexOnMount keeps a mounted MCP server's index current. With no index yet
 // it indexes HEAD synchronously, so the first tool calls aren't silently empty.
-// If an index already exists (e.g. from a prior session) it refreshes HEAD in
-// the BACKGROUND — so restarting the agent picks up the current working tree
+// If HEAD (the working tree) is already indexed it refreshes it in the
+// BACKGROUND; a repo indexed only at git revisions is left as it is — so restarting the agent picks up the current working tree
 // without a manual `reponite index` and without blocking startup. This fixes the
 // stale-mount trap (an agent got confident answers about outdated code). Note:
 // a background refresh briefly re-clears the ref, so that repo's results can be
@@ -40,6 +40,15 @@ func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
 			fmt.Fprintln(os.Stderr, "reponite: auto-index failed:", err)
 		}
 		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
+		return
+	}
+	hasHead := false
+	for _, r := range st.Refs(repo) {
+		hasHead = hasHead || r == "HEAD"
+	}
+	if !hasHead {
+		// indexed only at chosen revisions (index --git): the working tree
+		// may be any branch, and reading it would replace those answers
 		return
 	}
 	go func() {
