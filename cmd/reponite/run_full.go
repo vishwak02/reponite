@@ -439,7 +439,9 @@ func cmdGrep(args []string) {
 	var fixed bool
 	var limit, offset int
 	var local bool
+	var scopeFlag string
 	pos := parseCmd("grep", "grep <pattern> [ref] [--fixed] [--limit N] [--offset N] [--local] [--no-tests]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		fs.BoolVar(&fixed, "fixed", false, "treat the pattern as a literal string, not a regex")
 		fs.IntVar(&limit, "limit", 0, "max matches returned (0 = default 50, -1 = all)")
 		fs.IntVar(&offset, "offset", 0, "matches to skip — page through a truncated result")
@@ -451,7 +453,7 @@ func cmdGrep(args []string) {
 	}
 	f := openFleet(local)
 	defer f.Close()
-	res, err := query.GrepRepo(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed, Limit: limit, Offset: offset})
+	res, err := query.GrepRepo(f, scopeRepo(scopeFlag), arg(pos, 1, "HEAD"), pos[0], query.GrepOptions{Fixed: fixed, Limit: limit, Offset: offset})
 	if err != nil {
 		fail(err)
 	}
@@ -462,7 +464,9 @@ func cmdGrep(args []string) {
 func cmdSearch(args []string) {
 	var tests bool
 	var local bool
+	var scopeFlag string
 	pos := parseCmd("search", "search <substr> [ref] [--tests] [--local] [--no-tests]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		fs.BoolVar(&tests, "tests", false, "include test symbols (Test*/Benchmark*/…)")
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 		registerNoTests(fs)
@@ -473,9 +477,9 @@ func cmdSearch(args []string) {
 	}
 	f := openFleet(local)
 	defer f.Close()
-	hits := query.SearchName(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], tests)
+	hits := query.SearchName(f, scopeRepo(scopeFlag), arg(pos, 1, "HEAD"), pos[0], tests)
 	if len(hits) == 0 && !tests {
-		if n := len(query.SearchName(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], true)); n > 0 {
+		if n := len(query.SearchName(f, scopeRepo(scopeFlag), arg(pos, 1, "HEAD"), pos[0], true)); n > 0 {
 			fmt.Fprintf(os.Stderr, "reponite search: no non-test symbol matches %q; %d test symbol(s) do — add --tests\n", pos[0], n)
 		}
 	}
@@ -555,7 +559,9 @@ func cmdCICheck(args []string) {
 func cmdSemSearch(args []string) {
 	var limit int
 	var local bool
+	var scopeFlag string
 	pos := parseCmd("semsearch", "semsearch <query> [ref] [--limit N] [--local] [--no-tests]\n  Ranks symbols by KEYWORD similarity (term-idf over identifiers and bodies) unless an embeddings\n  endpoint is configured (REPONITE_EMBED_ENDPOINT + REPONITE_EMBED_MODEL, neural build): it is not\n  semantic search by default. Per-repo term indexes are cached next to each index.", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		fs.IntVar(&limit, "limit", 0, "max results (0 = default)")
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 		registerNoTests(fs)
@@ -566,7 +572,7 @@ func cmdSemSearch(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	ranker, why := semanticRankerWhy()
-	res := query.SemanticSearchCached(f, query.FleetRepo, arg(pos, 1, "HEAD"), pos[0], limit, ranker,
+	res := query.SemanticSearchCached(f, scopeRepo(scopeFlag), arg(pos, 1, "HEAD"), pos[0], limit, ranker,
 		&termCache{store: f, noTests: hideTests()})
 	if ranker == nil {
 		res.Note = joinNote(res.Note, why)
@@ -676,7 +682,9 @@ func (r *refFlags) register(fs *flag.FlagSet) {
 func cmdUsages(args []string) {
 	var local bool
 	var rf refFlags
+	var scopeFlag string
 	pos := parseCmd("usages", "usages <symbol> [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 		rf.register(fs)
@@ -688,7 +696,7 @@ func cmdUsages(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.Usages(s, query.FleetRepo, rf.ref, pos[0])
+	res := query.Usages(s, scopeRepo(scopeFlag), rf.ref, pos[0])
 	res.Note = joinNote(res.Note, cov)
 	if outFormat == "text" {
 		fmt.Print(interfaces.UsagesText(res))
@@ -702,7 +710,9 @@ func cmdLogSite(args []string) {
 	var local bool
 	var limit int
 	var rf refFlags
+	var scopeFlag string
 	pos := parseCmd("logsite", "logsite \"<log line>\" [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		fs.BoolVar(&local, "local", false, "search only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 10, "max sites")
 		rf.register(fs)
@@ -713,7 +723,7 @@ func cmdLogSite(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.LogSites(s, query.FleetRepo, rf.ref, strings.Join(pos, " "), limit)
+	res := query.LogSites(s, scopeRepo(scopeFlag), rf.ref, strings.Join(pos, " "), limit)
 	res.Note = joinNote(res.Note, cov)
 	printJSON(interfaces.LogSitesJSON(res))
 }
@@ -724,7 +734,9 @@ func cmdImpls(args []string) {
 	var local bool
 	var limit int
 	var rf refFlags
+	var scopeFlag string
 	pos := parseCmd("impls", "impls <Base | Base::method | Base.method> [--ref R] [--refs repo=ref,...] [--limit N] [--local]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.IntVar(&limit, "limit", 50, "max classes")
@@ -737,7 +749,7 @@ func cmdImpls(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.Impls(s, query.FleetRepo, rf.ref, pos[0], limit)
+	res := query.Impls(s, scopeRepo(scopeFlag), rf.ref, pos[0], limit)
 	res.Note = joinNote(res.Note, cov)
 	if outFormat == "text" {
 		fmt.Print(interfaces.ImplsText(res))
@@ -754,7 +766,9 @@ func cmdRoutes(args []string) {
 	var gateways, upstreams string
 	var rf refFlags
 	var testRoutes bool
+	var scopeFlag string
 	pos := parseCmd("routes", "routes [path substring] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--limit N] [--local] [--tests]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		fs.BoolVar(&testRoutes, "tests", false, "also list routes only test code serves (test servers, test doubles of other services)")
 		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
@@ -776,7 +790,7 @@ func cmdRoutes(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.RoutesWith(s, query.FleetRepo, rf.ref, filter, limit, opt)
+	res := query.RoutesWith(s, scopeRepo(scopeFlag), rf.ref, filter, limit, opt)
 	res.Note = joinNote(res.Note, cov)
 	if outFormat == "text" {
 		fmt.Print(interfaces.RoutesText(res))
@@ -791,7 +805,9 @@ func cmdRoutes(args []string) {
 func cmdTopics(args []string) {
 	var local bool
 	var rf refFlags
+	var scopeFlag string
 	pos := parseCmd("topics", "topics [name] [--ref R] [--refs repo=ref,...] [--local]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		registerFormat(fs)
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		rf.register(fs)
@@ -802,9 +818,9 @@ func cmdTopics(args []string) {
 	s, cov := f.view(rf.ref, rf.pins)
 	var res query.CommGraphResult
 	if len(pos) >= 1 {
-		res = query.Topic(s, query.FleetRepo, rf.ref, pos[0])
+		res = query.Topic(s, scopeRepo(scopeFlag), rf.ref, pos[0])
 	} else {
-		res = query.CommGraph(s, query.FleetRepo, rf.ref)
+		res = query.CommGraph(s, scopeRepo(scopeFlag), rf.ref)
 	}
 	res.Note = joinNote(res.Note, cov)
 	if outFormat == "text" {
@@ -902,7 +918,9 @@ func cmdUI(args []string) {
 	var budget int
 	var format, gateways, upstreams string
 	var rf refFlags
+	var scopeFlag string
 	pos := parseCmd("ui", "ui [page-route | component] [ref] [--uses] [--budget N] [--format json|text] [--gateway caddy.json,...] [--upstream host:port=repo,...] [--ref R] [--refs repo=ref,...] [--local] [--no-tests]", args, func(fs *flag.FlagSet) {
+		fs.StringVar(&scopeFlag, "repo", "", "only this repo of the fleet (default: every registered repo)")
 		fs.BoolVar(&local, "local", false, "scan only this repo instead of the registered fleet")
 		fs.BoolVar(&uses, "uses", false, "list where the component is rendered, passed or routed to")
 		fs.IntVar(&budget, "budget", 0, "token budget (0 = default ~3000)")
@@ -926,7 +944,7 @@ func cmdUI(args []string) {
 	f := openFleet(local)
 	defer f.Close()
 	s, cov := f.view(rf.ref, rf.pins)
-	res := query.UI(s, query.FleetRepo, rf.ref, target, query.UIOptions{Budget: budget, Uses: uses, Routes: opt})
+	res := query.UI(s, scopeRepo(scopeFlag), rf.ref, target, query.UIOptions{Budget: budget, Uses: uses, Routes: opt})
 	res.Note = joinNote(res.Note, cov)
 	if format == "text" {
 		fmt.Print(interfaces.UIText(res))
@@ -1072,4 +1090,12 @@ var outFormat = "json"
 
 func registerFormat(fs *flag.FlagSet) {
 	fs.StringVar(&outFormat, "format", "json", "json, or text (compact: grouped, no repeated field names)")
+}
+
+// scopeRepo is the repo a fleet-wide query reads: --repo, or the whole fleet.
+func scopeRepo(r string) string {
+	if r == "" {
+		return query.FleetRepo
+	}
+	return r
 }
