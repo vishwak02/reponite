@@ -152,7 +152,11 @@ func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {
 
 func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	repo, ref := h.repoOr(r), h.refOr(r)
+	// discovery: the whole fleet unless a repo is named, as the CLI and MCP do
+	repo, ref := q.Get("repo"), h.refOr(r)
+	if repo == "" {
+		repo = query.FleetRepo
+	}
 	hits := query.SearchName(h.Store, repo, ref, q.Get("q"), q.Get("tests") == "true")
 	if len(hits) == 0 && q.Get("q") != "" {
 		body, err := SuggestJSON("symbol", q.Get("q"), query.Suggest(h.Store, query.FleetRepo, ref, q.Get("q"), 6))
