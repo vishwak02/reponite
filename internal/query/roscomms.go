@@ -276,8 +276,25 @@ func scanComms(repo, path, content string, spans []SymbolSpan) (eps []CommEndpoi
 	}
 	var callbackTypes map[string]string // lazily built: only when a C++ endpoint needs it
 	lines := strings.Split(content, "\n")
+	// the code without comments and docstrings, line for line: a usage
+	// example in a docstring or a commented-out publisher is not an endpoint
+	blanked := content
+	switch lang {
+	case "py":
+		blanked = blankPyDocstrings(content)
+	case "cpp":
+		blanked = blankJSComments(content) // the same /* */ and // syntax
+	}
+	codeLines := strings.Split(blanked, "\n")
 	for i, line := range lines {
-		code := stripComment(line, lang)
+		src := line
+		if i < len(codeLines) {
+			src = codeLines[i]
+		}
+		code := stripComment(src, lang)
+		if t := strings.TrimSpace(code); lang == "py" && (strings.HasPrefix(t, "class ") || strings.HasPrefix(t, "def ")) {
+			continue // `class ServiceProxy(_Service):` declares, it does not call
+		}
 		for _, id := range commIdioms {
 			if lang == "cpp" && !id.cpp || lang == "py" && !id.py {
 				continue
