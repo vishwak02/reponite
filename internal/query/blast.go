@@ -54,6 +54,17 @@ func BlastRadius(s Store, repo, ref, symbol string) BlastRadiusResult {
 			res.InRepoCallers = append(res.InRepoCallers, c)
 		}
 	}
+	// tests reaching it through a request to the route it serves
+	have := map[string]bool{}
+	for _, t := range res.CoveringTests {
+		have[t] = true
+	}
+	for _, h := range Tests(s, repo, ref, qid, 1, 1<<20).Tests {
+		if h.How == "http" && h.Handle != "" && !have[h.Handle] {
+			have[h.Handle] = true
+			res.CoveringTests = append(res.CoveringTests, h.Handle)
+		}
+	}
 	sort.Strings(res.InRepoCallers)
 	sort.Strings(res.CoveringTests)
 
