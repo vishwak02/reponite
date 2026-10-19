@@ -113,6 +113,13 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 
 	// 1. Target: full body (always attempted; body truncated if it alone overflows).
 	path, span, body, ok := symbolSource(files, qid)
+	if ok {
+		// decorators and annotations above the definition are part of what
+		// an edit must keep (@csrf_exempt, @Override, #[cfg(test)])
+		if pre := decoratorLines(files, path, span.StartLine); pre != "" {
+			body = pre + body
+		}
+	}
 	if n := definitionCount(files, qid); n > 1 {
 		warns = append(warns, fmt.Sprintf("%d overloads share the name %s: their callers and callees are merged, and the body shown is the one at %s:%d", n, baseName(qid), path, span.StartLine))
 	}
@@ -167,6 +174,17 @@ func Brief(s Store, repo, ref, symbol string, tokenBudget int, intent IntentProv
 	}
 	if callersDropped {
 		res.Omitted = append(res.Omitted, "callers(budget)")
+	}
+	// tests reaching it through a request to the route it serves
+	have := map[string]bool{}
+	for _, t := range tests {
+		have[t] = true
+	}
+	for _, h := range Tests(s, repo, ref, qid, 1, 1<<20).Tests {
+		if h.How == "http" && h.Handle != "" && !have[h.Handle] {
+			have[h.Handle] = true
+			tests = append(tests, h.Handle)
+		}
 	}
 	sort.Strings(tests)
 	for _, tname := range tests {
@@ -285,4 +303,34 @@ func truncateToTokens(s string, tokens int) string {
 		return s
 	}
 	return s[:max] + "\n… (truncated)"
+}
+
+// decoratorLines are the decorator / annotation / attribute lines directly
+// above a definition's first line (with a trailing newline), "" for none.
+func decoratorLines(files []File, path string, start int) string {
+	for _, f := range files {
+		if f.Path != path {
+			continue
+		}
+		lines := strings.Split(f.Content, "\n")
+		top := start - 1 // 0-based index of the first line kept
+		depth := 0       // closing minus opening brackets seen going up
+		for i := start - 2; i >= 0 && i >= start-60; i-- {
+			t := strings.TrimSpace(lines[i])
+			depth += strings.Count(t, ")") + strings.Count(t, "]") - strings.Count(t, "(") - strings.Count(t, "[")
+			switch {
+			case depth <= 0 && (strings.HasPrefix(t, "@") || strings.HasPrefix(t, "#[")):
+				top, depth = i, 0 // a whole decorator (possibly multi-line)
+			case depth > 0:
+				// inside a decorator's argument list spanning lines
+			default:
+				i = -1
+			}
+		}
+		if top == start-1 {
+			return ""
+		}
+		return strings.Join(lines[top:start-1], "\n") + "\n"
+	}
+	return ""
 }
