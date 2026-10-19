@@ -883,3 +883,33 @@ def test_trigger():
 		t.Errorf("a subclass override reached from Cls.f(): %v", tt)
 	}
 }
+
+// u = User(...).set_password(...) with set_password -> Self: u is a User.
+func TestPythonChainedConstructorSelfReturn(t *testing.T) {
+	files := map[string]string{
+		"auth/data.py": `from typing import Self
+class User:
+    def set_password(self, p) -> Self:
+        return self
+    def validate(self, p) -> Self:
+        return self
+class Token:
+    def validate(self, p):
+        pass
+`,
+		"tests/test_data.py": `from auth.data import User
+def test_passwords():
+    u = User("u").set_password("pass")
+    u.validate("pass")
+def test_save():
+    User("v").set_password("x")
+`,
+	}
+	edges := indexAndEdges(t, files)
+	tp := edges["tests.test_data.test_passwords"]
+	wantMethod(t, tp, "auth.data.User.validate", MethodTyped)
+	if _, bad := tp["auth.data.Token.validate"]; bad {
+		t.Errorf("validate pinned on Token: %v", tp)
+	}
+	wantMethod(t, edges["tests.test_data.test_save"], "auth.data.User.set_password", MethodTyped)
+}

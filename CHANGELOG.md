@@ -69,7 +69,8 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   the checker's verdicts and resolves its other calls by Go's scoping; standard-library
   method names (`Error`, `Write`, `Close`, logger calls) on an unknown receiver are not
   pinned on a repo method. Python `Cls.f()` reaches a classmethod a base defines (never a
-  subclass override). Reindex to pick it up.
+  subclass override); `u = User(...).set_password(...)` with `-> Self` is a `User`, and
+  `User(...).save()` calls `User.save`. Reindex to pick it up.
 - **`ximpact`** takes a qualified library target (`requests.get`, `std::move`) and counts
   only that module's calls; a bare name also finds calls stored as `module::name`, which it
   missed. `--format text` added.

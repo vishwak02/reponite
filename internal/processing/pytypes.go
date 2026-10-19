@@ -21,6 +21,7 @@ const (
 	pyTypeTag    = "t:"
 	pyReturnTag  = "r:"
 	pyFixtureTag = "x:"
+	pyMethodTag  = "m:" // m:<dotted class>#<method>: what Cls(...).method(...) returns
 )
 
 // pyTypeRef is the dotted class a type annotation names: Order, models.Order,
@@ -128,6 +129,25 @@ func pyValueType(v content.AST) string {
 	}
 	if fn == nil || fn.Type() != "identifier" && fn.Type() != "attribute" {
 		return ""
+	}
+	if fn.Type() == "attribute" {
+		// Cls(...).method(...): the method's return, on an instance of Cls
+		var obj, attr content.AST
+		for _, c := range fn.Children() {
+			switch {
+			case !c.IsNamed():
+			case obj == nil:
+				obj = c
+			default:
+				attr = c
+			}
+		}
+		if obj != nil && obj.Type() == "call" && attr != nil {
+			if t := pyValueType(obj); strings.HasPrefix(t, pyTypeTag) {
+				return pyMethodTag + t[len(pyTypeTag):] + "#" + attr.Text()
+			}
+			return ""
+		}
 	}
 	parts := dottedRef(fn)
 	if len(parts) == 0 {
@@ -468,7 +488,13 @@ func (p *pyTyper) returnClass(q string) string {
 	p.returns[q] = "" // a cycle reads as unknown
 	k := ""
 	if c, ok := p.ctx(q); ok && c.returns != "" {
-		k = p.class(c, c.returns)
+		if c.returns == "Self" && c.recv != "" {
+			// -> Self (typing.Self): the class the method is called on; its own
+			// class stands for it
+			k, _ = p.classes.has(c.pkg, c.recv)
+		} else {
+			k = p.class(c, c.returns)
+		}
 	}
 	p.returns[q] = k
 	return k
@@ -486,6 +512,13 @@ func (p *pyTyper) valueClass(c pyCtx, v string) string {
 	case strings.HasPrefix(v, pyFixtureTag):
 		if q := p.fixture(c, v[len(pyFixtureTag):]); q != "" {
 			return p.returnClass(q)
+		}
+	case strings.HasPrefix(v, pyMethodTag):
+		cls, m, _ := strings.Cut(v[len(pyMethodTag):], "#")
+		if k := p.class(c, cls); k != "" {
+			if q, ok := p.classes.method(k, m, false, p.allDefs); ok {
+				return p.returnClass(q)
+			}
 		}
 	}
 	return ""
@@ -581,8 +614,12 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 				}
 			}
 			if !ok && qc.Chain == 3 && qc.Attr == "" {
-				// make_repo().save(): what the function returns
+				// make_repo().save(): what the function returns; User(...).save():
+				// the instance the class constructs
 				v, ok, chain = pyReturnTag+qc.Qualifier, true, 2
+				if isTypeName(qc.Qualifier) {
+					v = pyTypeTag + qc.Qualifier
+				}
 			}
 			if !ok {
 				break
