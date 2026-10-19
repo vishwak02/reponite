@@ -185,9 +185,36 @@ func repoLinks(s Store, repo, ref string) []Link {
 		return "", ""
 	}
 
+	// Python modules by dotted-path suffix ("gwm_core/settings" for
+	// gwm_core/gwm_core/settings.py): settings, INSTALLED_APPS, ROOT_URLCONF,
+	// include("app.urls"), MIDDLEWARE and pytest.ini name modules as strings
+	pyMods := map[string][]string{}
+	for _, f := range files {
+		if !strings.HasSuffix(f.Path, ".py") {
+			continue
+		}
+		mod := strings.TrimSuffix(f.Path, ".py")
+		mod = strings.TrimSuffix(mod, "/__init__")
+		segs := strings.Split(mod, "/")
+		for i := 0; i < len(segs)-1; i++ {
+			k := strings.Join(segs[i:], "/")
+			pyMods[k] = append(pyMods[k], f.Path)
+		}
+	}
+	pyModule := func(dotted string) string {
+		segs := strings.Split(dotted, ".")
+		for n := len(segs); n >= 2; n-- { // a.b.Class: the module a.b
+			if hs := pyMods[strings.Join(segs[:n], "/")]; len(hs) == 1 {
+				return hs[0]
+			}
+		}
+		return ""
+	}
+
 	var out []Link
 	for _, f := range files {
 		cfg := isConfigLike(f.Path)
+		pyRefs := strings.HasSuffix(f.Path, ".py") || cfg || strings.HasSuffix(f.Path, ".ini") || strings.HasSuffix(f.Path, ".cfg")
 		n := 0
 		for i, ln := range strings.Split(f.Content, "\n") {
 			if n >= maxLinksPerFile {
@@ -207,6 +234,16 @@ func repoLinks(s Store, repo, ref string) []Link {
 				if to, how := resolve(f.Path, t.tok, t.pkg); to != "" && !seen[to] {
 					seen[to] = true
 					add("path", to, 0, how)
+				}
+			}
+			if pyRefs && len(pyMods) > 0 && strings.Contains(ln, ".") {
+				for _, re := range []*regexp.Regexp{linkPyDotted, linkPyDottedValue} {
+					for _, m := range re.FindAllStringSubmatch(ln, -1) {
+						if to := pyModule(m[1]); to != "" && to != f.Path && !seen[to] {
+							seen[to] = true
+							add("py-module", to, 0, "dotted")
+						}
+					}
 				}
 			}
 			if len(roles) > 0 && (strings.HasSuffix(f.Path, ".yml") || strings.HasSuffix(f.Path, ".yaml")) {
@@ -465,3 +502,9 @@ func pathTokens(ln string) []pathTok {
 	}
 	return out
 }
+
+var (
+	// "pkg.module" in quotes, or an ini/cfg value `key = pkg.module`
+	linkPyDotted      = regexp.MustCompile(`["']([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)["']`)
+	linkPyDottedValue = regexp.MustCompile(`^\s*[\w.-]+\s*[=:]\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\s*$`)
+)
