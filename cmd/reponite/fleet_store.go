@@ -67,6 +67,14 @@ func openFleet(local bool) *fleetStore {
 		if seen[repo] {
 			continue
 		}
+		if dir == "." && len(dirs) > 0 {
+			// the working directory joins the fleet only when it is indexed:
+			// running a query from any other folder must not create an empty
+			// store for it and report it as a searched repo
+			if _, err := os.Stat(dbPathFor(dir)); err != nil {
+				continue
+			}
+		}
 		seen[repo] = true
 		st := openStore(dir)
 		f.closers = append(f.closers, st)
