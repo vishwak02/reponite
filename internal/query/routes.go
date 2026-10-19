@@ -86,6 +86,7 @@ var (
 	jsFetch      = regexp.MustCompile(`\bfetch\(\s*(.*)`)
 	clientCall   = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?)\.(get|post|put|patch|delete|head|request)\s*(?:<[^()]*>)?\(\s*(.*)`)
 	jsConst      = regexp.MustCompile(`(?:^|[\s,{(])([A-Za-z_$][\w$]*)\s*[:=]\s*(['"` + "`" + `])([^'"` + "`" + `\n]*/[^'"` + "`" + `\n]*)['"` + "`" + `]`)
+	jsSegConst   = regexp.MustCompile(`(?:^|[\s,{(])([A-Z][A-Z0-9_]+)\s*[:=]\s*['"]([\w.:-]+)['"]`)
 	jsObjStart   = regexp.MustCompile(`^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*\{`)
 	jsMethodOpt  = regexp.MustCompile(`method:\s*(?:['"` + "`" + `]|[\w$.]*\.)(\w+)`)
 	// axios(config), instance.request(config), an adapter called with a
@@ -849,6 +850,15 @@ func urlConstants(files []File) map[string]string {
 					put(m[1], m[3])
 					if obj != "" {
 						put(obj+"."+m[1], m[3])
+					}
+				}
+				// a path segment held by a constant (ROUTES = { LOGIN: 'login' }),
+				// used as `/${ROUTES.LOGIN}`: UPPER_CASE names only
+				for _, m := range jsSegConst.FindAllStringSubmatch(ln, -1) {
+					if obj != "" && strings.ToUpper(obj) == obj {
+						put(obj+"."+m[1], m[2])
+					} else if obj == "" {
+						put(m[1], m[2])
 					}
 				}
 			}

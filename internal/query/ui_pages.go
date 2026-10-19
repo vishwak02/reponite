@@ -215,6 +215,7 @@ type routeTagInfo struct {
 	component  string
 	redirect   string
 	resolvable bool
+	inline     bool // render={() => …} with no component: an inline handler
 }
 
 // jsxRoutes reads <Route …> trees (react-router v4–v6 and *Route wrappers).
@@ -245,6 +246,9 @@ func (r *uiRepo) jsxRoutes(uf *uiFile, consts map[string]string) []UIPage {
 				name, redirect := leafComponent(a.Value)
 				if !a.Expr {
 					continue
+				}
+				if name == "" && redirect == "" && (a.Name == "render" || a.Name == "element") {
+					ri.inline = true
 				}
 				if redirect != "" || name == "Redirect" || name == "Navigate" {
 					ri.redirect = redirect
@@ -330,8 +334,11 @@ func (r *uiRepo) jsxRoutes(uf *uiFile, consts map[string]string) []UIPage {
 				continue // a pathless layout route with no element of its own
 			}
 		}
-		if ri.component == "" && ri.redirect == "" {
+		if ri.component == "" && ri.redirect == "" && !(ri.inline && ri.hasPath) {
 			continue // layout-only parent: its children are the pages
+		}
+		if ri.component == "" && ri.redirect == "" {
+			ri.component = "(inline render)" // e.g. a /login route that only redirects in code
 		}
 		p := UIPage{Route: full(i), Framework: fw, Component: ri.component, Redirect: ri.redirect, Repo: r.Name, Path: uf.F.Path, Line: uf.Lines.line(ri.t.Off)}
 		if ri.component != "" {
