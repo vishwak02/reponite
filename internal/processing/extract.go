@@ -240,7 +240,7 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 	}
 	return []Symbol{{
 		Name: name, Kind: "type",
-		Signature: string(content.Canon(withoutChildTypes(decl, r.BodyTypes), normVer)), Doc: doc,
+		Signature: string(content.Canon(classShape(decl, r), normVer)), Doc: doc,
 		Bases: classBases(decl, r.Name),
 	}}
 }
@@ -658,4 +658,50 @@ func extractVarFunc(decl content.AST, r LangRules, normVer int, doc []byte, encl
 	}
 	s.Signature = name + "\x1f" + string(content.Canon(filteredNode{AST: fn, drop: drop}, normVer))
 	return s, true
+}
+
+// classShape is a class declaration as its own signature sees it: its
+// header and the statements of its body — fields, class attributes
+// (a Django model's or serializer's fields), a nested Meta — without the
+// methods, which are symbols of their own. A changed field changes the
+// class; a changed method changes only that method.
+func classShape(decl content.AST, r LangRules) content.AST {
+	drop := map[string]bool{}
+	for _, ts := range [][]string{r.FuncDecl, r.MethodDecl, r.VarFuncDecl} {
+		for _, t := range ts {
+			drop[t] = true
+		}
+	}
+	if len(r.BodyTypes) == 0 {
+		return decl
+	}
+	return deepFiltered{AST: decl, drop: drop, top: true}
+}
+
+// deepFiltered drops nodes of the given types at any depth below the root.
+type deepFiltered struct {
+	content.AST
+	drop map[string]bool
+	top  bool
+}
+
+func (f deepFiltered) Children() []content.AST {
+	var out []content.AST
+	for _, c := range f.AST.Children() {
+		if f.drop[c.Type()] || c.Type() == "decorated_definition" && decoratesFunction(c) {
+			continue
+		}
+		out = append(out, deepFiltered{AST: c, drop: f.drop})
+	}
+	return out
+}
+
+// decoratesFunction: a Python decorated_definition wrapping a function.
+func decoratesFunction(n content.AST) bool {
+	for _, c := range n.Children() {
+		if c.Type() == "function_definition" {
+			return true
+		}
+	}
+	return false
 }
