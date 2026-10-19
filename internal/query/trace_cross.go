@@ -180,7 +180,7 @@ func (t *tracer) matchRoutes(verb, path string, limit int, repo string) []Route 
 		}
 		sc := matchSegs(segs, segments(r.Pattern))
 		if sc > 0 && len(segments(r.Pattern)) == len(segs) {
-			sc += 100 // an exact-length match beats a suffix match
+			sc += 1 << 16 // an exact-length match beats a suffix match
 		}
 		switch {
 		case sc > best:

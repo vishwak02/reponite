@@ -80,7 +80,11 @@ var (
 	clientCall   = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\(\))?)\.(get|post|put|patch|delete|head|request)\s*(?:<[^()]*>)?\(\s*(.*)`)
 	jsConst      = regexp.MustCompile(`(?:^|[\s,{(])([A-Za-z_$][\w$]*)\s*[:=]\s*(['"` + "`" + `])([^'"` + "`" + `\n]*/[^'"` + "`" + `\n]*)['"` + "`" + `]`)
 	jsObjStart   = regexp.MustCompile(`^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*\{`)
-	jsMethodOpt  = regexp.MustCompile(`method:\s*['"` + "`" + `](\w+)`)
+	jsMethodOpt  = regexp.MustCompile(`method:\s*(?:['"` + "`" + `]|[\w$.]*\.)(\w+)`)
+	// axios(config), instance.request(config), an adapter called with a
+	// request object: { method: 'GET', url: '/v2/work', … }
+	jsURLKey     = regexp.MustCompile(`^\s*url\s*:\s*(.+?),?\s*$`)
+	jsConfigOpen = regexp.MustCompile(`\b([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*(?:<[^()]*>)?\(\s*\{\s*$`)
 	pyConst      = regexp.MustCompile(`^\s*([A-Za-z_]\w*)\s*[:=]\s*f?["']([^"'\n]*/[^"'\n]*)["']`)
 	placeholder  = regexp.MustCompile(`\$\{[^}]*\}|\{[^}]*\}|<[^>]*>|\(\?P<[^>]*>[^)]*\)|\([^)]*\)|\[[^\]]*\][+*]?|\\[dw][+*]?|\.[+*]`)
 )
@@ -272,9 +276,15 @@ func segments(u string) []string {
 	}
 	var out []string
 	for _, s := range strings.Split(normURL(u), "/") {
-		if s != "" {
-			out = append(out, s)
+		if s == "" {
+			continue
 		}
+		if len(out) == 0 && strings.HasPrefix(s, "{}") && len(s) > 2 && !strings.Contains(s[2:], "{}") {
+			// `${BASE_URL}v1/map`: a base URL variable glued to the path
+			out = append(out, "{}", s[2:])
+			continue
+		}
+		out = append(out, s)
 	}
 	segCache.Store(u, out)
 	return out
@@ -300,10 +310,12 @@ func matchSegs(client, route []string) int {
 			return 0
 		}
 	}
-	score := 0
+	score, shape := 0, 0
 	for i := 1; i <= n; i++ {
 		c, r := client[len(client)-i], route[len(route)-i]
 		switch {
+		case wild(c) && wild(r):
+			shape++ // a value where the route takes one
 		case wild(c) || wild(r):
 		case c == r:
 			score++
@@ -320,7 +332,10 @@ func matchSegs(client, route []string) int {
 	if score < literals && score < 2 {
 		return 0 // one shared word ("list", "status") is not a link
 	}
-	return score
+	// literal agreement first; on a tie, the route whose parameters sit
+	// where the client passes values (/work/{id} is /work/{}, not
+	// /work/clear_all)
+	return score*16 + shape
 }
 
 // --- Django ---------------------------------------------------------------
@@ -593,7 +608,8 @@ func djangoRoutes(repo string, files []File) []Route {
 			for _, p := range mounts {
 				out = append(out, Route{Repo: repo, Path: d.file.Path, Line: e.line, Method: "*",
 					Pattern: normURL(p + e.pattern), Handler: e.handler, Framework: "django"})
-				if e.router != "" && !strings.Contains(e.pattern, "{}") {
+				if e.router != "" && !strings.HasSuffix(strings.TrimSuffix(e.pattern, "/"), "{}") {
+					// the list route (a nested router's has {} for its parent)
 					vs := e.handler[strings.LastIndex(e.handler, ".")+1:]
 					viewsets[vs] = append(viewsets[vs], normURL(p+e.pattern))
 				}
@@ -607,17 +623,26 @@ func djangoRoutes(repo string, files []File) []Route {
 }
 
 var (
-	pyClass    = regexp.MustCompile(`^class\s+(\w+)\s*[(:]`)
-	drfDetail  = regexp.MustCompile(`detail\s*=\s*(True|False)`)
-	drfURLPath = regexp.MustCompile(`url_path\s*=\s*r?["']([^"']*)["']`)
+	pyClass      = regexp.MustCompile(`^class\s+(\w+)\s*[(:]`)
+	pyClassBases = regexp.MustCompile(`^class\s+\w+\s*\(([^)]*)\)`)
+	drfDetail    = regexp.MustCompile(`detail\s*=\s*(True|False)`)
+	drfURLPath   = regexp.MustCompile(`url_path\s*=\s*r?["']([^"']*)["']`)
 )
 
 // drfActions: a registered viewset's @action methods are routes of their own
-// (list-level base/<path>/, or detail-level base/{}/<path>/).
+// (list-level base/<path>/, or detail-level base/{}/<path>/) — its own and
+// those it inherits from base classes and mixins of the repo.
 func drfActions(repo string, files []File, viewsets map[string][]string) []Route {
-	var out []Route
+	type action struct {
+		path, name, sub string
+		line            int
+		methods         []string
+		detail          bool
+	}
+	actions := map[string][]action{} // class -> its own @action methods
+	bases := map[string][]string{}   // class -> base class names
 	for _, f := range files {
-		if filepath.Ext(f.Path) != ".py" || !strings.Contains(f.Content, "@action") {
+		if filepath.Ext(f.Path) != ".py" {
 			continue
 		}
 		lines := strings.Split(f.Content, "\n")
@@ -625,11 +650,21 @@ func drfActions(repo string, files []File, viewsets map[string][]string) []Route
 		for i := 0; i < len(lines); i++ {
 			if m := pyClass.FindStringSubmatch(lines[i]); m != nil {
 				class = m[1]
+				if b := pyClassBases.FindStringSubmatch(lines[i]); b != nil {
+					for _, x := range strings.Split(b[1], ",") {
+						x = strings.TrimSpace(x)
+						if j := strings.LastIndexByte(x, '.'); j >= 0 {
+							x = x[j+1:]
+						}
+						if x != "" && !strings.Contains(x, "=") {
+							bases[class] = append(bases[class], x)
+						}
+					}
+				}
 				continue
 			}
 			t := strings.TrimSpace(lines[i])
-			bases, ok := viewsets[class]
-			if !ok || !strings.HasPrefix(t, "@action") {
+			if class == "" || !strings.HasPrefix(t, "@action") {
 				continue
 			}
 			dec := t // the decorator may span lines: read until its parens close
@@ -646,21 +681,63 @@ func drfActions(repo string, files []File, viewsets map[string][]string) []Route
 			if name == "" {
 				continue
 			}
-			sub := name
+			a := action{path: f.Path, name: name, sub: name, line: i + 1, methods: []string{"GET"}}
 			if m := drfURLPath.FindStringSubmatch(dec); m != nil {
-				sub = m[1]
+				a.sub = m[1]
 			}
-			method := "GET"
 			if m := pyMethods.FindStringSubmatch(dec); m != nil {
-				method = strings.ToUpper(strings.Trim(strings.Split(m[1], ",")[0], ` "'`))
+				a.methods = nil
+				for _, x := range strings.Split(m[1], ",") {
+					if x = strings.ToUpper(strings.Trim(strings.TrimSpace(x), `"'`)); x != "" {
+						a.methods = append(a.methods, x)
+					}
+				}
 			}
-			detail := ""
 			if m := drfDetail.FindStringSubmatch(dec); m != nil && m[1] == "True" {
+				a.detail = true
+			}
+			actions[class] = append(actions[class], a)
+		}
+	}
+	var out []Route
+	for class, mounts := range viewsets {
+		// the class first, then its bases (depth-first, left to right):
+		// a method a subclass redefines is the subclass's
+		seen, taken := map[string]bool{}, map[string]bool{}
+		var walk func(c string)
+		var own []action
+		var owner []string
+		walk = func(c string) {
+			if seen[c] {
+				return
+			}
+			seen[c] = true
+			for _, a := range actions[c] {
+				if !taken[a.name] {
+					taken[a.name] = true
+					own = append(own, a)
+					owner = append(owner, c)
+				}
+			}
+			for _, b := range bases[c] {
+				walk(b)
+			}
+		}
+		walk(class)
+		for k, a := range own {
+			detail := ""
+			if a.detail {
 				detail = "{}/"
 			}
-			for _, b := range bases {
-				out = append(out, Route{Repo: repo, Path: f.Path, Line: i + 1, Method: method,
-					Pattern: normURL(strings.TrimSuffix(b, "/") + "/" + detail + sub + "/"), Handler: class + "." + name, Framework: "django"})
+			handler := class + "." + a.name
+			if owner[k] != class {
+				handler = owner[k] + "." + a.name // inherited: the code that runs
+			}
+			for _, b := range mounts {
+				for _, method := range a.methods {
+					out = append(out, Route{Repo: repo, Path: a.path, Line: a.line, Method: method,
+						Pattern: normURL(strings.TrimSuffix(b, "/") + "/" + detail + a.sub + "/"), Handler: handler, Framework: "django"})
+				}
 			}
 		}
 	}
@@ -762,6 +839,33 @@ func clientCalls(repo string, f File, lang string, consts map[string]string) []C
 						break
 					}
 					if j > i && strings.Contains(lines[j], "fetch(") {
+						break
+					}
+				}
+			}
+		}
+		if arg == "" && lang == "js" {
+			if m := jsURLKey.FindStringSubmatch(ln); m != nil {
+				// the object this key is in must be the argument of a call
+				for j := i - 1; j >= 0 && j >= i-8; j-- {
+					o := jsConfigOpen.FindStringSubmatch(lines[j])
+					if o == nil && strings.Contains(lines[j], "}") {
+						break // a previous object closed: not ours
+					}
+					if o != nil && !nonClientRecv[o[1]] {
+						method, arg, recv = "GET", m[1], o[1]
+						for k := j; k < len(lines) && k < j+12; k++ {
+							if mm := jsMethodOpt.FindStringSubmatch(lines[k]); mm != nil {
+								method = strings.ToUpper(mm[1])
+								break
+							}
+							if k > j && strings.HasPrefix(strings.TrimSpace(lines[k]), "})") {
+								break
+							}
+						}
+						break
+					}
+					if o != nil {
 						break
 					}
 				}
