@@ -292,6 +292,9 @@ func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, l
 			} else {
 				add(CallSite{Name: qc.Name, Kind: CallPlain})
 			}
+		case imported && lang == "python" && qc.Chain == 3 && qc.Attr != "" && b.Symbol == "" && pySubmodule(b, qc.Attr, modPkg) != "":
+			// pkg.sub.f() on an imported package: f of its submodule sub
+			add(CallSite{Name: qc.Name, Kind: CallModule, Scope: pySubmodule(b, qc.Attr, modPkg)})
 		case imported && !b.Default && qc.Chain <= 2 && moduleCall(b, lang, modPkg) != "":
 			// m.f() on an imported repo module (import x as m, * as m,
 			// from pkg import submodule)
@@ -529,3 +532,12 @@ var rustMembers = map[string]bool{"new": true, "len": true, "is_empty": true, "p
 	"read": true, "write": true, "flush": true, "fmt": true, "eq": true, "cmp": true, "partial_cmp": true, "hash": true,
 	"default": true, "build": true, "run": true, "spawn": true, "take": true, "as_path": true, "display": true,
 	"is_some": true, "is_none": true, "is_ok": true, "is_err": true, "and_then": true, "map_err": true, "sort": true}
+
+// pySubmodule is the package of submodule attr of the module b imports
+// (import flask -> flask.json), "" when it is not a module of the repo.
+func pySubmodule(b ImportBinding, attr string, modPkg func(string) (string, bool)) string {
+	if pkg, ok := modPkg(b.Module + "." + attr); ok {
+		return pkg
+	}
+	return ""
+}

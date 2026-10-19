@@ -330,6 +330,14 @@ var (
 func jsImportAliases(f File, symbol, base string) []string {
 	switch strings.ToLower(filepath.Ext(f.Path)) {
 	case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte":
+	case ".py":
+		// from .testing import FlaskClient as cls
+		var out []string
+		re := regexp.MustCompile(`\bimport\b[^\n]*?\b` + regexp.QuoteMeta(base) + `\s+as\s+(\w+)`)
+		for _, m := range re.FindAllStringSubmatch(f.Content, -1) {
+			out = append(out, m[1])
+		}
+		return out
 	default:
 		return nil
 	}

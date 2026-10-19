@@ -73,6 +73,36 @@ func (x *spanIndex) splitQID(qid string) (dir, local string) {
 // locate finds the span defining qid. ok is false when the source of qid is
 // not indexed (an external callee, or a symbol from a stored-only file).
 func (x *spanIndex) locate(qid string) (symLoc, bool) {
+	c, ok := x.locate0(qid)
+	if !ok || !strings.HasSuffix(c.Path, ".py") {
+		return c, ok
+	}
+	// Python: a later definition of the name in the same scope replaces the
+	// earlier one (typing.overload stubs, then the implementation)
+	_, local := x.splitQID(qid)
+	parts := strings.Split(local, ".")
+	f := x.byPath[c.Path]
+	owner := enclosingSpanName(*f, c.Span)
+	for _, o := range x.byName[pkgFromPath(c.Path)+"\x00"+parts[len(parts)-1]] {
+		if o.Path == c.Path && o.Span.StartLine > c.Span.StartLine && enclosingSpanName(*f, o.Span) == owner {
+			c = o
+		}
+	}
+	return c, true
+}
+
+// enclosingSpanName is the name of the innermost span strictly enclosing sp.
+func enclosingSpanName(f File, sp SymbolSpan) string {
+	best, size := "", 1<<30
+	for _, o := range f.Symbols {
+		if o != sp && o.StartLine <= sp.StartLine && sp.EndLine <= o.EndLine && o.EndLine-o.StartLine < size {
+			best, size = o.Name, o.EndLine-o.StartLine
+		}
+	}
+	return best
+}
+
+func (x *spanIndex) locate0(qid string) (symLoc, bool) {
 	dir, local := x.splitQID(qid)
 	parts := strings.Split(local, ".")
 	base := parts[len(parts)-1]
@@ -93,6 +123,7 @@ func (x *spanIndex) locate(qid string) (symLoc, bool) {
 			cands = own
 		}
 	}
+	var recv *regexp.Regexp
 	if len(parts) >= 2 {
 		class := parts[len(parts)-2]
 		// a fn in a Rust impl block for the type
@@ -117,11 +148,19 @@ func (x *spanIndex) locate(qid string) (symLoc, bool) {
 			}
 		}
 		// An out-of-class definition (C++ Class::method, Go receiver).
-		recv := regexp.MustCompile(`\*?\b` + regexp.QuoteMeta(class) + `(?:\[[^\]]*\])?\)\s*` + regexp.QuoteMeta(base) + `\b`)
+		recv = regexp.MustCompile(`\*?\b` + regexp.QuoteMeta(class) + `(?:\[[^\]]*\])?\)\s*` + regexp.QuoteMeta(base) + `\b`)
 		for _, c := range cands {
 			f := x.byPath[c.Path]
 			line := lineAt(f.Content, c.Span.StartLine)
 			if strings.Contains(line, class+"::"+base) || recv.MatchString(line) {
+				return c, true
+			}
+		}
+	}
+	if len(parts) == 1 {
+		// a free function's id: not a method that shares its name
+		for _, c := range cands {
+			if !looksLikeMethod(*x.byPath[c.Path], c.Span, base) {
 				return c, true
 			}
 		}

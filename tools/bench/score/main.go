@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -622,6 +623,7 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 // A caller (or call site) is wrong when the truth knows the caller and it
 // never calls that name; one the extractor cannot judge is not counted.
 func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string]string, calls map[string]bool) {
+	files := st.Files(repo, ref)
 	qidOf := map[string]string{}
 	dup := map[string]bool{}
 	for q, id := range qidAt {
@@ -738,7 +740,9 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 	var testRecall, testPrec ratio
 	testCallers := map[string]map[string]bool{}
 	for _, e := range t.Edges {
-		if defByID[e.From].Test && !defByID[e.To].Test {
+		// a test function (test_x, TestX, Class.test_x) — not a fixture or
+		// helper that lives in a test file
+		if defByID[e.From].Test && !defByID[e.To].Test && strings.HasPrefix(strings.ToLower(baseOf(defByID[e.From].Name)), "test") {
 			if testCallers[e.To] == nil {
 				testCallers[e.To] = map[string]bool{}
 			}
@@ -801,7 +805,8 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 	for _, d := range sample {
 		ex := query.Explain(st, ref, qidOf[d.ID], query.ExplainOptions{Repo: repo, Budget: 4000})
 		exPlace.Total++
-		if ex.Symbol != nil && ex.Symbol.Path == d.Path && ex.Symbol.StartLine <= d.Line && ex.Symbol.StartLine >= d.Line-8 {
+		if ex.Symbol != nil && ex.Symbol.Path == d.Path && ex.Symbol.StartLine <= d.Line && ex.Symbol.StartLine >= d.Line-8 &&
+			!declBetween(files, d.Path, ex.Symbol.StartLine, d.Line) {
 			exPlace.Hit++
 		} else if len(bad) < 40 {
 			got := "nothing"
@@ -845,4 +850,23 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 	gate("tests precision", testPrec, minPrecision)
 	gate("explain place", exPlace, minPrecision)
 	gate("explain kind", exKind, minPrecision)
+}
+
+var reDeclLine = regexp.MustCompile(`^\s*(?:export\s+)?(?:async\s+)?(?:def|func|fn|function|class)\b`)
+
+// declBetween: a definition line sits in [from, to) — a span starting there
+// is another definition, not this one's decorators or doc.
+func declBetween(files []query.File, path string, from, to int) bool {
+	for _, f := range files {
+		if f.Path != path {
+			continue
+		}
+		lines := strings.Split(f.Content, "\n")
+		for n := from; n < to && n <= len(lines); n++ {
+			if n >= 1 && reDeclLine.MatchString(lines[n-1]) {
+				return true
+			}
+		}
+	}
+	return false
 }

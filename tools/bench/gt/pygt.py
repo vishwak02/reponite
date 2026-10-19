@@ -19,6 +19,14 @@ import os
 import sys
 
 
+def is_test_path(rel):
+    """test code by pytest's conventions: test_*.py, *_test.py, conftest.py,
+    or under a tests/ or test/ directory (testing.py is not a test)"""
+    base = rel.split("/")[-1]
+    return (base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py"
+            or "/tests/" in "/" + rel or "/test/" in "/" + rel)
+
+
 def module_name(rel):
     p = rel[:-3]
     if p.endswith("/__init__"):
@@ -110,11 +118,11 @@ def main():
                 i = def_id(rel, node)
                 class_ids[(rel, node.name)] = i
                 out_defs.append({"id": i, "path": rel, "line": node.lineno, "end": node.end_lineno, "name": q,
-                                 "test": "test" in rel.split("/")[-1] or "/tests/" in "/" + rel})
+                                 "test": is_test_path(rel)})
                 continue
             i = def_id(rel, node)
             out_defs.append({"id": i, "path": rel, "line": node.lineno, "end": node.end_lineno, "name": q,
-                             "test": "test" in rel.split("/")[-1] or "/tests/" in "/" + rel})
+                             "test": is_test_path(rel)})
             if cls:
                 methods.setdefault((rel, cls), {})[node.name] = i
             else:
