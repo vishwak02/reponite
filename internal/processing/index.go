@@ -8,6 +8,7 @@ package processing
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -94,6 +95,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	var extRefs []query.ExternalRef // cross-repo dependency edges (§8B)
 	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
 	linkRobotEmbedded(files)
+	nameGoInits(files)
 	mods := newModuleIndex(files)
 	classes := newClassGraph()
 	type classDecl struct {
@@ -337,6 +339,74 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 						sites = append(sites, CallSite{Name: qc.Name, Kind: CallTyped, Scope: mods.defaultClass[mp]})
 					}
 				}
+				// x.f() on a named import that is a module-level value: an
+				// instance (export const api = new Client()) calls its class's
+				// method; an object literal (export const Logger = { error() {} })
+				// its own method, a function of the defining module
+				isValue := func(pkg, name string) bool { return mods.instances[pkg][name] != "" || mods.objects[pkg][name] }
+				receivers := map[string]int{} // method name -> receivers it is called on
+				for _, qc := range c.sym.QualifiedCalls {
+					receivers[qc.Name]++
+				}
+				for _, qc := range c.sym.QualifiedCalls {
+					b, ok := c.imports[qc.Qualifier]
+					if !ok || b.Default || b.Symbol == "" || qc.Chain != 2 {
+						continue
+					}
+					mp, ok := mods.resolve(c.lang, c.path, b.Module)
+					if !ok {
+						continue
+					}
+					vp, vn, ok := mods.resolveExport(mp, b.Symbol, isValue)
+					if !ok {
+						continue
+					}
+					var site CallSite
+					switch {
+					case mods.instances[vp][vn] != "":
+						site = CallSite{Name: qc.Name, Kind: CallTyped, Scope: mods.instances[vp][vn]}
+					case nodeSet[qualifyModule(vp, qc.Name)]:
+						site = CallSite{Name: qc.Name, Kind: CallModule, Scope: vp}
+					default:
+						continue
+					}
+					// the value's own site replaces the guess made from its name
+					kept := sites[:0]
+					for _, s := range sites {
+						if !(s.Name == qc.Name && (s.Kind == CallScoped && s.Scope == b.Symbol || s.Kind == CallMember && receivers[qc.Name] == 1)) {
+							kept = append(kept, s)
+						}
+					}
+					sites = append(kept, site)
+				}
+				// f().m() on a function whose return class is known
+				hasReturn := func(pkg, name string) bool { return mods.returns[pkg][name] != "" }
+				for _, qc := range c.sym.QualifiedCalls {
+					if qc.Chain != 3 || qc.Attr != "" || qc.Qualifier == "" {
+						continue
+					}
+					fp, fn := pkgOfFile(c.path, c.lang), qc.Qualifier
+					if b, ok := c.imports[qc.Qualifier]; ok {
+						mp, ok := mods.resolve(c.lang, c.path, b.Module)
+						if !ok || b.Symbol == "" {
+							continue
+						}
+						if fp, fn, ok = mods.resolveExport(mp, b.Symbol, hasReturn); !ok {
+							continue
+						}
+					}
+					cls := mods.returns[fp][fn]
+					if cls == "" {
+						continue
+					}
+					kept := sites[:0]
+					for _, s := range sites {
+						if !(s.Name == qc.Name && s.Kind == CallMember && receivers[qc.Name] == 1) {
+							kept = append(kept, s)
+						}
+					}
+					sites = append(kept, CallSite{Name: qc.Name, Kind: CallTyped, Scope: cls})
+				}
 				// a name a module passes on (barrel index files, export default
 				// of an import): the module that defines it
 				for i, s := range sites {
@@ -545,4 +615,32 @@ func mergeOverload(a, b Symbol) Symbol {
 		a.Vars = vars
 	}
 	return a
+}
+
+// nameGoInits gives each Go init function its file's name (init@config for
+// config.go's): a package may have one per file, and under one id all but
+// the last would be lost.
+func nameGoInits(files []ParsedFile) {
+	for i := range files {
+		f := &files[i]
+		if f.Lang != "go" && !(f.Lang == "" && strings.HasSuffix(f.Path, ".go")) {
+			continue
+		}
+		name := goInitName(f.Path)
+		for j := range f.Symbols {
+			if s := &f.Symbols[j]; s.Name == "init" && s.Recv == "" {
+				s.Name = name
+			}
+		}
+		for j := range f.Spans {
+			if f.Spans[j].Name == "init" {
+				f.Spans[j].Name = name
+			}
+		}
+	}
+}
+
+// goInitName is the id name of a Go file's init function.
+func goInitName(p string) string {
+	return "init@" + strings.TrimSuffix(path.Base(p), ".go")
 }

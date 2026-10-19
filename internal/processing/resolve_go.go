@@ -35,8 +35,11 @@ func offlineGoEnv() []string {
 
 // typeCheckTree type-checks a git revision's Go code: it writes the
 // revision's Go files and module files to a temporary directory and runs the
-// same resolver as a working tree. read returns a tracked file's content.
-func typeCheckTree(files []ParsedFile, manifests map[string][]byte, read func(string) (string, bool)) map[string]map[string][]string {
+// same resolver as a working tree. paths are every tracked file — the Go
+// compiler needs the ones the index skips too (a large generated mock, an
+// assembly file, a //go:embed asset), or their packages do not build; read
+// returns a tracked file's content.
+func typeCheckTree(paths []string, manifests map[string][]byte, read func(string) (string, bool)) map[string]map[string][]string {
 	tmp, err := os.MkdirTemp("", "reponite-gotypes-")
 	if err != nil {
 		return nil
@@ -53,29 +56,102 @@ func typeCheckTree(files []ParsedFile, manifests map[string][]byte, read func(st
 		if path.Base(p) != "go.mod" {
 			continue
 		}
-		if !write(p, capGoDirective(string(b))) {
+		if !write(p, string(b)) {
 			return nil
 		}
 		if sum, ok := read(path.Join(path.Dir(p), "go.sum")); ok {
 			write(path.Join(path.Dir(p), "go.sum"), sum)
 		}
 	}
+	goDirs := map[string]bool{}
+	var embeds []string // dir-relative patterns, as "dir\x00pattern"
 	n := 0
-	for _, f := range files {
-		if !strings.HasSuffix(f.Path, ".go") {
+	for _, p := range paths {
+		if !strings.HasSuffix(p, ".go") {
 			continue
 		}
-		c, ok := read(f.Path)
-		if !ok || !write(f.Path, c) {
+		c, ok := read(p)
+		if !ok || !write(p, c) {
 			continue
 		}
 		n++
+		goDirs[path.Dir(p)] = true
+		for _, m := range goEmbedRe.FindAllStringSubmatch(c, -1) {
+			for _, pat := range strings.Fields(m[1]) {
+				embeds = append(embeds, path.Dir(p)+"\x00"+strings.Trim(pat, "\"`"))
+			}
+		}
 	}
 	if n == 0 {
 		return nil
 	}
-	return TypeResolvedEdges(tmp)
+	for _, p := range paths {
+		dir := path.Dir(p)
+		keep := false
+		switch strings.ToLower(path.Ext(p)) {
+		case ".s", ".c", ".h", ".cc", ".cpp", ".hh", ".hpp", ".m", ".syso":
+			keep = goDirs[dir] // cgo and assembly beside the package's Go files
+		}
+		for _, e := range embeds {
+			d, pat, _ := strings.Cut(e, "\x00")
+			rel := strings.TrimPrefix(p, d+"/")
+			if d == "." {
+				rel = p
+			}
+			if rel == p && d != "." {
+				continue
+			}
+			pat = strings.TrimPrefix(pat, "all:")
+			if ok, _ := path.Match(pat, rel); ok || strings.HasPrefix(rel, strings.TrimSuffix(pat, "/")+"/") {
+				keep = true
+				break
+			}
+		}
+		if keep {
+			if c, ok := read(p); ok {
+				write(p, c)
+			}
+		}
+	}
+	// as written first: a go directive newer than this toolchain is fine when
+	// a matching toolchain is cached. When packages then fail to build, the
+	// directive capped at this toolchain may do better; the run that resolves
+	// more calls is kept.
+	out, notes, bad := typeResolvedEdges(tmp)
+	if bad > 0 {
+		capped := false
+		for p, b := range manifests {
+			if path.Base(p) == "go.mod" {
+				if c := capGoDirective(string(b)); c != string(b) {
+					write(p, c)
+					capped = true
+				}
+			}
+		}
+		if capped {
+			if out2, notes2, _ := typeResolvedEdges(tmp); countEdges(out2) > countEdges(out) {
+				out, notes = out2, notes2
+			}
+		}
+	}
+	for _, n := range notes {
+		fmt.Fprintln(os.Stderr, n)
+	}
+	return out
 }
+
+func countEdges(m map[string]map[string][]string) int {
+	n := 0
+	for _, byName := range m {
+		for _, qs := range byName {
+			n += len(qs)
+		}
+	}
+	return n
+}
+
+// goEmbedRe reads a //go:embed directive's patterns.
+var goEmbedRe = regexp.MustCompile(`(?m)^\s*//go:embed\s+(.+)$`)
 
 // TypeResolvedEdges returns callerQID -> (base callee name -> precise callee QIDs)
 // for calls the type checker resolves to a concrete in-repo target. QIDs match
@@ -85,13 +161,25 @@ func typeCheckTree(files []ParsedFile, manifests map[string][]byte, read func(st
 // library or through an interface, and are never guessed by name. Test files
 // are checked too.
 func TypeResolvedEdges(dir string) map[string]map[string][]string {
+	out, notes, _ := typeResolvedEdges(dir)
+	for _, n := range notes {
+		fmt.Fprintln(os.Stderr, n)
+	}
+	return out
+}
+
+// typeResolvedEdges is TypeResolvedEdges with its diagnostics returned, and
+// how many module loads failed or packages could not build.
+func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, int) {
 	out := map[string]map[string][]string{}
+	var notes []string
+	problems := 0
 	// Absolute base: go/packages reports absolute GoFiles, and IndexFiles keys
 	// packages by their directory relative to the indexed root — relate the two
 	// against an absolute dir (Rel against a relative "." would fail silently).
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
-		return out
+		return out, nil, 1
 	}
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
@@ -108,25 +196,35 @@ func TypeResolvedEdges(dir string) map[string]map[string][]string {
 		c.Dir = mod
 		ps, err := packages.Load(&c, "./...")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "reponite: Go type check unavailable (%v); Go calls are resolved by name\n", err)
+			notes = append(notes, fmt.Sprintf("reponite: Go type check unavailable (%v); Go calls are resolved by name", err))
+			problems++
 			continue
 		}
 		pkgs = append(pkgs, ps...)
 	}
 	if len(pkgs) == 0 {
-		return out
+		return out, notes, problems
 	}
+	// a package whose only error is a go directive newer than this build of
+	// the checker is checked all the same: the checker carries on past it
+	broken := map[*packages.Package]bool{}
 	failed, firstErr := 0, ""
 	for _, p := range pkgs {
-		if len(p.Errors) > 0 {
+		for _, e := range p.Errors {
+			if strings.Contains(e.Msg, "requires newer Go version") {
+				continue
+			}
+			broken[p] = true
 			failed++
 			if firstErr == "" {
-				firstErr = p.Errors[0].Error()
+				firstErr = e.Error()
 			}
+			break
 		}
 	}
 	if failed > 0 {
-		fmt.Fprintf(os.Stderr, "reponite: Go type check incomplete in %d of %d packages (%s); their calls are resolved by name\n", failed, len(pkgs), firstErr)
+		notes = append(notes, fmt.Sprintf("reponite: Go type check incomplete in %d of %d packages (%s); their calls are resolved by name", failed, len(pkgs), firstErr))
+		problems += failed
 	}
 
 	// Directory (relative to absDir) of each type-checked package, so callee
@@ -175,8 +273,14 @@ func TypeResolvedEdges(dir string) map[string]map[string][]string {
 					continue
 				}
 				caller := callerQID(dRel, fd)
-				if len(p.Errors) == 0 && out[caller] == nil {
-					out[caller] = map[string][]string{} // checked: no guessing for this caller
+				if fd.Recv == nil && fd.Name.Name == "init" {
+					caller = qualify(dRel, goInitName(p.Fset.File(fd.Pos()).Name())) // nameGoInits
+				}
+				if !broken[p] {
+					if out[caller] == nil {
+						out[caller] = map[string][]string{}
+					}
+					out[caller][goCheckedKey] = nil // checked: no guessing for this caller
 				}
 				ast.Inspect(fd, func(n ast.Node) bool {
 					call, ok := n.(*ast.CallExpr)
@@ -187,22 +291,44 @@ func TypeResolvedEdges(dir string) map[string]map[string][]string {
 					if fn == nil {
 						return true
 					}
-					if qid, ok := qidOf(fn); ok {
-						if out[caller] == nil {
-							out[caller] = map[string][]string{}
+					qid, ok := qidOf(fn)
+					if !ok {
+						if !broken[p] {
+							return true // the checked marker already says so
 						}
-						// one name may reach several targets (a.F and b.F)
-						if !containsStr(out[caller][fn.Name()], qid) {
-							out[caller][fn.Name()] = append(out[caller][fn.Name()], qid)
+						if f := p.Fset.Position(fn.Pos()).Filename; f == "" || strings.HasPrefix(f, absDir+string(filepath.Separator)) {
+							return true // the repo's own, in a package the checker could not place
 						}
+						// a package that did not fully build: this call is
+						// proven to reach no repo function, even if others are not
+						qid = goExternalMark
+					}
+					if out[caller] == nil {
+						out[caller] = map[string][]string{}
+					}
+					// one name may reach several targets (a.F and b.F)
+					if !containsStr(out[caller][fn.Name()], qid) {
+						out[caller][fn.Name()] = append(out[caller][fn.Name()], qid)
 					}
 					return true
 				})
 			}
 		}
 	}
-	return out
+	return out, notes, problems
 }
+
+// goExternalMark, among a caller's type-checked targets of a name, records a
+// call of that name the checker resolved outside the repo (a library, an
+// interface method) in a package that did not fully build.
+const goExternalMark = "\x00external"
+
+// goCheckedKey, present among a caller's names, says its package type-checked
+// in full: a call the checker did not resolve into the repo is a library's,
+// an interface's or a function value's — never guessed by name. Without it
+// (a package that did not build) the names listed are the checker's verdicts
+// and every other call falls to the name rules.
+const goCheckedKey = "\x00checked"
 
 // calleeFunc resolves a call's function expression to the *types.Func it targets.
 func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {

@@ -67,7 +67,25 @@ type moduleIndex struct {
 	// (export default new Store(), or const store = new Store(); export
 	// default store), by the module's package id
 	defaultClass map[string]string
+	// module-level values of a JS/TS module, by its package id: names bound
+	// to `new Cls(...)` (the class), and names bound to an object literal
+	// (whose methods are the module's functions)
+	instances map[string]map[string]string
+	objects   map[string]map[string]bool
+	// returns is the class a module-level function returns, by the
+	// module's package id: its return annotation, or the one module-level
+	// value of a known class every `return` of its body names
+	returns map[string]map[string]string
 }
+
+var (
+	reConstNew = regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*new\s+([A-Z][\w$]*)\s*[(<]`)
+	reFuncRet  = regexp.MustCompile(`(?m)^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\([^()]*\)\s*(?::\s*([A-Z][\w$]*)\s*)?\{`)
+	reArrowRet = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\([^()]*\)\s*:\s*([A-Z][\w$]*)\s*=>`)
+	reTypedVar = regexp.MustCompile(`(?m)^(?:export\s+)?(?:let|var|const)\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Z][\w$]*)\s*[;=\n]`)
+	reReturnID = regexp.MustCompile(`\breturn\s+([A-Za-z_$][\w$]*)\s*;?\s*$`)
+	reConstObj = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\{`)
+)
 
 var reExportDefaultNew = regexp.MustCompile(`(?m)^export\s+default\s+new\s+([A-Z][\w$]*)\s*[(<]`)
 
@@ -77,11 +95,14 @@ type jsModule struct {
 	reexp   map[string]ImportBinding // exported name -> where it comes from (Symbol "default" = that module's default)
 	imports map[string]ImportBinding // module-level imports: an exported name may be one of them
 	stars   []string                 // export * from these modules
+	aliases map[string]string        // export { a as b }: b -> a, a name of this module
 }
 
 var (
 	reExportFrom = regexp.MustCompile(`(?m)^export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]`)
 	reExportStar = regexp.MustCompile(`(?m)^export\s+\*\s+from\s*['"]([^'"]+)['"]`)
+	// export { a as b } of the module's own names (no from)
+	reExportLocal = regexp.MustCompile(`(?m)^export\s+\{([^}]*)\}\s*;?\s*$`)
 )
 
 // reExportDefault reads `export default Name` (a declared function or
@@ -89,7 +110,8 @@ var (
 var reExportDefault = regexp.MustCompile(`(?m)^export\s+default\s+(?:async\s+)?(?:function\*?\s+|class\s+)?([A-Za-z_$][\w$]*)\s*(?:;|$|\(|\{|<|extends\b)`)
 
 func newModuleIndex(files []ParsedFile) moduleIndex {
-	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}, defaultClass: map[string]string{}}
+	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}, defaultClass: map[string]string{},
+		instances: map[string]map[string]string{}, objects: map[string]map[string]bool{}, returns: map[string]map[string]string{}}
 	for _, f := range files {
 		mi.files[f.Path] = f.Lang
 		for d := path.Dir(f.Path); d != "." && d != "/" && !mi.dirs[d]; d = path.Dir(d) {
@@ -111,6 +133,21 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			if m := reExportDefaultNew.FindStringSubmatch(src); m != nil {
 				mi.defaultClass[pkg] = m[1]
 			}
+			for _, m := range reConstNew.FindAllStringSubmatch(src, -1) {
+				if mi.instances[pkg] == nil {
+					mi.instances[pkg] = map[string]string{}
+				}
+				mi.instances[pkg][m[1]] = m[2]
+			}
+			if r := jsReturnClasses(src, mi.instances[pkg]); len(r) > 0 {
+				mi.returns[pkg] = r
+			}
+			for _, m := range reConstObj.FindAllStringSubmatch(src, -1) {
+				if mi.objects[pkg] == nil {
+					mi.objects[pkg] = map[string]bool{}
+				}
+				mi.objects[pkg][m[1]] = true
+			}
 			jm := &jsModule{path: f.Path, lang: f.Lang, reexp: map[string]ImportBinding{}, imports: importsByLocal(f.Imports)}
 			for _, m := range reExportFrom.FindAllStringSubmatch(src, -1) {
 				for _, spec := range strings.Split(m[1], ",") {
@@ -125,6 +162,16 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			}
 			for _, m := range reExportStar.FindAllStringSubmatch(src, -1) {
 				jm.stars = append(jm.stars, m[1])
+			}
+			for _, m := range reExportLocal.FindAllStringSubmatch(src, -1) {
+				for _, spec := range strings.Split(m[1], ",") {
+					if fs := strings.Fields(strings.TrimPrefix(strings.TrimSpace(spec), "type ")); len(fs) == 3 && fs[1] == "as" {
+						if jm.aliases == nil {
+							jm.aliases = map[string]string{}
+						}
+						jm.aliases[fs[2]] = fs[0]
+					}
+				}
 			}
 			mi.jsMods[pkg] = jm
 		}
@@ -389,6 +436,9 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 		if b, ok := jm.reexp[name]; ok {
 			return follow(b)
 		}
+		if a, ok := jm.aliases[name]; ok {
+			return walk(pkg, a, depth+1)
+		}
 		if b, ok := jm.imports[name]; ok {
 			return follow(b)
 		}
@@ -402,4 +452,50 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 		return "", "", false
 	}
 	return walk(pkg, name, 0)
+}
+
+// jsReturnClasses are the classes a JS/TS module's top-level functions
+// return: the return annotation (function f(): Client, const f = (): Client
+// =>), else, when every return of the body names one module-level value of
+// a known class (let api: Client; … return api;), that class.
+func jsReturnClasses(src string, instances map[string]string) map[string]string {
+	typed := map[string]string{}
+	for k, v := range instances {
+		typed[k] = v
+	}
+	for _, m := range reTypedVar.FindAllStringSubmatch(src, -1) {
+		typed[m[1]] = m[2]
+	}
+	out := map[string]string{}
+	for _, m := range reArrowRet.FindAllStringSubmatch(src, -1) {
+		out[m[1]] = m[2]
+	}
+	for _, loc := range reFuncRet.FindAllStringSubmatchIndex(src, -1) {
+		name := src[loc[2]:loc[3]]
+		if loc[4] >= 0 {
+			out[name] = src[loc[4]:loc[5]]
+			continue
+		}
+		// the body: up to the first closing brace at the start of a line
+		body := src[loc[1]:]
+		if end := strings.Index(body, "\n}"); end >= 0 {
+			body = body[:end]
+		}
+		cls := ""
+		for _, ln := range strings.Split(body, "\n") {
+			if !strings.Contains(ln, "return") {
+				continue
+			}
+			r := reReturnID.FindStringSubmatch(strings.TrimSpace(ln))
+			if r == nil || typed[r[1]] == "" || cls != "" && cls != typed[r[1]] {
+				cls = ""
+				break
+			}
+			cls = typed[r[1]]
+		}
+		if cls != "" {
+			out[name] = cls
+		}
+	}
+	return out
 }

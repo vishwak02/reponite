@@ -103,6 +103,8 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 			ext = ".rs"
 		case strings.HasSuffix(path, ".java"):
 			ext = ".java"
+		case strings.HasSuffix(path, ".go"):
+			ext = ".go"
 		}
 		rules, _ := RulesForExt(ext)
 		root, spans, err := parseFileRules([]byte(src), ext, rules)
@@ -727,4 +729,125 @@ func TestPythonDelegationNotRecursion(t *testing.T) {
 	if _, bad := edges["app.group.Group.get_command"]["app.group.Group.get_command"]; bad {
 		t.Errorf("delegation read as recursion: %v", edges["app.group.Group.get_command"])
 	}
+}
+
+// A named import of a module-level value: an instance calls its class's
+// method, an object literal its own method.
+func TestTSNamedImportValues(t *testing.T) {
+	files := map[string]string{
+		"src/api/index.ts": `class Wrapper {
+  get(url: string) { return url; }
+  post(url: string) { return url; }
+}
+const api = new Wrapper();
+export { api, Wrapper };`,
+		"src/api/csv/index.ts": `import { Wrapper } from '..';
+export const wms = new Wrapper();`,
+		"src/logger/index.ts": `export const Logger = {
+  error(m: string) { return m; },
+};`,
+		"src/other.ts": `export class Thing { error(m: string) { return m; } get(u: string) { return u; } patch(u: string) { return u; } }`,
+		"src/api/svc.ts": `import { Wrapper } from './index';
+let svc: Wrapper;
+function getSvc() {
+  if (!svc) {
+    svc = new Wrapper();
+  }
+  return svc;
+}
+export function annotated(): Wrapper {
+  return new Wrapper();
+}
+export { getSvc };`,
+		"src/use.ts": `import { api } from './api';
+import { wms } from './api/csv';
+import { Logger } from './logger';
+import { getSvc, annotated } from './api/svc';
+export function fetchAll() {
+  getSvc().get('/c');
+  annotated().post('/d');
+}
+export function run() {
+  api.get('/a');
+  wms.post('/b');
+  Logger.error('x');
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["src.use.run"]
+	if run == nil {
+		t.Fatalf("run not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, run, "src/api.Wrapper.get", MethodTyped)
+	wantMethod(t, run, "src/api.Wrapper.post", MethodTyped)
+	wantMethod(t, run, "src/logger.error", MethodResolved)
+	fa := edges["src.use.fetchAll"]
+	wantMethod(t, fa, "src/api.Wrapper.get", MethodTyped)
+	wantMethod(t, fa, "src/api.Wrapper.post", MethodTyped)
+	if _, ok := fa["src.other.Thing.get"]; ok {
+		t.Errorf("f().get() pinned on Thing: %v", fa)
+	}
+	for _, bad := range []string{"src.other.Thing.error", "src.other.Thing.get"} {
+		if _, ok := run[bad]; ok {
+			t.Errorf("pinned on %s: %v", bad, run)
+		}
+	}
+}
+
+// make().save(): the method of the class the function returns.
+func TestPythonCallResultReceiver(t *testing.T) {
+	files := map[string]string{
+		"app/repo.py": `class Repo:
+    def save(self):
+        pass
+class Other:
+    def save(self):
+        pass
+def make_repo() -> Repo:
+    return Repo()
+def run():
+    make_repo().save()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	wantMethod(t, edges["app.repo.run"], "app.repo.Repo.save", MethodTyped)
+	if _, bad := edges["app.repo.run"]["app.repo.Other.save"]; bad {
+		t.Errorf("save pinned on Other")
+	}
+}
+
+// A JS/TS parameter's default value is computed on each call: its calls are
+// the function's; export { a as b } passes a on as b.
+func TestTSDefaultParamCallsAndExportAlias(t *testing.T) {
+	files := map[string]string{
+		"src/ids.ts": `export function nextId() { return 1; }`,
+		"src/testing/library.tsx": `const customRender = (ui: string) => ui;
+export { customRender as render };`,
+		"src/testing/index.ts": `export * from './library';`,
+		"src/send.ts": `import { nextId } from './ids';
+import { render } from './testing';
+export function send(id = nextId()) {
+  render('x');
+  return id;
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	send := edges["src.send"] // send() of send.ts: the id names its file
+	if send == nil {
+		t.Fatalf("send not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, send, "src.ids.nextId", MethodResolved)
+	wantMethod(t, send, "src/testing.library.customRender", MethodResolved)
+}
+
+// Each Go file's init is its own definition: two in one package keep their
+// calls apart instead of one replacing the other.
+func TestGoInitPerFile(t *testing.T) {
+	files := map[string]string{
+		"api/auth.go":   "package api\n\nfunc init() {\n\tRegister()\n}\n",
+		"api/router.go": "package api\n\nfunc init() {\n\tSetup()\n}\n\nfunc Register() {}\n\nfunc Setup() {}\n",
+	}
+	edges := indexAndEdges(t, files)
+	wantMethod(t, edges["api.init@auth"], "api.Register", MethodResolved)
+	wantMethod(t, edges["api.init@router"], "api.Setup", MethodResolved)
 }

@@ -564,10 +564,14 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 	var rest []QualifiedCall
 	var typed []CallSite
 	for _, qc := range qcs {
-		cls := ""
+		cls, chain := "", qc.Chain
 		switch {
 		case qc.Chain >= 2 && qc.Qualifier != "self" && qc.Qualifier != "cls":
 			v, ok := c.vars[qc.Qualifier]
+			if !ok && qc.Chain == 3 && qc.Attr == "" {
+				// make_repo().save(): what the function returns
+				v, ok, chain = pyReturnTag+qc.Qualifier, true, 2
+			}
 			if !ok {
 				break
 			}
@@ -578,8 +582,8 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 				continue
 			}
 			switch cls = p.valueClass(c, v); {
-			case cls == "" || qc.Chain == 2:
-			case qc.Chain == 3 && qc.Attr != "":
+			case cls == "" || chain == 2:
+			case chain == 3 && qc.Attr != "":
 				cls = p.fieldClass(cls, qc.Attr) // x.repo.save(): the field's class
 			default:
 				cls = ""

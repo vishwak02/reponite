@@ -62,7 +62,9 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	pool := newParsePool()
 	var skipped []SkippedFile
 	manifests := map[string][]byte{} // module-manifest files by tree path (§8B.2)
+	var tracked []string
 	err = tree.Files().ForEach(func(f *object.File) error {
+		tracked = append(tracked, f.Name)
 		blob := f.Blob.Hash
 		c, cerr := classifyFile(fileInput{
 			path: f.Name, size: f.Size, read: f.Contents,
@@ -97,7 +99,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	var precise map[string]map[string][]string
 	if len(goMods) > 0 {
 		// type-check the revision's Go code like a working tree's
-		precise = typeCheckTree(files, manifests, func(p string) (string, bool) {
+		precise = typeCheckTree(tracked, manifests, func(p string) (string, bool) {
 			f, ferr := tree.File(p)
 			if ferr != nil {
 				return "", false

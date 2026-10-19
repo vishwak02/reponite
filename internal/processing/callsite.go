@@ -375,7 +375,7 @@ var jsGlobals = map[string]bool{
 // method — the object is at least as likely to be a builtin.
 var memberBuiltins = map[string]map[string]bool{
 	"cpp": stdMembers, "c": stdMembers,
-	"javascript": jsMembers, "typescript": jsMembers, "rust": rustMembers,
+	"javascript": jsMembers, "typescript": jsMembers, "rust": rustMembers, "go": goMembers,
 	"python": {"append": true, "extend": true, "insert": true, "remove": true, "pop": true, "clear": true, "copy": true,
 		"count": true, "index": true, "sort": true, "reverse": true, "get": true, "items": true, "keys": true, "values": true,
 		"update": true, "setdefault": true, "add": true, "discard": true, "split": true, "join": true, "strip": true,
@@ -397,6 +397,20 @@ var memberBuiltins = map[string]map[string]bool{
 		"clear": true, "equals": true, "hashCode": true, "toString": true, "stream": true, "map": true, "filter": true,
 		"collect": true, "forEach": true, "orElse": true, "isPresent": true, "length": true, "append": true, "close": true,
 		"println": true, "format": true, "keySet": true, "values": true, "entrySet": true, "iterator": true, "next": true, "hasNext": true},
+}
+
+// goMembers are the methods of the standard library's interfaces (error,
+// io, http, sync, context, sort, fmt.Stringer) and of loggers: on a value
+// whose type is not known, one of these is no more the repo's method than
+// any other type's.
+var goMembers = map[string]bool{
+	"Error": true, "String": true, "Read": true, "Write": true, "Close": true, "Seek": true, "ReadFrom": true,
+	"WriteTo": true, "WriteString": true, "ReadByte": true, "WriteByte": true, "Flush": true,
+	"Header": true, "WriteHeader": true, "ServeHTTP": true, "Lock": true, "Unlock": true, "RLock": true,
+	"RUnlock": true, "Wait": true, "Done": true, "Err": true, "Value": true, "Deadline": true, "Len": true,
+	"Less": true, "Swap": true, "Unwrap": true, "Is": true, "As": true, "Format": true, "MarshalJSON": true,
+	"UnmarshalJSON": true, "Info": true, "Debug": true, "Warn": true, "Errorf": true, "Infof": true,
+	"Debugf": true, "Warnf": true, "Printf": true, "Println": true, "Fatal": true, "Fatalf": true,
 }
 
 var jsMembers = map[string]bool{

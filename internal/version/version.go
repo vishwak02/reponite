@@ -81,6 +81,10 @@ const (
 	//      library, pytest fixtures type a test's parameters, a repo root
 	//      with its own __init__.py is still the import root, and a method
 	//      calling its own name on another object delegates, not recurses.
+	//      JS/TS named imports of instances and object literals, f().m()
+	//      through return classes, export aliases and parameter defaults;
+	//      Go init per file (init@file), git revisions type-checked with
+	//      every tracked Go file, partly built packages resolved by scope.
 	IndexVer = 15
 
 	// GoTarget documents the intended production Go toolchain. The build

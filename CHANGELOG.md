@@ -58,7 +58,17 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   parameters are typed by the pytest fixture of that name (its module's, else the nearest
   `conftest.py`); `x.field.f()` resolves through the field's class; `db.set()`/`qs.filter()`
   are calls (only a bare builtin name is skipped); a method calling its own name on another
-  object is a delegation, not a recursion. Reindex to pick it up.
+  object is a delegation, not a recursion. JS/TS: a named import of an instance
+  (`export const api = new Client()`) or of an object literal (`Logger.error()`) calls that
+  class's or object's method; `f().m()` resolves through the class `f` returns (annotated, or
+  a module-level value of a known class); `export { a as b }` is followed; a parameter's
+  default value is part of the function's calls. Python `make().save()` resolves through the
+  return type. Go: each file's `init` is its own definition (`pkg.init@config`); a git
+  revision is type-checked with every tracked Go file (generated mocks, assembly, embedded
+  assets) and with its `go.mod` as written first; a package that only partly builds keeps
+  the checker's verdicts and resolves its other calls by Go's scoping; standard-library
+  method names (`Error`, `Write`, `Close`, logger calls) on an unknown receiver are not
+  pinned on a repo method. Reindex to pick it up.
 - **`config <key>`** follows the key from the file that defines it through the templates
   that render it (and the name they write it under) to the code reading the rendered key
   and where that value is used next; keys deeper than three levels are read too.
@@ -90,6 +100,8 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   pointer is skipped and reported by `coverage`.
 - `explain` and `trace` placed `dir.f` on a sibling module's `f` (`card.tsx`) instead of the
   directory's own module (`index.tsx`).
+- `explain` and `trace` placed `T.M` on a method of another type whose name ends in `T`
+  (`mockWiFiClient.Scan` for `Client.Scan`).
 - Two commands against one store at once failed with "database is locked"; opening the
   store waits for a writer and a reader takes no write lock.
 - Benchmark truth: the Python extractor follows package re-exports and a root

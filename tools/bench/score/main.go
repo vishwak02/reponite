@@ -321,7 +321,10 @@ func main() {
 // baseOf is the last segment of a qualified name (Class.method -> method).
 func baseOf(q string) string {
 	if i := strings.LastIndexAny(q, "./"); i >= 0 {
-		return q[i+1:]
+		q = q[i+1:]
+	}
+	if strings.HasPrefix(q, "init@") {
+		return "init" // a Go file's init is named after its file (init@config)
 	}
 	return q
 }

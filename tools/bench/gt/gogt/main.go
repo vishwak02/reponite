@@ -143,6 +143,20 @@ func main() {
 					if !ok {
 						return true
 					}
+					// pkg.F(): F of that package. With the package's import failed
+					// the checker can bind the name to a same-named F in scope
+					if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
+						if x, ok := sel.X.(*ast.Ident); ok {
+							switch o := p.TypesInfo.Uses[x].(type) {
+							case nil:
+								return true // an unresolved qualifier (a failed import)
+							case *types.PkgName:
+								if fn.Pkg() != o.Imported() {
+									return true
+								}
+							}
+						}
+					}
 					fn = fn.Origin()
 					to := declOf[fn]
 					if to == "" {

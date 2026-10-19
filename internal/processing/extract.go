@@ -172,6 +172,29 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		canonBody = content.Canon(body, normVer)
 		callees = calleesWithRules(body, r)
 		qcalls = qualifiedCallsWithRules(body, r)
+		if langFamily(r.Name) == "js" {
+			// a parameter's default value is computed on every call
+			if ps := firstChildAny(fn, []string{"formal_parameters"}); ps != nil {
+				seen := map[QualifiedCall]bool{}
+				for _, qc := range qcalls {
+					seen[qc] = true
+				}
+				for _, qc := range qualifiedCallsWithRules(ps, r) {
+					if !seen[qc] {
+						qcalls = append(qcalls, qc)
+					}
+				}
+				have := map[string]bool{}
+				for _, c := range callees {
+					have[c] = true
+				}
+				for _, c := range calleesWithRules(ps, r) {
+					if !have[c] {
+						callees = append(callees, c)
+					}
+				}
+			}
+		}
 		localImports = Imports(body, r)
 		if r.Name == "rust" {
 			sites = rustCallSites(body, rustVarTypes(fn, enclosing))

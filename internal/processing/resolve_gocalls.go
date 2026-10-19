@@ -61,9 +61,9 @@ func goImportDir(importPath string, mods map[string]string) (string, bool) {
 }
 
 // resolveGoCalls resolves one Go function's call sites. precise holds the
-// type checker's verdicts for this caller (base name -> qid) and wins; a
-// non-nil precise means the caller's package type-checked, so a member call
-// it did not resolve is not guessed by name.
+// type checker's verdicts for this caller (base name -> qid) and wins; with
+// goCheckedKey the caller's package type-checked in full, so a call it did
+// not resolve is not guessed by name.
 func resolveGoCalls(callerPkg, callerRecv string, qcs []QualifiedCall, imports map[string]ImportBinding, mods map[string]string, x siteIndex, precise map[string][]string) []query.Callee {
 	out := make([]query.Callee, 0, len(qcs))
 	seen := map[string]int{}
@@ -80,14 +80,20 @@ func resolveGoCalls(callerPkg, callerRecv string, qcs []QualifiedCall, imports m
 	for _, qc := range qcs {
 		name := qc.Name
 		if qs := precise[name]; len(qs) > 0 {
+			repo := false
 			for _, q := range qs {
 				if x.nodeSet[q] {
 					add(query.Callee{Name: q, ResolutionMethod: MethodTypes, Confidence: ConfTypes})
+					repo = true
 				}
+			}
+			if !repo {
+				// every call of the name the checker resolved left the repo
+				add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 			}
 			continue
 		}
-		if precise != nil {
+		if _, checked := precise[goCheckedKey]; checked {
 			// the caller type-checked and this call reaches no repo function:
 			// a builtin, a library, an interface or a function value
 			add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})

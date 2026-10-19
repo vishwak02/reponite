@@ -642,7 +642,23 @@ func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
 		}
 	}
 	line := declHead(f, sp)
-	return strings.Contains(line, owner+"::"+base) || strings.Contains(line, owner+") "+base)
+	return hasWordAt(line, owner+"::"+base) || hasWordAt(line, owner+") "+base)
+}
+
+// hasWordAt: s holds w not preceded by an identifier character (Client)
+// Scan is not mockWiFiClient) Scan).
+func hasWordAt(s, w string) bool {
+	for from := 0; ; {
+		i := strings.Index(s[from:], w)
+		if i < 0 {
+			return false
+		}
+		at := from + i
+		if at == 0 || !isIdentByte(s[at-1]) {
+			return true
+		}
+		from = at + 1
+	}
 }
 
 // definitionCount is how many definitions in qid's package carry its name and
