@@ -296,6 +296,12 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				}
 			}
 			if super {
+				if _, ok := x.classes.has(callerPkg, callerRecv); ok && hasClassBases(lang) {
+					// the class is known and no repo base ahead of a library
+					// base defines it: the library's method
+					add(query.Callee{Name: "super::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+					continue
+				}
 				// a base's method, which one unproven: never the caller's own
 				add(memberCalleeLang(name, lang, x))
 				continue
@@ -360,6 +366,15 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			}
 			if q, ok := pickOne(x.byRecv[s.Scope+"."+name], x); ok {
 				add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				continue
+			}
+			if langFamily(lang) != "c" {
+				// Cls.f() on a class the repo does not give an f: inherited
+				// from a base, or the class is not the repo's — never some
+				// other definition that happens to be named f
+				for _, c := range typedCallees(s.Scope, name, lang, x) {
+					add(c)
+				}
 				continue
 			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])

@@ -89,5 +89,6 @@ jobs:
         with:
           node-version: '22'
       - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java github.com/smacker/go-tree-sitter/c github.com/smacker/go-tree-sitter/cpp github.com/smacker/go-tree-sitter/rust github.com/smacker/go-tree-sitter/bash github.com/go-git/go-git/v5 golang.org/x/tools
+      - run: pip install jedi==0.20.1
       # resolved answers must stay 100% precise; recall gates are in run.sh
       - run: tools/bench/run.sh

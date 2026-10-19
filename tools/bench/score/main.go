@@ -44,6 +44,10 @@ type truth struct {
 	// the extractor could not resolve statically is then "undetermined" if
 	// its callee's name is called, "false" if it is never called.
 	Names map[string][]string `json:"names"`
+	// ResolvedExternal lists "from>name" calls a type-inferring extractor
+	// resolved to something outside the repo (a builtin, a library): an
+	// edge from there to a repo definition of that name is wrong.
+	ResolvedExternal []string `json:"resolved_external"`
 }
 
 // Score is one repository's result.
@@ -62,6 +66,7 @@ type Score struct {
 type ratio struct{ Hit, Total int }
 
 var minPrecision, minRecall float64
+var showUndet *int
 var gateFailed []string
 
 // gate records a failure when r is below min percent (min < 0: no gate; an
@@ -109,6 +114,7 @@ func main() {
 	tf := flag.String("truth", "", "ground truth JSON")
 	rf := flag.String("routes", "", "golden endpoint list (tools/bench/golden/routes): score routes instead")
 	cf := flag.String("calls", "", "golden call list (tools/bench/golden/calls): score those callers' edges instead")
+	showUndet = flag.Int("show-undetermined", 0, "print up to N resolved edges the truth cannot judge (stderr)")
 	cmds := flag.Bool("commands", false, "with -truth: also check what context (callers) and usages (call sites) answer for each definition")
 	jsonOut := flag.Bool("json", false, "print JSON")
 	flag.Float64Var(&minPrecision, "min-precision", -1, "gate: exit 1 when precision of resolved edges (or routes) is below this percent")
@@ -187,6 +193,9 @@ func main() {
 		}
 		resolvedName[e.From+">"+baseOf(defByID[e.To].Name)] = true
 	}
+	for _, k := range t.ResolvedExternal {
+		resolvedName[k] = true
+	}
 	calls := map[string]bool{} // from + ">" + name: the definition calls that name
 	for from, ns := range t.Names {
 		for _, n := range ns {
@@ -216,6 +225,10 @@ func main() {
 			name := baseOf(defByID[to].Name)
 			if !anyEdge[k] && t.Names != nil && calls[from+">"+name] && !resolvedName[from+">"+name] {
 				sc.Undetermined[bd]++ // called on a receiver the extractor cannot type
+				if *showUndet > 0 && bd == "resolved(>=0.85)" {
+					*showUndet--
+					fmt.Fprintf(os.Stderr, "UNDETERMINED [%s %.2f] %s (%s) -> %s (%s)\n", c.ResolutionMethod, c.Confidence, caller, from, c.Name, to)
+				}
 				continue
 			}
 			r := sc.Edges[bd]

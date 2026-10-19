@@ -197,10 +197,21 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		dirs[pkgOf(c.path)] = true
 	}
 	inRepo := func(module string) bool { return moduleInRepo(module, dirs) }
+	// Python resolves absolute imports for real: one it cannot place in the
+	// repo is outside it (`import json` beside a package dir named json)
+	inRepoFor := func(lang, path string) func(string) bool {
+		if lang != "python" {
+			return inRepo
+		}
+		return func(module string) bool {
+			_, ok := mods.resolve(lang, path, module)
+			return ok || isRelativeModule(module)
+		}
+	}
 	for _, d := range classDecls {
 		d := d
 		modPkg := func(module string) (string, bool) { return mods.resolve(d.lang, d.path, module) }
-		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepo, modPkg))
+		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepoFor(d.lang, d.path), modPkg))
 	}
 	x.classes = classes
 	var rsPaths []string
@@ -269,7 +280,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
-			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo, modPkg)
+			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
 			if langFamily(c.lang) == "js" {
 				// x.f() on a default import that is an instance of a class:
 				// that class's method

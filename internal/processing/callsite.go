@@ -379,7 +379,17 @@ var memberBuiltins = map[string]map[string]bool{
 		"lstrip": true, "rstrip": true, "replace": true, "startswith": true, "endswith": true, "format": true, "lower": true,
 		"upper": true, "encode": true, "decode": true, "find": true, "read": true, "write": true, "close": true,
 		"readlines": true, "exists": true, "open": true, "sleep": true, "info": true, "debug": true, "warning": true,
-		"error": true, "exception": true, "put": true, "wait": true, "start": true, "run": true},
+		"error": true, "exception": true, "put": true, "wait": true, "start": true, "run": true,
+		// set, str and Django QuerySet methods: on a value of unknown type
+		// they are almost always these, not the repo's method of the name
+		"intersection": true, "union": true, "difference": true, "symmetric_difference": true,
+		"issubset": true, "issuperset": true, "isdisjoint": true, "title": true,
+		"capitalize": true, "isdigit": true, "isalpha": true, "splitlines": true, "partition": true,
+		"rpartition": true, "zfill": true, "rfind": true, "filter": true, "exclude": true,
+		"order_by": true, "values_list": true, "annotate": true, "aggregate": true,
+		"select_related": true, "prefetch_related": true, "first": true, "last": true,
+		"distinct": true, "only": true, "defer": true, "get_or_create": true, "update_or_create": true,
+		"bulk_create": true, "bulk_update": true, "iterator": true, "using": true},
 	"java": {"get": true, "put": true, "add": true, "remove": true, "contains": true, "size": true, "isEmpty": true,
 		"clear": true, "equals": true, "hashCode": true, "toString": true, "stream": true, "map": true, "filter": true,
 		"collect": true, "forEach": true, "orElse": true, "isPresent": true, "length": true, "append": true, "close": true,
@@ -495,7 +505,17 @@ func aliasInRepo(module string, dirs map[string]bool) bool {
 }
 
 // isTypeName: an identifier written like a class (CamelCase).
-func isTypeName(s string) bool { return s != "" && s[0] >= 'A' && s[0] <= 'Z' }
+// isTypeName: a capitalized name, as classes are written — but not an
+// ALL_CAPS constant (SETTINGS.get(...) is a call on a value).
+func isTypeName(s string) bool {
+	if s == "" || s[0] < 'A' || s[0] > 'Z' {
+		return false
+	}
+	if len(s) > 1 && strings.ToUpper(s) == s {
+		return false
+	}
+	return true
+}
 
 // rustMembers are methods every standard type has (Vec, Option, Result,
 // String, iterators, Clone/ToString…): on a value of unknown type they are
