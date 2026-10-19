@@ -243,7 +243,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			s = typeSite(s, callerRecv, x)
 		}
 		key := s.Name
-		if s.Kind == CallTyped || s.Kind == CallModule || s.Kind == CallScoped || s.Scope == superScope {
+		if s.Kind == CallTyped || s.Kind == CallModule || s.Kind == CallScoped || s.Kind == CallExternal || s.Scope == superScope {
 			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
 		}
 		cur, ok := best[key]

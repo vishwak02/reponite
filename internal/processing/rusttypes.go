@@ -330,7 +330,10 @@ func rustRecvExpr(n content.AST, vars map[string]string) string {
 // false) when unknown.
 func (tt *typeTable) evalDeclared(expr, callerRecv string) (string, bool) {
 	t := tt.evalDeclaredRaw(expr, callerRecv)
-	if strings.HasPrefix(t, rustExt) {
+	if t == rustExt {
+		return "", true // foreign, its type's name lost along the chain
+	}
+	if strings.HasPrefix(t, rustExt+":") {
 		return strings.TrimPrefix(t, rustExt+":"), true
 	}
 	return t, false

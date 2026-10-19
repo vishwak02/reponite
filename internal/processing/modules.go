@@ -191,23 +191,28 @@ func (mi moduleIndex) resolvePython(callerPath, module string) (string, bool) {
 			others = append(others, d)
 		}
 	}
-	best, found := "", false
-	for _, d := range ancestors { // the deepest root above the caller
-		if !found || len(d) > len(best) {
-			best, found = d, true
+	// the deepest root above the caller first, then the shallowest elsewhere;
+	// the first under which the whole module exists (a ROS package dir named
+	// like its Python package, with the package itself under src/, is a
+	// candidate root that holds no such module)
+	sort.Slice(ancestors, func(i, j int) bool {
+		if len(ancestors[i]) != len(ancestors[j]) {
+			return len(ancestors[i]) > len(ancestors[j])
+		}
+		return ancestors[i] < ancestors[j]
+	})
+	sort.Slice(others, func(i, j int) bool {
+		if len(others[i]) != len(others[j]) {
+			return len(others[i]) < len(others[j])
+		}
+		return others[i] < others[j]
+	})
+	for _, d := range append(ancestors, others...) {
+		if pkg, ok := mi.pyTarget(path.Join(d, strings.ReplaceAll(rest, ".", "/"))); ok {
+			return pkg, true
 		}
 	}
-	if !found {
-		for _, d := range others { // else the shallowest root anywhere
-			if !found || len(d) < len(best) {
-				best, found = d, true
-			}
-		}
-	}
-	if !found {
-		return "", false
-	}
-	return mi.pyTarget(path.Join(best, strings.ReplaceAll(rest, ".", "/")))
+	return "", false
 }
 
 func (mi moduleIndex) pyTarget(p string) (string, bool) {
