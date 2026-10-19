@@ -109,6 +109,7 @@ func main() {
 	tf := flag.String("truth", "", "ground truth JSON")
 	rf := flag.String("routes", "", "golden endpoint list (tools/bench/golden/routes): score routes instead")
 	cf := flag.String("calls", "", "golden call list (tools/bench/golden/calls): score those callers' edges instead")
+	cmds := flag.Bool("commands", false, "with -truth: also check what context (callers) and usages (call sites) answer for each definition")
 	jsonOut := flag.Bool("json", false, "print JSON")
 	flag.Float64Var(&minPrecision, "min-precision", -1, "gate: exit 1 when precision of resolved edges (or routes) is below this percent")
 	flag.Float64Var(&minRecall, "min-recall", -1, "gate: exit 1 when recall (static edges, golden calls at any confidence, or method+path routes) is below this percent")
@@ -238,6 +239,9 @@ func main() {
 		}
 	}
 	sort.Strings(sc.MissedEdges)
+	if *cmds {
+		checkCommands(st, *repo, *ref, t, qidAt, calls)
+	}
 	if *jsonOut {
 		out, _ := json.MarshalIndent(sc, "", " ")
 		fmt.Println(string(out))
@@ -573,4 +577,132 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 	for _, x := range misses {
 		fmt.Printf("  MISSED %s\n", x)
 	}
+}
+
+// checkCommands asks context and usages about every definition with static
+// callers in the truth, as a user would, and compares the answers with it.
+// A caller (or call site) is wrong when the truth knows the caller and it
+// never calls that name; one the extractor cannot judge is not counted.
+func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string]string, calls map[string]bool) {
+	qidOf := map[string]string{}
+	dup := map[string]bool{}
+	for q, id := range qidAt {
+		if _, ok := qidOf[id]; ok {
+			dup[id] = true
+		}
+		qidOf[id] = q
+	}
+	defByID := map[string]def{}
+	for _, d := range t.Defs {
+		defByID[d.ID] = d
+	}
+	edgeAny := map[string]bool{}
+	for _, e := range t.Edges {
+		edgeAny[e.From+">"+e.To] = true
+	}
+	// judge says whether caller id really calls target to: true/false, or
+	// unknown when the truth cannot tell (called by name on an untyped value)
+	judge := func(id, to, name string) (bool, bool) {
+		if edgeAny[id+">"+to] {
+			return true, true
+		}
+		if t.Names == nil {
+			return false, false
+		}
+		if _, known := t.Names[id]; !known {
+			return false, false
+		}
+		if calls[id+">"+name] {
+			return false, false // calls that name on something the truth cannot type
+		}
+		return false, true
+	}
+	callersOf := map[string]map[string]bool{}
+	sites := map[string]map[string]bool{} // target -> "path:line" of its static call sites
+	for _, e := range t.Edges {
+		if e.Kind != "static" {
+			continue
+		}
+		if callersOf[e.To] == nil {
+			callersOf[e.To], sites[e.To] = map[string]bool{}, map[string]bool{}
+		}
+		callersOf[e.To][e.From] = true
+		sites[e.To][fmt.Sprintf("%s:%d", defByID[e.From].Path, e.Line)] = true
+	}
+	var targets []string
+	for to := range callersOf {
+		if _, ok := qidOf[to]; ok && !dup[to] {
+			targets = append(targets, to)
+		}
+	}
+	sort.Strings(targets)
+	var ctxRecall, ctxPrec, useRecall, usePrec ratio
+	var bad []string
+	for _, to := range targets {
+		q := qidOf[to]
+		name := baseOf(defByID[to].Name)
+		res := query.Context(st, repo, ref, q, true)
+		got := map[string]bool{}
+		for _, c := range res.Callers {
+			id, ok := qidAt[c]
+			if !ok {
+				continue
+			}
+			got[id] = true
+			if ok, decided := judge(id, to, name); decided {
+				ctxPrec.Total++
+				if ok {
+					ctxPrec.Hit++
+				} else if len(bad) < 20 {
+					bad = append(bad, fmt.Sprintf("context %s: caller %s never calls it", defByID[to].Name, defByID[id].Name))
+				}
+			}
+		}
+		for c := range callersOf[to] {
+			ctxRecall.Total++
+			if got[c] {
+				ctxRecall.Hit++
+			} else if len(bad) < 20 {
+				bad = append(bad, fmt.Sprintf("context %s: missing caller %s", defByID[to].Name, defByID[c].Name))
+			}
+		}
+		u := query.Usages(st, repo, ref, q)
+		at := map[string]bool{}
+		for _, x := range u.Usages {
+			if x.Repo != "" && x.Repo != repo {
+				continue
+			}
+			at[fmt.Sprintf("%s:%d", x.Path, x.Line)] = true
+			if x.Confirmed {
+				if id, ok := qidAt[x.In]; ok {
+					if hit, decided := judge(id, to, name); decided {
+						usePrec.Total++
+						if hit {
+							usePrec.Hit++
+						} else if len(bad) < 20 {
+							bad = append(bad, fmt.Sprintf("usages %s: confirmed site %s:%d in %s, which never calls it", defByID[to].Name, x.Path, x.Line, defByID[id].Name))
+						}
+					}
+				}
+			}
+		}
+		for s := range sites[to] {
+			useRecall.Total++
+			if at[s] {
+				useRecall.Hit++
+			} else if len(bad) < 20 {
+				bad = append(bad, fmt.Sprintf("usages %s: missing call site %s", defByID[to].Name, s))
+			}
+		}
+	}
+	fmt.Printf("  commands (%d definitions with static callers)\n", len(targets))
+	fmt.Printf("    context callers recall    %s\n", ctxRecall)
+	fmt.Printf("    context callers precision %s\n", ctxPrec)
+	fmt.Printf("    usages call-site recall   %s\n", useRecall)
+	fmt.Printf("    usages confirmed precision %s\n", usePrec)
+	for _, b := range bad {
+		fmt.Printf("    WRONG %s\n", b)
+	}
+	gate("context caller precision", ctxPrec, minPrecision)
+	gate("usages confirmed precision", usePrec, minPrecision)
 }

@@ -63,7 +63,13 @@ type moduleIndex struct {
 	// on from another module (export { a as b } from './m', and imported
 	// names), and whole modules (export * from './m')
 	jsMods map[string]*jsModule
+	// defaultClass is the class a module's default export is an instance of
+	// (export default new Store(), or const store = new Store(); export
+	// default store), by the module's package id
+	defaultClass map[string]string
 }
+
+var reExportDefaultNew = regexp.MustCompile(`(?m)^export\s+default\s+new\s+([A-Z][\w$]*)\s*[(<]`)
 
 type jsModule struct {
 	path    string                   // the module's file
@@ -83,7 +89,7 @@ var (
 var reExportDefault = regexp.MustCompile(`(?m)^export\s+default\s+(?:async\s+)?(?:function\*?\s+|class\s+)?([A-Za-z_$][\w$]*)\s*(?:;|$|\(|\{|<|extends\b)`)
 
 func newModuleIndex(files []ParsedFile) moduleIndex {
-	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}}
+	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}, defaultClass: map[string]string{}}
 	for _, f := range files {
 		mi.files[f.Path] = f.Lang
 		for d := path.Dir(f.Path); d != "." && d != "/" && !mi.dirs[d]; d = path.Dir(d) {
@@ -97,6 +103,13 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			pkg := pkgOfFile(f.Path, f.Lang)
 			if m := reExportDefault.FindStringSubmatch(src); m != nil && !jsDefaultNotName[m[1]] {
 				mi.defaults[pkg] = m[1]
+				inst := regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:const|let|var)\s+` + regexp.QuoteMeta(m[1]) + `\s*(?::[^=]+)?=\s*new\s+([A-Z][\w$]*)\s*[(<]`)
+				if c := inst.FindStringSubmatch(src); c != nil {
+					mi.defaultClass[pkg] = c[1]
+				}
+			}
+			if m := reExportDefaultNew.FindStringSubmatch(src); m != nil {
+				mi.defaultClass[pkg] = m[1]
 			}
 			jm := &jsModule{path: f.Path, lang: f.Lang, reexp: map[string]ImportBinding{}, imports: importsByLocal(f.Imports)}
 			for _, m := range reExportFrom.FindAllStringSubmatch(src, -1) {

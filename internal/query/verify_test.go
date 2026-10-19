@@ -43,7 +43,7 @@ func TestVerifyEdit(t *testing.T) {
 	if len(res.Impacts) != 1 || len(res.Impacts[0].Breaks) == 0 {
 		t.Fatalf("expected the breaking call site in impacts, got %+v", res.Impacts)
 	}
-	if res.Impacts[0].Breaks[0].In != "Handle" {
+	if res.Impacts[0].Breaks[0].In != "web.Handle" {
 		t.Fatalf("break should be inside Handle, got %+v", res.Impacts[0].Breaks[0])
 	}
 

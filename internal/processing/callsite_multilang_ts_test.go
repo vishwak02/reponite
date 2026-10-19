@@ -498,7 +498,7 @@ export function undo() { changelog.undo(); }`,
 	if _, self := u["web/src/app.page.undo"]; self {
 		t.Error("changelog.undo() resolved to the caller itself")
 	}
-	wantMethod(t, u, "web/src.changelog.Changelog.undo", MethodMember)
+	wantMethod(t, u, "web/src.changelog.Changelog.undo", MethodTyped) // the default export is a Changelog
 }
 
 func TestJSONCToJSON(t *testing.T) {

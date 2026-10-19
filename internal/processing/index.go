@@ -271,6 +271,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
 			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo, modPkg)
 			if langFamily(c.lang) == "js" {
+				// x.f() on a default import that is an instance of a class:
+				// that class's method
+				for _, qc := range c.sym.QualifiedCalls {
+					b, ok := c.imports[qc.Qualifier]
+					if !ok || !b.Default || qc.Chain != 2 {
+						continue
+					}
+					if mp, ok := mods.resolve(c.lang, c.path, b.Module); ok && mods.defaultClass[mp] != "" {
+						sites = append(sites, CallSite{Name: qc.Name, Kind: CallTyped, Scope: mods.defaultClass[mp]})
+					}
+				}
 				// a name a module passes on (barrel index files, export default
 				// of an import): the module that defines it
 				for i, s := range sites {

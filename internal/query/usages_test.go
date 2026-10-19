@@ -41,8 +41,8 @@ func TestUsages(t *testing.T) {
 	if !strings.Contains(u.Text, "validateCard(n)") {
 		t.Errorf("usage text should be the calling line, got %q", u.Text)
 	}
-	if u.In != "Charge" {
-		t.Errorf("enclosing function = %q, want Charge", u.In)
+	if u.In != "billing.Charge" {
+		t.Errorf("enclosing function = %q, want billing.Charge", u.In)
 	}
 	if !u.Confirmed {
 		t.Error("usage inside Charge (a resolved caller) must be confirmed")
@@ -111,7 +111,7 @@ func TestUsagesWithoutParentheses(t *testing.T) {
 	if res := query.Usages(m, "r", "HEAD", "scripts.check_repo"); res.Total != 1 || res.Usages[0].Line != 5 || !res.Usages[0].Confirmed {
 		t.Errorf("shell call: %+v", res.Usages)
 	}
-	if res := query.Usages(m, "r", "HEAD", "web.Layout"); res.Total != 1 || res.Usages[0].Line != 3 || res.Usages[0].In != "Home" {
+	if res := query.Usages(m, "r", "HEAD", "web.Layout"); res.Total != 1 || res.Usages[0].Line != 3 || res.Usages[0].In != "web.Home" {
 		t.Errorf("JSX element: %+v", res.Usages)
 	}
 }

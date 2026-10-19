@@ -90,23 +90,21 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 	defRe := regexp.MustCompile(`\b(func|def|fn|function)\b\s+(\([^)]*\)\s*)?` + regexp.QuoteMeta(base) + `\s*[(<]` +
 		// a POSIX shell function or a class method written `name() {`
 		`|^\s*` + regexp.QuoteMeta(base) + `\s*\(\s*\)\s*\{`)
+	in := placeCallers(s, ref, siteCallers, g.Matches)
 	for _, m := range g.Matches {
 		if defRe.MatchString(m.Text) || ProjectFileKind(m.Path) != "" {
 			continue // its own definition, or prose/build text in a README or manifest
 		}
 		u := Usage{Repo: m.Repo, Path: m.Path, Line: m.Line, Text: strings.TrimSpace(m.Text), In: m.Symbol}
-		if set := callers[m.Repo]; set != nil && m.Symbol != "" {
-			// grep's enclosing symbol is a bare name; match it against caller base names.
-			for c := range set {
-				if baseName(c) == baseName(m.Symbol) {
-					u.Confirmed = true
-					break
-				}
-			}
+		// confirmed: the line sits inside a function the call graph says
+		// calls the target (that exact symbol, for a qualified query) — the
+		// caller told apart from every other function of the same name
+		if q := in(m.Repo, m.Path, m.Line); q != "" {
+			u.In, u.Confirmed = q, true
 		}
 		res.Usages = append(res.Usages, u)
 	}
-	res.Usages = append(res.Usages, callerSiteUsages(s, ref, base, siteCallers, res.Usages)...)
+	res.Usages = append(res.Usages, callerSiteUsages(s, ref, symbol, base, siteCallers, res.Usages)...)
 	res.Usages = append(res.Usages, shellCommandUsages(s, repo, ref, base, defRe, res.Usages)...)
 	sort.SliceStable(res.Usages, func(i, j int) bool {
 		a, b := res.Usages[i], res.Usages[j]
@@ -131,7 +129,7 @@ func Usages(s Store, repo, ref, symbol string) UsagesResult {
 // call (`check_repository "x"`), a JSX element (`<Layout …/>`), a Robot
 // keyword (`Open Door`), a function passed as a value. Every one is
 // confirmed: the call graph already says that caller calls the target.
-func callerSiteUsages(s Store, ref, base string, callers map[string]map[string]bool, have []Usage) []Usage {
+func callerSiteUsages(s Store, ref, symbol, base string, callers map[string]map[string]bool, have []Usage) []Usage {
 	seen := map[string]bool{}
 	for _, u := range have {
 		seen[u.Repo+"\x00"+u.Path+"\x00"+strconv.Itoa(u.Line)] = true
@@ -176,6 +174,14 @@ func callerSiteUsages(s Store, ref, base string, callers map[string]map[string]b
 			if e := strings.ToLower(filepath.Ext(path)); e == ".robot" || e == ".resource" {
 				re = robot
 			}
+			if aliases := jsImportAliases(f, symbol, base); len(aliases) > 0 {
+				// the caller names the target by the alias it imported it as
+				names := []string{regexp.QuoteMeta(base)}
+				for _, a := range aliases {
+					names = append(names, regexp.QuoteMeta(a))
+				}
+				re = regexp.MustCompile(`\b(?:` + strings.Join(names, "|") + `)\b`)
+			}
 			lines := strings.Split(f.Content, "\n")
 			for ln := span.StartLine + 1; ln <= span.EndLine && ln <= len(lines); ln++ {
 				text := lines[ln-1]
@@ -188,7 +194,7 @@ func callerSiteUsages(s Store, ref, base string, callers map[string]map[string]b
 				}
 				seen[k] = true
 				out = append(out, Usage{Repo: rp, Path: path, Line: ln, Text: strings.TrimSpace(text),
-					In: baseName(caller), Confirmed: true})
+					In: caller, Confirmed: true})
 			}
 		}
 	}
@@ -249,4 +255,120 @@ func isShellPath(p string) bool {
 		return true // an extension-less script; grep only matched command syntax
 	}
 	return false
+}
+
+// placeCallers locates the resolved callers in the files the matches are in
+// and returns a lookup: the innermost caller whose body holds a line, "" for
+// none.
+func placeCallers(s Store, ref string, callers map[string]map[string]bool, matches []Match) func(repo, path string, line int) string {
+	type span struct {
+		qid        string
+		start, end int
+	}
+	paths := map[string]map[string]bool{}
+	for _, m := range matches {
+		if paths[m.Repo] == nil {
+			paths[m.Repo] = map[string]bool{}
+		}
+		paths[m.Repo][m.Path] = true
+	}
+	placed := map[string]map[string][]span{}
+	for rp, set := range callers {
+		ps := paths[rp]
+		if len(ps) == 0 || len(set) == 0 {
+			continue
+		}
+		files := filesMatching(s, rp, ref, func(p string) bool { return ps[p] })
+		placed[rp] = map[string][]span{}
+		for c := range set {
+			p, st, en, ok := LocateSymbol(files, c)
+			if !ok || !ownFile(c, p) {
+				continue // its own file is not among these: no match is in it
+			}
+			placed[rp][p] = append(placed[rp][p], span{c, st, en})
+		}
+	}
+	return func(repo, path string, line int) string {
+		best, size := "", 1<<30
+		for _, sp := range placed[repo][path] {
+			if sp.start <= line && line <= sp.end && sp.end-sp.start < size {
+				best, size = sp.qid, sp.end-sp.start
+			}
+		}
+		return best
+	}
+}
+
+// ownFile reports whether qid can be defined in the file at p: its id
+// starts with the file's directory, and with its module for languages whose
+// module is the file (except index/__init__ files and a symbol named like
+// its file, which carry the directory alone).
+func ownFile(qid, p string) bool {
+	dir := pkgFromPath(p)
+	if dir != "" && !strings.HasPrefix(qid, dir+".") {
+		return false
+	}
+	stem := fileModuleStem(p)
+	if stem == "" {
+		return true
+	}
+	mod := stem
+	if dir != "" {
+		mod = dir + "." + stem
+	}
+	return strings.HasPrefix(qid, mod+".") || qid == mod || !strings.Contains(strings.TrimPrefix(qid, dir+"."), ".")
+}
+
+var (
+	reJSDefaultImport = regexp.MustCompile(`(?m)^\s*import\s+([A-Za-z_$][\w$]*)\s*(?:,\s*\{[^}]*\})?\s*from\s*['"]([^'"]+)['"]`)
+	reJSNamedImports  = regexp.MustCompile(`(?s)import\s*(?:[A-Za-z_$][\w$]*\s*,\s*)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]`)
+)
+
+// jsImportAliases are the local names a JS/TS file imports the target under:
+// `{ base as X }`, and — when the target's id is known — a default import
+// `import X from './m'` of the module the target is defined in.
+func jsImportAliases(f File, symbol, base string) []string {
+	switch strings.ToLower(filepath.Ext(f.Path)) {
+	case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte":
+	default:
+		return nil
+	}
+	var out []string
+	for _, m := range reJSNamedImports.FindAllStringSubmatch(f.Content, -1) {
+		for _, spec := range strings.Split(m[1], ",") {
+			fs := strings.Fields(spec)
+			if len(fs) == 3 && fs[0] == base && fs[1] == "as" {
+				out = append(out, fs[2])
+			}
+		}
+	}
+	if symbol == base {
+		return out // a bare name: which module defines it is unknown
+	}
+	for _, m := range reJSDefaultImport.FindAllStringSubmatch(f.Content, -1) {
+		alias, spec := m[1], m[2]
+		var mod string
+		switch {
+		case strings.HasPrefix(spec, "./") || strings.HasPrefix(spec, "../"):
+			mod = filepath.ToSlash(filepath.Clean(filepath.Join(filepath.Dir(f.Path), spec)))
+			// dir/mod.Name, or dir.mod when the symbol is named like its file
+			collapsed := filepath.ToSlash(filepath.Dir(mod)) + "." + filepath.Base(mod)
+			if strings.HasPrefix(symbol, mod+".") || strings.HasPrefix(symbol, mod+"/") || symbol == collapsed {
+				out = append(out, alias)
+			}
+		default:
+			// a path alias (@app/components/x): the part after the alias root
+			if i := strings.IndexByte(spec, '/'); i > 0 && i < len(spec)-1 {
+				rest := spec[i+1:]
+				collapsed := ""
+				if j := strings.LastIndexByte(rest, '/'); j > 0 {
+					collapsed = "/" + rest[:j] + "." + rest[j+1:]
+				}
+				if strings.Contains(symbol, "/"+rest+".") || strings.HasPrefix(symbol, rest+".") || collapsed != "" && strings.HasSuffix(symbol, collapsed) {
+					out = append(out, alias)
+				}
+			}
+		}
+	}
+	return out
 }
