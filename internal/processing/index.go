@@ -137,6 +137,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				sh = content.SymbolHash(normVer, id)
 			}
 			imports := withLocalImports(byLocal, s.LocalImports)
+			if prev, dup := byQID[qid]; dup && lang != "python" && prev.path == f.Path {
+				// Overloads (Java, C++, C#, TypeScript signatures) share one id:
+				// the id calls what any of them calls. (Python: a later def
+				// replaces the earlier one, so the last body stands.)
+				s = mergeOverload(prev.sym, s)
+			}
 			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: imports, path: f.Path}
 			if len(imports) > 0 {
 				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, imports)...)
@@ -423,4 +429,26 @@ func baseName(qid string) string {
 		return qid[i+1:]
 	}
 	return qid
+}
+
+// mergeOverload folds overload b into a (the first definition): a keeps its
+// identity and signature; the calls of both bodies count.
+func mergeOverload(a, b Symbol) Symbol {
+	a.Callees = append(append([]string(nil), a.Callees...), b.Callees...)
+	a.QualifiedCalls = append(append([]QualifiedCall(nil), a.QualifiedCalls...), b.QualifiedCalls...)
+	a.CallSites = append(append([]CallSite(nil), a.CallSites...), b.CallSites...)
+	a.LocalImports = append(append([]ImportBinding(nil), a.LocalImports...), b.LocalImports...)
+	if len(b.Vars) > 0 {
+		vars := make(map[string]string, len(a.Vars)+len(b.Vars))
+		for k, v := range a.Vars {
+			vars[k] = v
+		}
+		for k, v := range b.Vars {
+			if _, ok := vars[k]; !ok {
+				vars[k] = v
+			}
+		}
+		a.Vars = vars
+	}
+	return a
 }

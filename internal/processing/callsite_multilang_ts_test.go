@@ -400,6 +400,8 @@ public class MyBatisArticleRepository implements ArticleRepository {
 public class ArticleQueryService {
   public Optional<ArticleData> findBySlug(String slug, User user) { return null; }
   public String format(String s) { return s; }
+  private void fill(String id) { format(id); }
+  private void fill(String id, User u) { findBySlug(id, u); }
 }`,
 		"app/api/ArticleApi.java": `package app.api;
 public class ArticleApi {
@@ -426,4 +428,8 @@ public class ArticleApi {
 	wantMethod(t, a, "app/infra.MyBatisArticleRepository.findBySlug", MethodOverride)
 	wantMethod(t, a, "app/query.ArticleQueryService.format", MethodTyped)
 	wantMethod(t, a, "String::format", MethodExternal)
+	// overloads share one id, which calls what each of them calls
+	fill := edges["app/query.ArticleQueryService.fill"]
+	wantMethod(t, fill, "app/query.ArticleQueryService.format", MethodResolved)
+	wantMethod(t, fill, "app/query.ArticleQueryService.findBySlug", MethodResolved)
 }

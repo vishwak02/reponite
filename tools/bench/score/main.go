@@ -376,7 +376,8 @@ func normPath(p string) string {
 //	src/main.rs:80 run
 //	  src/walk.rs:717 scan
 //
-// Locations are definition lines. Since each caller's list is complete, an
+// Locations are definition lines; a class's overloads count as the one id
+// reponite gives them. Since each caller's list is complete, an
 // edge reponite draws from a listed caller to a repo symbol not in its list is
 // false. Edges to names reponite left unresolved (external, ambiguous) are
 // neither: they are counted as recall misses when the golden lists a target.
@@ -447,6 +448,17 @@ func scoreCalls(storeDir, repo, ref, golden string) {
 			if _, ok := byLoc[c]; ok {
 				return c
 			}
+		}
+		// an overload: reponite gives a class's overloads one id, placed at
+		// the first; the golden names the one a call picks
+		var same []loc
+		for c := range byLoc {
+			if c.path == l.path && c.name == l.name {
+				same = append(same, c)
+			}
+		}
+		if len(same) == 1 {
+			return same[0]
 		}
 		return l
 	}
