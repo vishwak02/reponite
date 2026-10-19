@@ -211,6 +211,11 @@ func newestRef(refs []string) string {
 	if len(pick) == 0 {
 		pick = sub
 	}
+	// a branch (main, origin/devel) is the line of development: when one is
+	// indexed it is what "the code now" means, ahead of any release tag
+	if b := preferredBranch(pick); b != "" {
+		return b
+	}
 	best := ""
 	for _, r := range pick {
 		if best == "" || versionLess(best, r) {
@@ -236,4 +241,28 @@ func versionLess(a, b string) bool {
 		b = b[i+1:]
 	}
 	return query.VersionLess(a, b)
+}
+
+// branchRank orders the usual default-branch names; other branches follow.
+var branchRank = map[string]int{"main": 1, "master": 2, "develop": 3, "devel": 4, "dev": 5, "trunk": 6}
+
+// preferredBranch is the indexed ref that names a branch rather than a
+// version (no leading digit or v<digit>), the usual default first; "" when
+// every ref is a version.
+func preferredBranch(refs []string) string {
+	best, bestRank := "", 1<<30
+	for _, r := range refs {
+		if r == "" || r[0] >= '0' && r[0] <= '9' || len(r) > 1 && r[0] == 'v' && r[1] >= '0' && r[1] <= '9' || strings.Contains(r, "@") {
+			continue
+		}
+		name := r[strings.LastIndex(r, "/")+1:]
+		rank, ok := branchRank[name]
+		if !ok {
+			rank = 100
+		}
+		if rank < bestRank || rank == bestRank && r < best {
+			best, bestRank = r, rank
+		}
+	}
+	return best
 }
