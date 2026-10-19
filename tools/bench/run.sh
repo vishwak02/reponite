@@ -66,7 +66,8 @@ while read -r repo url commit checks; do
     esac
     case "$check" in
       go | py | ts)
-        reponite-bench-score -store "$store" -repo "$repo" -truth "$truth" \
+        # -commands: context, usages, tests and explain answers checked too
+        reponite-bench-score -store "$store" -repo "$repo" -truth "$truth" -commands \
           -min-precision 100 -min-recall "$recall_truth" || status=1 ;;
       routes)
         reponite-bench-score -store "$store" -repo "$repo" -routes "$here/golden/routes/$repo.txt" \

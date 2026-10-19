@@ -96,36 +96,40 @@ Updated as phases land; the scorecard output is the source of truth.
 
 | Phase | State |
 |---|---|
-| 1. Benchmark and scorecard | Ground truth for Go, Python and TypeScript call graphs; golden route lists for five apps; scorer with call-graph and route modes. Golden files for Java/Rust/C++ call edges, ROS and config flow not yet written. |
-| 2. Scope | Inside a repo the default registry is that repo's workspace; fleet-wide is opt-in. Test-only routes hidden by default. |
-| 3. Accuracy fixes | Call edges: type-checked Go, module-qualified Python/JS/TS ids, language-family filtering, colliding unresolved names stored as external/ambiguous. Routes: one engine shared by `routes`, `map`, `trace`, `explain` and `models`. Open: Rust associated functions, Python methods inherited through `self`, constructor calls of classes passed as values. |
+| 1. Benchmark and scorecard | Ground truth: Go (`go/types`), Python (`ast` + Jedi's inferred targets, so calls on untyped values are judged too), TypeScript (the checker). Golden route lists for five apps; golden call lists for Java, Rust and C++. The scorer checks call edges, routes, and what `context`, `usages`, `tests` and `explain` answer (`-commands`). |
+| 2. Scope | Inside a repo the default registry is that repo's workspace; an indexed branch is the default ref ahead of tags; an unindexed working directory never joins the fleet. Test-only routes hidden by default. |
+| 3. Accuracy fixes | Go type-checked; Python typed from annotations, constructors, factory returns and self fields, resolved in the MRO; JS/TS through tsconfig paths, default imports and barrels; Java typed from fields/params/locals; Rust from impl blocks, module paths and receiver types; class bodies' calls and fields counted. |
 | 4. Packs | Not started. |
-| 5. Private regression | Route engine run on private repositories: all differences were fixes or intended test-route exclusions. Not yet automated. |
-| 6. Gate and docs | Not started. |
+| 5. Private regression | Run by hand on five private repos (Django, Django REST, React, C++/ROS with submodules): every command checked; the fixes it found are in the changelog. Not automated (the repos are private). |
+| 6. Gate and docs | CI runs `tools/bench/run.sh` on every push: resolved answers must stay 100% precise. |
 
 ### Scorecard
 
-Call edges marked resolved (confidence ≥ 0.85), against the type checker / AST truth:
+Call edges marked resolved (confidence ≥ 0.85). Python truth includes Jedi's
+inferred targets; "undetermined" are edges neither extractor can type and are
+not counted either way.
 
-| Repo | Language | Definitions | Resolved precision | Recall (static) |
+| Repo | Language | Resolved precision | Static recall | Undetermined |
 |---|---|---|---|---|
-| golang-gin-realworld-example-app | Go | 100% (167) | 100% (404) | 100% (404) |
-| sealed-secrets | Go | 99.7% (348/349) | 100% (505) | 100% (505) |
-| flask | Python | 99.2% (901/908) | 100% (237) | 98.8% (255/258) |
-| django-realworld-example-app | Python | 100% (108) | 100% (7) | 100% (7) |
-| full-stack-fastapi-template | Python | 100% (162) | 100% (207) | 100% (207) |
-| full-stack-fastapi-template | TypeScript | 100% (266) | 100% (476) | 100% (476) |
-| node-express-realworld-example-app | TypeScript | 100% (32) | 100% (34) | 100% (34) |
+| golang-gin-realworld-example-app | Go | 100% (404) | 100% (404) | 0 |
+| sealed-secrets | Go | 100% (505) | 100% (505) | 0 |
+| flask | Python | 100% (703) | 100% (260) | 8 |
+| django-realworld-example-app | Python | 100% (13) | 100% (6) | 0 |
+| full-stack-fastapi-template | Python | 100% (208) | 100% (208) | 0 |
+| full-stack-fastapi-template | TypeScript | 100% (476) | 100% (476) | 0 |
+| node-express-realworld-example-app | TypeScript | 100% (34) | 100% (34) | 0 |
 
-Routes, against the golden endpoint lists:
+Golden call lists (each caller's every in-repo call written from the source):
 
-| App | Endpoints | Path + method recall | Precision | Handler names |
+| Repo | Language | Callers | Resolved precision | Recall |
 |---|---|---|---|---|
-| golang-gin-realworld-example-app | 20 | 100% | 100% | 100% |
-| node-express-realworld-example-app | 20 | 100% | 100% | n/a |
-| django-realworld-example-app | 20 | 100% | 100% | 100% |
-| spring-boot-realworld-example-app | 19 | 100% | 100% | 100% |
-| full-stack-fastapi-template | 23 | 100% | 100% | 100% |
+| spring-boot-realworld-example-app | Java | 14 | 100% | 100% |
+| fd | Rust | 28 | 100% | 100% (93.5% at resolved confidence) |
+| move_base_flex | C++ | 15 | 100% | 100% |
 
-Before the route engine: Spring 0 routes, gin group prefixes lost, Express 8 of 19
-endpoints, FastAPI routes listed five times, DRF methods unknown.
+Routes, against the golden endpoint lists: 100% path, method, precision and
+handler on all five apps (Go/gin, Express, Django REST, Spring Boot, FastAPI).
+
+Commands (`score -commands`): `explain` place and kind, `context` callers,
+`usages` confirmed call sites and `tests` are 100% precise on every repo above;
+recall of `usages` call sites and `tests` is 97–100%.

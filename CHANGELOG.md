@@ -13,6 +13,25 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Added
 
+- **Python receiver typing**: `x.f()` resolves on the class `x` holds when the code says
+  which — annotations (including `Optional[X]`, `X | None`), constructors, a factory whose
+  return is annotated or always a constructor, attributes set on `self` — through package
+  `__init__` re-exports and the class's MRO.
+- **JS/TS imports as the compiler resolves them**: `tsconfig.json`/`jsconfig.json` `paths`
+  and `baseUrl`, default imports under any local name, barrels (`export … from`,
+  `export *`), default-exported instances.
+- **Django/DRF route names**: `reverse("ns:name")` and `url_for(...)` link to the route by
+  name; `tests` finds tests that call a view through the test client. Inherited and
+  nested-router `@action`s are routes; every method an action lists is.
+- **Request-object clients** (`axios(config)`, `adapter({ method, url })`) and base-URL
+  prefixes (`${BACKEND_URL}v1/...`) are read.
+- **`links`**: dotted Python module strings (`DJANGO_SETTINGS_MODULE`, `INSTALLED_APPS`,
+  `MIDDLEWARE`, `ROOT_URLCONF`, pytest.ini) link to the module.
+- **`--repo`** on every fleet-wide command (usages, logsite, impls, routes, ui, topics,
+  grep, search, semsearch), as the MCP tools have.
+- **`tools/bench/gt/jedigt.py`**: Jedi-inferred edges for the Python truth;
+  `score -commands` checks `context`, `usages`, `tests` and `explain`; `tests` gated in CI.
+
 - **`tools/bench`**: ground-truth extractors (Go `go/types`, Python `ast`, the TypeScript
   checker), hand-written route lists for five public apps, and a scorer that prints
   precision and recall per repo. Current results are in `docs/quality-plan.md`.
@@ -38,6 +57,21 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 - `routes` listed FastAPI routes five times, lost gin group prefixes, missed Spring entirely
   and reported logger calls as routes.
+- Starting the MCP server re-indexed the working tree of repos indexed only at git
+  revisions; stopped midway it left a partial `HEAD` that every command then read. The MCP
+  server now refreshes only an indexed `HEAD`, an interrupted re-index is marked incomplete
+  and never read as the default ref, and read-only commands never create an empty store.
+- An indexed branch (`origin/devel`) is the default ref ahead of release tags.
+- `diff`/`compat` saw no change when a class's fields changed (a Django serializer field).
+- `search` matched case-sensitively against directory names too.
+- `usages` confirmed any same-named caller; it now confirms only the symbol's own callers
+  and reports them qualified. Calls through aliased imports are found.
+- `explain` called module-level Python/JS functions methods, and showed a same-named class
+  from a sibling module or a method for a free function; `brief` dropped decorators.
+- `errors` listed handlers from unrelated repos; `models` dropped `_id`-style columns;
+  `topics` read docstring examples and class lines as endpoints.
+- `/api/search` covered only the first repo; it covers the fleet as the CLI and MCP do.
+- JSON answers write empty lists as `[]`, never `null`.
 
 ### A new dashboard
 
