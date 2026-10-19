@@ -851,3 +851,35 @@ func TestGoInitPerFile(t *testing.T) {
 	wantMethod(t, edges["api.init@auth"], "api.Register", MethodResolved)
 	wantMethod(t, edges["api.init@router"], "api.Setup", MethodResolved)
 }
+
+// Cls.f() on an imported class reaches the method its MRO finds — one a
+// base defines (a classmethod) — and never a subclass's override.
+func TestPythonClassCallInherited(t *testing.T) {
+	files := map[string]string{
+		"core/events.py": `class AbstractEvent:
+    @classmethod
+    def trigger(cls, m):
+        return cls.compose(m)
+    @classmethod
+    def compose(cls, m):
+        pass
+class PickEvent(AbstractEvent):
+    pass
+class SpecialPick(PickEvent):
+    @classmethod
+    def trigger(cls, m):
+        pass
+`,
+		"core/__init__.py": "from core.events import PickEvent\n",
+		"tests/test_events.py": `from core import PickEvent
+def test_trigger():
+    PickEvent.trigger(1)
+`,
+	}
+	edges := indexAndEdges(t, files)
+	tt := edges["tests.test_events.test_trigger"]
+	wantMethod(t, tt, "core.events.AbstractEvent.trigger", MethodResolved)
+	if _, bad := tt["core.events.SpecialPick.trigger"]; bad {
+		t.Errorf("a subclass override reached from Cls.f(): %v", tt)
+	}
+}

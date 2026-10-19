@@ -68,7 +68,12 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   assets) and with its `go.mod` as written first; a package that only partly builds keeps
   the checker's verdicts and resolves its other calls by Go's scoping; standard-library
   method names (`Error`, `Write`, `Close`, logger calls) on an unknown receiver are not
-  pinned on a repo method. Reindex to pick it up.
+  pinned on a repo method. Python `Cls.f()` reaches a classmethod a base defines (never a
+  subclass override). Reindex to pick it up.
+- **`ximpact`** takes a qualified library target (`requests.get`, `std::move`) and counts
+  only that module's calls; a bare name also finds calls stored as `module::name`, which it
+  missed. `--format text` added.
+- A symbol can be named by the end of its directory path (`components/motor.formatMsg`).
 - **`config <key>`** follows the key from the file that defines it through the templates
   that render it (and the name they write it under) to the code reading the rendered key
   and where that value is used next; keys deeper than three levels are read too.
@@ -100,6 +105,8 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   pointer is skipped and reported by `coverage`.
 - `explain` and `trace` placed `dir.f` on a sibling module's `f` (`card.tsx`) instead of the
   directory's own module (`index.tsx`).
+- `usages` missed calls through a Python alias imported in a parenthesized list
+  (`from m import (f as _f)`).
 - `explain` and `trace` placed `T.M` on a method of another type whose name ends in `T`
   (`mockWiFiClient.Scan` for `Client.Scan`).
 - Two commands against one store at once failed with "database is locked"; opening the

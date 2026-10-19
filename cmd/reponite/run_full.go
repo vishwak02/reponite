@@ -583,19 +583,24 @@ func cmdSemSearch(args []string) {
 
 // cmdXImpact reports who across every indexed repo calls an external symbol.
 func cmdXImpact(args []string) {
-	var ref string
+	var ref, format string
 	var local bool
-	pos := parseCmd("ximpact", "ximpact <symbol> [--ref R] [--local]", args, func(fs *flag.FlagSet) {
+	pos := parseCmd("ximpact", "ximpact <symbol> [--ref R] [--format json|text] [--local]", args, func(fs *flag.FlagSet) {
 		fs.StringVar(&ref, "ref", "", "restrict each repo to this ref")
+		fs.StringVar(&format, "format", "json", "json | text")
 		fs.BoolVar(&local, "local", false, "consider only this repo instead of the registered fleet")
 	})
 	if len(pos) < 1 {
-		fail(fmt.Errorf("usage: reponite ximpact <symbol> [--ref R] [--local]"))
+		fail(fmt.Errorf("usage: reponite ximpact <symbol> [--ref R] [--format json|text] [--local]"))
 	}
 	f := openFleet(local)
 	defer f.Close()
 	res := query.XImpact(f, pos[0], ref)
 	res.Note = joinNote(res.Note, f.fleetNote())
+	if format == "text" {
+		fmt.Print(interfaces.XImpactText(res))
+		return
+	}
 	printJSON(interfaces.XImpactJSON(res))
 }
 

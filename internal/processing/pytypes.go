@@ -314,6 +314,10 @@ func pyClassFields(class content.AST) map[string]string {
 // classGraph (Python), not a bare class name.
 const pyClassScope = "\x00pycls:"
 
+// pyClassExact prefixes a CallTyped scope for a call on the class itself
+// (Cls.f()): the method its MRO reaches, without subclass overrides.
+const pyClassExact = "\x00pyclsx:"
+
 // pyCtx is what typing needs from one definition: where it is, its typed
 // names, and how its file's imports read a dotted name.
 type pyCtx struct {
@@ -568,6 +572,14 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 		switch {
 		case qc.Chain >= 2 && qc.Qualifier != "self" && qc.Qualifier != "cls":
 			v, ok := c.vars[qc.Qualifier]
+			if !ok && qc.Chain == 2 && isTypeName(qc.Qualifier) {
+				if k := p.class(c, qc.Qualifier); k != "" {
+					// Cls.f(): the method Cls's MRO reaches — a classmethod or
+					// staticmethod inherited from a base — never a subclass's
+					typed = append(typed, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassExact + k})
+					continue
+				}
+			}
 			if !ok && qc.Chain == 3 && qc.Attr == "" {
 				// make_repo().save(): what the function returns
 				v, ok, chain = pyReturnTag+qc.Qualifier, true, 2

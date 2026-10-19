@@ -325,3 +325,21 @@ func TestXImpactModuleDistinguishesCollisions(t *testing.T) {
 		}
 	}
 }
+
+// A library call is stored as module::name: a qualified target finds it
+// (requests.get, or requests::get), a bare name finds it in any module, and
+// another module's get is not counted for requests.get.
+func TestXImpactQualifiedLibraryTarget(t *testing.T) {
+	m := storage.NewMem()
+	m.Put("svc-a", "HEAD", "svc-a.fetch", ext("f", "requests::get"))
+	m.Put("svc-b", "HEAD", "svc-b.load", ext("l", "cache::get"))
+	for _, target := range []string{"requests.get", "requests::get"} {
+		res := query.XImpact(m, target, "")
+		if len(res.Callers) != 1 || res.Callers[0].Caller != "svc-a.fetch" {
+			t.Errorf("%s: %+v", target, res.Callers)
+		}
+	}
+	if res := query.XImpact(m, "get", ""); len(res.Callers) != 2 {
+		t.Errorf("bare get: %+v", res.Callers)
+	}
+}

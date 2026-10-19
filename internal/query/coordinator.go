@@ -187,11 +187,12 @@ func resolveIn(syms map[string]SymbolRef, q string) []string {
 	if strings.Contains(q, "::") {
 		return resolveCpp(syms, q)
 	}
-	// A partly qualified name (Class.method, dir.Class.method) matches every id
-	// ending in it on a "." boundary; a bare name matches by base name.
+	// A partly qualified name (Class.method, dir.Class.method, or the end of
+	// a directory path: components/motor.f) matches every id ending in it on
+	// a "." or "/" boundary; a bare name matches by base name.
 	var out []string
 	for k := range syms {
-		if baseName(k) == q || strings.HasSuffix(k, "."+q) {
+		if baseName(k) == q || strings.HasSuffix(k, "."+q) || strings.HasSuffix(k, "/"+q) {
 			out = append(out, k)
 		}
 	}

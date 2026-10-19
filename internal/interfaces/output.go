@@ -305,6 +305,34 @@ type ximpactDTO struct {
 	Meta         metaDTO `json:"_meta"`
 }
 
+// XImpactText renders XImpact for a terminal: the target's definitions and
+// contract state, then each caller with how it was found.
+func XImpactText(r query.XImpactResult) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "ximpact %s: %d caller(s)", r.Target, len(r.Callers))
+	if len(r.Definitions) > 0 {
+		fmt.Fprintf(&b, ", defined at %d place(s)", len(r.Definitions))
+	}
+	if r.ContractChanged {
+		fmt.Fprintf(&b, ", contract changed across refs (%d caller(s) expect the old shape)", r.StaleCallers)
+	}
+	b.WriteString("\n")
+	for _, d := range r.Definitions {
+		fmt.Fprintf(&b, "  def %s@%s %s\n", d.Repo, d.Ref, d.Symbol)
+	}
+	for _, c := range r.Callers {
+		fmt.Fprintf(&b, "  %s@%s %s  [%s %.2f]", c.Repo, c.Ref, c.Caller, c.ResolutionMethod, c.Confidence)
+		if c.ExpectedSignature != "" {
+			fmt.Fprintf(&b, " %s", c.ExpectedSignature)
+		}
+		b.WriteString("\n")
+	}
+	if r.Note != "" {
+		fmt.Fprintf(&b, "note: %s\n", r.Note)
+	}
+	return b.String()
+}
+
 // XImpactJSON renders the cross-repo caller set fused with the target's contract
 // state (ext §8B). Each caller carries its resolution_method so an agent can
 // tell module-resolved (precise) callers from name-based (fallback) ones.

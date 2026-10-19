@@ -84,7 +84,8 @@ const (
 	//      JS/TS named imports of instances and object literals, f().m()
 	//      through return classes, export aliases and parameter defaults;
 	//      Go init per file (init@file), git revisions type-checked with
-	//      every tracked Go file, partly built packages resolved by scope.
+	//      every tracked Go file, partly built packages resolved by scope;
+	//      Python Cls.f() through the class's MRO.
 	IndexVer = 15
 
 	// GoTarget documents the intended production Go toolchain. The build

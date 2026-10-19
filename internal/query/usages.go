@@ -333,7 +333,8 @@ func jsImportAliases(f File, symbol, base string) []string {
 	case ".py":
 		// from .testing import FlaskClient as cls
 		var out []string
-		re := regexp.MustCompile(`\bimport\b[^\n]*?\b` + regexp.QuoteMeta(base) + `\s+as\s+(\w+)`)
+		// from m import f as g, or a parenthesized list across lines
+		re := regexp.MustCompile(`\bimport\s+(?:\([^)]*?|[^\n(]*?)\b` + regexp.QuoteMeta(base) + `\s+as\s+(\w+)`)
 		for _, m := range re.FindAllStringSubmatch(f.Content, -1) {
 			out = append(out, m[1])
 		}

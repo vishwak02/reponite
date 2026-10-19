@@ -24,6 +24,7 @@ package query
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // ExternalResolution is the resolution_method the resolver stamps on a call that
@@ -107,6 +108,9 @@ type XImpactResult struct {
 // the definition scan; the module-resolved scan is inherently fleet-wide.
 func XImpact(s Store, target, ref string) XImpactResult {
 	res := XImpactResult{Target: target}
+	// a qualified target (requests.get, std::move, pkg.Func) names its module;
+	// a bare one (getUser) matches that name in any module
+	tmod, tbase := extParts(target)
 
 	// --- definition sites + the target's module identity/contract state ---
 	// Signatures are grouped by the fully-qualified identity (repo, qid), so
@@ -122,7 +126,7 @@ func XImpact(s Store, target, ref string) XImpactResult {
 			snap := s.Snapshot(repo, rf)
 			mons := s.MonikersAt(repo, rf)
 			for name, facts := range snap.Symbols {
-				if baseName(name) == target {
+				if baseName(name) == tbase && (tmod == "" || name == target || strings.HasSuffix(name, "."+target) || strings.HasSuffix(name, "/"+target)) {
 					moniker := mons[name]
 					if moniker != "" {
 						monikerSet[moniker] = true
@@ -196,8 +200,12 @@ func XImpact(s Store, target, ref string) XImpactResult {
 	}
 
 	// --- tier 1: module-resolved callers (precise), fleet-wide ---
-	for _, module := range res.Modules {
-		for _, h := range s.ExternalRefsTo(module, target) {
+	modules := res.Modules
+	if tmod != "" && !moduleSet[tmod] {
+		modules = append(append([]string{}, modules...), tmod) // a library module the target names
+	}
+	for _, module := range modules {
+		for _, h := range s.ExternalRefsTo(module, tbase) {
 			addHit(h)
 		}
 	}
@@ -212,7 +220,8 @@ func XImpact(s Store, target, ref string) XImpactResult {
 					continue // already counted precisely
 				}
 				for _, c := range callees {
-					if c.ResolutionMethod == ExternalResolution && baseName(c.Name) == target {
+					cm, cb := extParts(c.Name)
+					if c.ResolutionMethod == ExternalResolution && cb == tbase && (tmod == "" || cm == tmod || strings.HasSuffix(cm, "."+tmod) || strings.HasSuffix(cm, "/"+tmod)) {
 						seen[key] = true
 						res.Callers = append(res.Callers, XImpactCaller{
 							Repo: repo, Ref: rf, Caller: caller,
@@ -324,4 +333,14 @@ func ximpactNote(moduleResolved bool, scipCallers int) string {
 		prefix = fmt.Sprintf("%d caller(s) SCIP-resolved by symbol moniker (no name guessing); ", scipCallers) + prefix
 	}
 	return prefix + base
+}
+
+// extParts splits an external name (requests::get, a.b.C.f, std::move) into
+// its qualifier and its own name.
+func extParts(name string) (mod, base string) {
+	n := strings.ReplaceAll(name, "::", ".")
+	if i := strings.LastIndex(n, "."); i >= 0 {
+		return n[:i], n[i+1:]
+	}
+	return "", n
 }
