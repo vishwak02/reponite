@@ -554,6 +554,17 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 		default:
 			continue
 		}
+		// the file's own module named in the id (dir.module.Class.f): this
+		// file, not a same-named class in a sibling module
+		if stem := fileModuleStem(f.Path); stem != "" {
+			mod := stem
+			if p != "" {
+				mod = p + "." + stem
+			}
+			if strings.HasPrefix(qid, mod+".") {
+				score += 2
+			}
+		}
 		for _, sp := range f.Symbols {
 			if sp.Name != base {
 				continue

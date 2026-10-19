@@ -273,6 +273,23 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		name := s.Name
 		switch s.Kind {
 		case CallTyped:
+			if strings.HasPrefix(s.Scope, pyClassScope) {
+				// a Python value whose class is known: the method its MRO
+				// reaches, and any subclass's override
+				cls := strings.TrimPrefix(s.Scope, pyClassScope)
+				if q, found := x.classes.method(cls, name, false, x.nodeSet); found {
+					add(query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
+					for _, o := range x.classes.overriders(cls, name, x.nodeSet) {
+						if x.callerTest || !x.isTest[o] {
+							add(query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
+						}
+					}
+				} else {
+					// a library base's method, or an attribute set at runtime
+					add(query.Callee{Name: x.classes.name[cls] + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+				}
+				continue
+			}
 			for _, c := range typedCallees(s.Scope, name, lang, x) {
 				add(c)
 			}

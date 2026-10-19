@@ -34,6 +34,10 @@ type Route struct {
 	Partial bool `json:",omitempty"`
 	// Test: defined in test code (a test server), not served by the app.
 	Test bool `json:",omitempty"`
+	// Name is the route's URL name where the framework has one (Django
+	// name=, a DRF router's basename-list / -detail / -<action>), which
+	// reverse("name") in code and tests resolves.
+	Name string `json:",omitempty"`
 }
 
 // ClientCall is one HTTP call site whose URL could be resolved.
@@ -50,6 +54,9 @@ type ClientCall struct {
 	// Warning: the URL is malformed as written (a stray brace from a
 	// template-literal typo is sent literally: "/operations/}42/errors/").
 	Warning string
+	// RouteName: the URL is reverse("name") / url_for("endpoint"): the route
+	// is found by its name, not its path.
+	RouteName string `json:",omitempty"`
 }
 
 // RouteLink is a route and the client calls that reach it.
@@ -144,6 +151,29 @@ func routesWith(s Store, repo, ref, filter string, limit int, opt RoutesOptions)
 		links[i].Route = r
 	}
 	for _, c := range clients {
+		if c.RouteName != "" {
+			// reverse("name"): the routes of that name (url_for: the endpoint,
+			// which is the view function's name)
+			var hit []int
+			for i, r := range routes {
+				if c.Method != "" && r.Method != "*" && r.Method != "" && !strings.EqualFold(c.Method, r.Method) && !strings.EqualFold(c.Method, "request") {
+					continue
+				}
+				if r.Name == c.RouteName || r.Name == "" && baseName(r.Handler) == c.RouteName && strings.Contains(c.Raw, "url_for") {
+					hit = append(hit, i)
+				}
+			}
+			if len(hit) == 0 {
+				if keep(c.URL) {
+					res.Unmatched = append(res.Unmatched, c)
+				}
+				continue
+			}
+			for _, i := range hit {
+				links[i].Clients = append(links[i].Clients, c)
+			}
+			continue
+		}
 		best, idx := 0, []int(nil)
 		cs := segments(c.URL)
 		var only map[string]bool
@@ -352,6 +382,21 @@ type djRoute struct {
 	line             int
 	pattern, handler string
 	router           string // DRF router var: pattern is relative to where it is included
+	name             string // URL name (name=, or a router's basename-list/-detail)
+	basename         string // a DRF registration's basename
+}
+
+// pyKwarg is the string value of keyword argument kw among args.
+func pyKwarg(args []string, kw string) string {
+	re := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(kw) + `\s*=\s*`)
+	for _, a := range args {
+		if loc := re.FindStringIndex(a); loc != nil {
+			if v, ok := pyStringLit(strings.TrimSpace(a[loc[1]:])); ok {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 type djInc struct {
@@ -393,8 +438,16 @@ func parseDjango(d *djFile, src string) {
 		d.routers[router] = true
 		base := nested[router] + strings.Trim(lit, "^$/")
 		vs := strings.TrimSpace(args[1])
-		d.entries = append(d.entries, djRoute{line: lineAt(m[0]), pattern: base + "/", handler: vs, router: router},
-			djRoute{line: lineAt(m[0]), pattern: base + "/{}/", handler: vs, router: router})
+		bn := pyKwarg(args, "basename")
+		if bn == "" && len(args) >= 3 && !strings.Contains(args[2], "=") {
+			bn, _ = pyStringLit(strings.TrimSpace(args[2]))
+		}
+		list, detail := "", ""
+		if bn != "" {
+			list, detail = bn+"-list", bn+"-detail"
+		}
+		d.entries = append(d.entries, djRoute{line: lineAt(m[0]), pattern: base + "/", handler: vs, router: router, name: list, basename: bn},
+			djRoute{line: lineAt(m[0]), pattern: base + "/{}/", handler: vs, router: router, name: detail, basename: bn})
 	}
 	for _, m := range drfPlusEq.FindAllStringSubmatch(src, -1) {
 		d.includes = append(d.includes, djInc{prefix: "", module: m[1] + ".urls"})
@@ -444,7 +497,7 @@ func parseDjango(d *djFile, src string) {
 		if i := strings.IndexAny(h, ",("); i >= 0 {
 			h = h[:i]
 		}
-		d.entries = append(d.entries, djRoute{line: lineAt(m[0]), pattern: pat, handler: strings.TrimSpace(h)})
+		d.entries = append(d.entries, djRoute{line: lineAt(m[0]), pattern: pat, handler: strings.TrimSpace(h), name: pyKwarg(args[2:], "name")})
 	}
 }
 
@@ -594,7 +647,7 @@ func djangoRoutes(repo string, files []File) []Route {
 		}
 	}
 	var out []Route
-	viewsets := map[string][]string{} // DRF viewset class -> mounted list route ("v1/x/")
+	viewsets := map[string][]drfMount{} // DRF viewset class -> mounted list routes
 	for _, d := range mods {
 		pfx := prefixes[d]
 		if len(pfx) == 0 {
@@ -606,12 +659,12 @@ func djangoRoutes(repo string, files []File) []Route {
 				mounts = rp // include(router.urls) under each of this file's mounts
 			}
 			for _, p := range mounts {
-				out = append(out, Route{Repo: repo, Path: d.file.Path, Line: e.line, Method: "*",
+				out = append(out, Route{Repo: repo, Path: d.file.Path, Line: e.line, Method: "*", Name: e.name,
 					Pattern: normURL(p + e.pattern), Handler: e.handler, Framework: "django"})
 				if e.router != "" && !strings.HasSuffix(strings.TrimSuffix(e.pattern, "/"), "{}") {
 					// the list route (a nested router's has {} for its parent)
 					vs := e.handler[strings.LastIndex(e.handler, ".")+1:]
-					viewsets[vs] = append(viewsets[vs], normURL(p+e.pattern))
+					viewsets[vs] = append(viewsets[vs], drfMount{pattern: normURL(p + e.pattern), basename: e.basename})
 				}
 			}
 		}
@@ -627,17 +680,22 @@ var (
 	pyClassBases = regexp.MustCompile(`^class\s+\w+\s*\(([^)]*)\)`)
 	drfDetail    = regexp.MustCompile(`detail\s*=\s*(True|False)`)
 	drfURLPath   = regexp.MustCompile(`url_path\s*=\s*r?["']([^"']*)["']`)
+	drfURLName   = regexp.MustCompile(`url_name\s*=\s*r?["']([^"']*)["']`)
+	// reverse("ns:name"), reverse_lazy(...), Flask url_for("bp.endpoint")
+	pyReverse = regexp.MustCompile(`^\s*(reverse|reverse_lazy|url_for)\(\s*f?["']([^"']+)["']`)
 )
 
 // drfActions: a registered viewset's @action methods are routes of their own
 // (list-level base/<path>/, or detail-level base/{}/<path>/) — its own and
 // those it inherits from base classes and mixins of the repo.
-func drfActions(repo string, files []File, viewsets map[string][]string) []Route {
+type drfMount struct{ pattern, basename string }
+
+func drfActions(repo string, files []File, viewsets map[string][]drfMount) []Route {
 	type action struct {
-		path, name, sub string
-		line            int
-		methods         []string
-		detail          bool
+		path, name, sub, urlName string
+		line                     int
+		methods                  []string
+		detail                   bool
 	}
 	actions := map[string][]action{} // class -> its own @action methods
 	bases := map[string][]string{}   // class -> base class names
@@ -681,9 +739,12 @@ func drfActions(repo string, files []File, viewsets map[string][]string) []Route
 			if name == "" {
 				continue
 			}
-			a := action{path: f.Path, name: name, sub: name, line: i + 1, methods: []string{"GET"}}
+			a := action{path: f.Path, name: name, sub: name, urlName: strings.ReplaceAll(name, "_", "-"), line: i + 1, methods: []string{"GET"}}
 			if m := drfURLPath.FindStringSubmatch(dec); m != nil {
 				a.sub = m[1]
+			}
+			if m := drfURLName.FindStringSubmatch(dec); m != nil {
+				a.urlName = m[1]
 			}
 			if m := pyMethods.FindStringSubmatch(dec); m != nil {
 				a.methods = nil
@@ -734,9 +795,13 @@ func drfActions(repo string, files []File, viewsets map[string][]string) []Route
 				handler = owner[k] + "." + a.name // inherited: the code that runs
 			}
 			for _, b := range mounts {
+				name := ""
+				if b.basename != "" {
+					name = b.basename + "-" + a.urlName
+				}
 				for _, method := range a.methods {
-					out = append(out, Route{Repo: repo, Path: a.path, Line: a.line, Method: method,
-						Pattern: normURL(strings.TrimSuffix(b, "/") + "/" + detail + a.sub + "/"), Handler: handler, Framework: "django"})
+					out = append(out, Route{Repo: repo, Path: a.path, Line: a.line, Method: method, Name: name,
+						Pattern: normURL(strings.TrimSuffix(b.pattern, "/") + "/" + detail + a.sub + "/"), Handler: handler, Framework: "django"})
 				}
 			}
 		}
@@ -877,6 +942,20 @@ func clientCalls(repo string, f File, lang string, consts map[string]string) []C
 				continue
 			}
 			method, arg, recv = strings.ToUpper(m[2]), m[3], m[1]
+		}
+		if strings.TrimSpace(arg) == "" && i+1 < len(lines) {
+			arg = strings.TrimSpace(lines[i+1]) // client.post(\n    reverse("x"), …
+		}
+		if lang == "py" {
+			if rv := pyReverse.FindStringSubmatch(firstArg(arg)); rv != nil {
+				name := rv[2]
+				if k := strings.LastIndexAny(name, ":."); k >= 0 {
+					name = name[k+1:] // a namespace or blueprint prefix
+				}
+				out = append(out, ClientCall{Repo: repo, Path: f.Path, Line: i + 1, In: enclosing(f.Symbols, i+1), Method: method,
+					URL: "{" + rv[1] + ":" + rv[2] + "}", Raw: rv[0], Recv: recv, Text: t, RouteName: name})
+				continue
+			}
 		}
 		raw := resolveURL(firstArg(arg), lang, consts)
 		if raw == "" {

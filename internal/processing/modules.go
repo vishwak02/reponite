@@ -128,6 +128,10 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			}
 			mi.jsMods[pkg] = jm
 		}
+		if f.Lang == "python" {
+			// a package __init__ (or any module) passes on names it imports
+			mi.jsMods[pkgOfFile(f.Path, f.Lang)] = &jsModule{path: f.Path, lang: f.Lang, reexp: map[string]ImportBinding{}, imports: importsByLocal(f.Imports)}
+		}
 		if b := path.Base(f.Path); (strings.HasPrefix(b, "tsconfig") || strings.HasPrefix(b, "jsconfig")) && strings.HasSuffix(b, ".json") {
 			src := f.Content
 			if src == "" && f.Load != nil {

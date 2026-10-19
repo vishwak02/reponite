@@ -203,6 +203,7 @@ func main() {
 		}
 	}
 	got := map[string]bool{}
+	gotConf := map[string]float64{}
 	snap := st.Snapshot(*repo, *ref)
 	var callers []string
 	for c := range snap.Callees {
@@ -221,6 +222,9 @@ func main() {
 			}
 			k := from + ">" + to
 			got[k] = true
+			if c.Confidence > gotConf[k] {
+				gotConf[k] = c.Confidence
+			}
 			bd := band(c.Confidence)
 			name := baseOf(defByID[to].Name)
 			if !anyEdge[k] && t.Names != nil && calls[from+">"+name] && !resolvedName[from+">"+name] {
@@ -241,6 +245,27 @@ func main() {
 			}
 			sc.Edges[bd] = r
 		}
+	}
+	var inferredRecall, inferredResolved ratio
+	for _, e := range t.Edges {
+		if e.Kind != "inferred" {
+			continue
+		}
+		k := e.From + ">" + e.To
+		inferredRecall.Total++
+		inferredResolved.Total++
+		if got[k] {
+			inferredRecall.Hit++
+		}
+		if gotConf[k] >= 0.85 {
+			inferredResolved.Hit++
+		} else if *showUndet > 0 {
+			*showUndet--
+			fmt.Fprintf(os.Stderr, "MISSED-INFERRED %s %s -> %s %s (line %d)\n", e.From, defByID[e.From].Name, e.To, defByID[e.To].Name, e.Line)
+		}
+	}
+	if inferredRecall.Total > 0 {
+		defer fmt.Printf("  inferred-edge recall   %s any confidence, %s resolved\n", inferredRecall, inferredResolved)
 	}
 	for k := range truthEdge {
 		sc.EdgeRecall.Total++
@@ -708,7 +733,57 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 			}
 		}
 	}
+	// tests: every test function that calls a definition (directly, by the
+	// truth) must be among the tests `tests` lists for it
+	var testRecall, testPrec ratio
+	testCallers := map[string]map[string]bool{}
+	for _, e := range t.Edges {
+		if defByID[e.From].Test && !defByID[e.To].Test {
+			if testCallers[e.To] == nil {
+				testCallers[e.To] = map[string]bool{}
+			}
+			testCallers[e.To][e.From] = true
+		}
+	}
+	var testTargets []string
+	for to := range testCallers {
+		if _, ok := qidOf[to]; ok && !dup[to] {
+			testTargets = append(testTargets, to)
+		}
+	}
+	sort.Strings(testTargets)
+	for _, to := range testTargets {
+		tr := query.Tests(st, repo, ref, qidOf[to], 1, 1<<20)
+		got := map[string]bool{}
+		for _, h := range tr.Tests {
+			id, ok := qidAt[h.Handle]
+			if !ok {
+				continue
+			}
+			got[id] = true
+			if h.How == "call_graph" && h.Depth == 1 {
+				if hit, decided := judge(id, to, baseOf(defByID[to].Name)); decided {
+					testPrec.Total++
+					if hit {
+						testPrec.Hit++
+					} else if len(bad) < 30 {
+						bad = append(bad, fmt.Sprintf("tests %s: %s listed as calling it", defByID[to].Name, defByID[id].Name))
+					}
+				}
+			}
+		}
+		for c := range testCallers[to] {
+			testRecall.Total++
+			if got[c] {
+				testRecall.Hit++
+			} else if len(bad) < 30 {
+				bad = append(bad, fmt.Sprintf("tests %s: missing test %s", defByID[to].Name, defByID[c].Name))
+			}
+		}
+	}
 	fmt.Printf("  commands (%d definitions with static callers)\n", len(targets))
+	fmt.Printf("    tests recall (direct)     %s\n", testRecall)
+	fmt.Printf("    tests precision (direct)  %s\n", testPrec)
 	fmt.Printf("    context callers recall    %s\n", ctxRecall)
 	fmt.Printf("    context callers precision %s\n", ctxPrec)
 	fmt.Printf("    usages call-site recall   %s\n", useRecall)
@@ -718,4 +793,5 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 	}
 	gate("context caller precision", ctxPrec, minPrecision)
 	gate("usages confirmed precision", usePrec, minPrecision)
+	gate("tests precision", testPrec, minPrecision)
 }

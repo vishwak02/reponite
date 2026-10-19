@@ -36,8 +36,12 @@ type Symbol struct {
 	// Bases are the base classes a class names (Python, JS/TS), as written.
 	Bases []QualifiedCall
 	// Vars are a Java method's parameters and locals with their declared
-	// types, for typing the receivers of its calls.
+	// types, for typing the receivers of its calls; for Python, a function's
+	// (pytypes.go encoding) or, on a class, the fields it sets on self.
 	Vars map[string]string
+	// Returns is the class a Python function returns (annotation or
+	// constructor), dotted as written.
+	Returns string
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -67,6 +71,9 @@ func sealSymbols(repo, lang string, normVer int, syms []Symbol) {
 type QualifiedCall struct {
 	Qualifier string
 	Name      string
+	// Attr is the middle identifier of a three-part callee (self.repo.save:
+	// repo), for typing a field's value.
+	Attr string
 	// Chain is how many identifiers the callee expression had: 2 for
 	// pkg.Do(), 3 or more for a.b.Do() or pkg.New().Run() — where the
 	// qualifier is not the thing Do is looked up on.
@@ -188,11 +195,16 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		recv = declScope(fn, r) // out-of-class C++ definition: void A::f()
 	}
 	var vars map[string]string
-	if r.Name == "java" {
+	returns := ""
+	switch r.Name {
+	case "java":
 		vars = javaVarTypes(fn)
+	case "python":
+		vars, returns = pyVarTypes(fn), pyReturnType(fn)
 	}
 	return Symbol{
 		Vars:           vars,
+		Returns:        returns,
 		Name:           nameOf(fn, r),
 		Recv:           recv,
 		Kind:           kind,
@@ -238,11 +250,24 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 		// be unaddressable (see appendNamed).
 		return nil
 	}
-	return []Symbol{{
+	var fields map[string]string
+	if r.Name == "python" {
+		fields = pyClassFields(decl)
+	}
+	shape := classShape(decl, r)
+	sym := Symbol{
 		Name: name, Kind: "type",
-		Signature: string(content.Canon(classShape(decl, r), normVer)), Doc: doc,
+		Signature: string(content.Canon(shape, normVer)), Doc: doc,
 		Bases: classBases(decl, r.Name),
-	}}
+		Vars:  fields,
+	}
+	if classBodyCalls[r.Name] {
+		// calls in the class body itself — a Django field, a serializer, a
+		// filter declared as a class attribute — are the class's own
+		sym.Callees = calleesWithRules(shape, r)
+		sym.QualifiedCalls = qualifiedCallsWithRules(shape, r)
+	}
+	return []Symbol{sym}
 }
 
 // calleesWithRules returns deduped callee names invoked in a body (name-based),
@@ -291,6 +316,9 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		qc := QualifiedCall{Name: ids[len(ids)-1], Chain: len(ids)}
 		if len(ids) >= 2 {
 			qc.Qualifier = ids[0]
+		}
+		if len(ids) == 3 && ids[1] != callResult {
+			qc.Attr = ids[1]
 		}
 		if r.Builtins[qc.Name] || seen[qc] {
 			continue
@@ -705,3 +733,7 @@ func decoratesFunction(n content.AST) bool {
 	}
 	return false
 }
+
+// classBodyCalls are the languages whose class bodies run code at
+// definition time (attribute values), attributed to the class.
+var classBodyCalls = map[string]bool{"python": true}

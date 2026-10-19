@@ -208,10 +208,13 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			return ok || isRelativeModule(module)
 		}
 	}
+	linkReexport := func(pkg, name string) (string, string, bool) {
+		return mods.resolveExport(pkg, name, func(p, n string) bool { _, ok := classes.has(p, n); return ok })
+	}
 	for _, d := range classDecls {
 		d := d
 		modPkg := func(module string) (string, bool) { return mods.resolve(d.lang, d.path, module) }
-		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepoFor(d.lang, d.path), modPkg))
+		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepoFor(d.lang, d.path), modPkg), linkReexport)
 	}
 	x.classes = classes
 	var rsPaths []string
@@ -261,6 +264,31 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	}
 	defined := func(pkg, name string) bool { return allDefs[qualifyModule(pkg, name)] }
 
+	// Python receiver typing (pytypes.go): a dotted type or function name is
+	// resolved in the context of the file that writes it
+	py := &pyTyper{classes: classes, allDefs: allDefs, fields: map[string]map[string]string{}, returns: map[string]string{}}
+	py.ctx = func(q string) (pyCtx, bool) {
+		c, ok := byQID[q]
+		if !ok {
+			return pyCtx{}, false
+		}
+		return pyCtx{pkg: c.pkg, recv: c.sym.Recv, vars: c.sym.Vars, returns: c.sym.Returns, sites: func(qcs []QualifiedCall) []CallSite {
+			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
+			return sitesFromQualified(qcs, c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
+		}}, true
+	}
+	py.reexport = func(pkg, name string) (string, string, bool) { return mods.resolveExport(pkg, name, defined) }
+	py.classByName = map[string][]string{}
+	for k, n := range classes.name {
+		py.classByName[n] = append(py.classByName[n], k)
+	}
+	py.funcByName = map[string][]string{}
+	for _, q := range order {
+		if c := byQID[q]; c.lang == "python" && c.sym.Kind != "type" && c.sym.Recv == "" {
+			py.funcByName[c.sym.Name] = append(py.funcByName[c.sym.Name], q)
+		}
+	}
+
 	nodes := make([]Node, 0, len(order))
 	var edges []Edge
 	resolved := make(map[string][]query.Callee, len(order))
@@ -280,7 +308,23 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			callees = resolveSiteEdges(c.pkg, c.sym.Recv, c.sym.CallSites, x)
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
-			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
+			qcalls := c.sym.QualifiedCalls
+			var typed []CallSite
+			if c.lang == "python" {
+				qcalls, typed = py.typedCalls(qid, qcalls)
+			}
+			sites := sitesFromQualified(selfAsPlain(qcalls), c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
+			sites = append(sites, typed...)
+			if c.lang == "python" {
+				// a name a package __init__ re-exports: the module defining it
+				for i, s := range sites {
+					if s.Kind == CallModule && !nodeSet[qualifyModule(s.Scope, s.Name)] {
+						if p, n, ok := mods.resolveExport(s.Scope, s.Name, defined); ok {
+							sites[i].Scope, sites[i].Name = p, n
+						}
+					}
+				}
+			}
 			if langFamily(c.lang) == "js" {
 				// x.f() on a default import that is an instance of a class:
 				// that class's method

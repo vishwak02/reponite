@@ -1,6 +1,10 @@
 package processing
 
-import "github.com/vishwak02/reponite/internal/content"
+import (
+	"strings"
+
+	"github.com/vishwak02/reponite/internal/content"
+)
 
 // hasClassBases reports whether a language's class bases are read, so
 // self.f() / this.f() resolves to the method a base class defines.
@@ -121,7 +125,7 @@ func (g *classGraph) define(pkg, name string) string {
 // bare name is a class of the same module or one imported by name; a dotted
 // one is a class of an imported module. Anything else (a library class) ends
 // the lineage there.
-func (g *classGraph) link(cls string, sites []CallSite) {
+func (g *classGraph) link(cls string, sites []CallSite, reexport func(pkg, name string) (string, string, bool)) {
 	pkg := g.pkg[cls]
 	for _, s := range sites {
 		if inertBases[s.Name] {
@@ -131,22 +135,37 @@ func (g *classGraph) link(cls string, sites []CallSite) {
 		switch s.Kind {
 		case CallModule:
 			b = classKey(s.Scope, s.Name)
+			if _, ok := g.bases[b]; !ok && reexport != nil {
+				// imported from a package that passes it on (__init__, index)
+				if rp, rn, ok := reexport(s.Scope, s.Name); ok {
+					b = classKey(rp, rn)
+				}
+			}
 		case CallPlain:
 			b = classKey(pkg, s.Name)
 		}
 		if _, ok := g.bases[b]; !ok || b == cls {
-			b = "" // not a class of the repo: the lineage stops here
+			// not a class of the repo: the lineage stops there. Each library
+			// base is its own entry (two mixins of a framework are two
+			// classes), the same one wherever it is named
+			b = extBase + s.Name
 		}
 		g.bases[cls] = append(g.bases[cls], b)
-		if b != "" {
+		if !isExtBase(b) {
 			g.derived[b] = append(g.derived[b], cls)
 		}
 	}
 }
 
+// extBase prefixes a base class outside the repo in the graph.
+const extBase = "\x00ext:"
+
+func isExtBase(k string) bool { return k == "" || strings.HasPrefix(k, extBase) }
+
 // mro is cls's method resolution order (C3, as Python computes it; for single
 // inheritance — all JS/TS has — the chain of bases). A base outside the repo
-// appears as "". ok is false when the bases have no consistent order.
+// appears as an extBase entry. ok is false when the bases have no
+// consistent order.
 func (g *classGraph) mro(cls string) ([]string, bool) {
 	var memo = map[string][]string{}
 	var visiting = map[string]bool{}
@@ -163,11 +182,11 @@ func (g *classGraph) mro(cls string) ([]string, bool) {
 		var seqs [][]string
 		var direct []string
 		for _, b := range g.bases[c] {
-			if b == "" {
+			if isExtBase(b) {
 				// an external base: its methods are unknown, so anything after
 				// it in the order is not proven to be the one that runs
-				seqs = append(seqs, []string{""})
-				direct = append(direct, "")
+				seqs = append(seqs, []string{b})
+				direct = append(direct, b)
 				continue
 			}
 			l, ok := lin(b)
@@ -236,7 +255,7 @@ func (g *classGraph) method(cls, name string, super bool, nodeSet map[string]boo
 		order = order[1:]
 	}
 	for _, c := range order {
-		if c == "" {
+		if isExtBase(c) {
 			return "", false
 		}
 		if q := qualifyModule(g.pkg[c], g.name[c]+"."+name); nodeSet[q] {

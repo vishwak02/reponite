@@ -507,3 +507,57 @@ func TestJSONCToJSON(t *testing.T) {
 		t.Errorf("jsoncToJSON = %q", got)
 	}
 }
+
+// Python method calls typed by annotations, constructors, factory returns
+// and fields set on self.
+func TestPythonReceiverTyping(t *testing.T) {
+	files := map[string]string{
+		"app/notify/notifier.py": `class Notifier:
+    def alert(self, ids):
+        pass
+class Other:
+    def alert(self, ids):
+        pass
+`,
+		"app/notify/repo.py": `from .notifier import Notifier
+class Repo:
+    def save(self):
+        pass
+class Service:
+    def __init__(self):
+        self.repo = Repo()
+    def run(self, n: Notifier):
+        n.alert([1])
+        self.repo.save()
+`,
+		"app/tests/test_notify.py": `from app.notify.notifier import Notifier
+def make() -> Notifier:
+    return Notifier()
+def make2():
+    return Notifier()
+def test_alert():
+    a = make()
+    a.alert([7])
+def test_alert2():
+    b = make2()
+    b.alert([7])
+def test_direct():
+    c = Notifier()
+    c.alert([7])
+`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["app/notify.repo.Service.run"]
+	if run == nil {
+		t.Fatalf("Service.run not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, run, "app/notify.notifier.Notifier.alert", MethodTyped)
+	wantMethod(t, run, "app/notify.repo.Repo.save", MethodTyped)
+	for _, fn := range []string{"test_alert", "test_alert2", "test_direct"} {
+		e := edges["app/tests.test_notify."+fn]
+		wantMethod(t, e, "app/notify.notifier.Notifier.alert", MethodTyped)
+		if _, bad := e["app/notify.notifier.Other.alert"]; bad {
+			t.Errorf("%s: alert pinned on Other", fn)
+		}
+	}
+}
