@@ -426,7 +426,7 @@ func explainSymbol(s Store, repo, ref, qid string, files []File, idx *spanIndex,
 			sym.Lang = langOfPath(loc.Path)
 		}
 		_, local := idx.splitQID(qid)
-		facts := sourceFacts(content, normLang(sym.Lang), loc.Span.StartLine, loc.Span.EndLine, strings.Contains(local, "."))
+		facts := sourceFacts(content, normLang(sym.Lang), loc.Span.StartLine, loc.Span.EndLine, inClassLocal(local, loc.Path))
 		sym.Kind, sym.Signature, sym.Decorators, sym.Doc, sym.DocLine = facts.Kind, facts.Signature, facts.Decorators, facts.Doc, facts.DocLine
 	} else {
 		res.Omitted = append(res.Omitted, "body(source not indexed)")
@@ -705,6 +705,19 @@ func testRefs(s Store, repo, ref, qid string, testCallers []ExplainEdge, idx *sp
 		seen[t.Path+"\x00"+baseName(c.Symbol)] = true
 		out = append(out, t)
 	}
+	// tests reaching it through a request their client sends (a view):
+	// the same ones `tests` lists
+	for _, h := range Tests(s, repo, ref, qid, 1, 1<<20).Tests {
+		if h.How != "http" {
+			continue
+		}
+		k := h.Path + "\x00" + baseName(h.Handle)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, TestRef{Repo: h.Repo, Path: h.Path, Line: h.Line, In: h.Handle, Calls: true})
+	}
 	// Test files naming it, from each repo's test-word index (built once per
 	// indexed content and cached): a fleet with a kernel-sized repo would
 	// otherwise rescan thousands of test files for every question.
@@ -922,7 +935,7 @@ func explainFile(s Store, repo, ref, path string, files []File, idx *spanIndex, 
 		}
 		l, _ := idx.locate(q)
 		_, local := idx.splitQID(q)
-		facts := sourceFacts(f.Content, lang, l.Span.StartLine, l.Span.EndLine, strings.Contains(local, "."))
+		facts := sourceFacts(f.Content, lang, l.Span.StartLine, l.Span.EndLine, inClassLocal(local, f.Path))
 		fsyms = append(fsyms, FileSymbol{Symbol: q, Kind: facts.Kind, Line: l.Span.StartLine, EndLine: l.Span.EndLine, Signature: facts.Signature, In: inDeg[q], Out: len(snap.Callees[q])})
 	}
 	sort.Slice(fsyms, func(i, j int) bool {
@@ -1207,4 +1220,15 @@ func testWordIndex(s Store, repo, ref string) map[string][]TestRef {
 		}
 		return idx
 	})
+}
+
+// inClassLocal reports whether a symbol's local id (the part after its
+// directory) names a member of a type: Class.method. In languages whose
+// module is the file, the first segment is that module (views.token_login
+// is a function of views.py), not a class.
+func inClassLocal(local, path string) bool {
+	if stem := fileModuleStem(path); stem != "" {
+		local = strings.TrimPrefix(local, stem+".")
+	}
+	return strings.Contains(local, ".")
 }

@@ -81,7 +81,26 @@ func (x *spanIndex) locate(qid string) (symLoc, bool) {
 		return symLoc{}, false
 	}
 	if len(parts) >= 2 {
+		// dir.module.Class.f: only the module's own file (two scripts in one
+		// directory may each define a GwmClient)
+		var own []symLoc
+		for _, c := range cands {
+			if fileModuleStem(c.Path) == parts[0] {
+				own = append(own, c)
+			}
+		}
+		if len(own) > 0 && len(own) < len(cands) {
+			cands = own
+		}
+	}
+	if len(parts) >= 2 {
 		class := parts[len(parts)-2]
+		// a fn in a Rust impl block for the type
+		for _, c := range cands {
+			if rustImplOwner(*x.byPath[c.Path], c.Span) == class {
+				return c, true
+			}
+		}
 		// dir.module.func in Python/JavaScript: the module is the file
 		for _, c := range cands {
 			if fileModuleStem(c.Path) == class && !nestedInClass(*x.byPath[c.Path], c.Span) {

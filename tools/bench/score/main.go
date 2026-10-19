@@ -781,7 +781,56 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 			}
 		}
 	}
+	// explain: for a sample of definitions, the place, the kind (function vs
+	// method) and the body it shows must be the definition's
+	var exPlace, exKind ratio
+	var sample []def
+	for _, d := range t.Defs {
+		if _, ok := qidOf[d.ID]; ok && !dup[d.ID] && !strings.HasSuffix(d.Name, ">") {
+			sample = append(sample, d)
+		}
+	}
+	sort.Slice(sample, func(i, j int) bool { return sample[i].ID < sample[j].ID })
+	if step := len(sample) / 150; step > 1 {
+		var thin []def
+		for i := 0; i < len(sample); i += step {
+			thin = append(thin, sample[i])
+		}
+		sample = thin
+	}
+	for _, d := range sample {
+		ex := query.Explain(st, ref, qidOf[d.ID], query.ExplainOptions{Repo: repo, Budget: 4000})
+		exPlace.Total++
+		if ex.Symbol != nil && ex.Symbol.Path == d.Path && ex.Symbol.StartLine <= d.Line && ex.Symbol.StartLine >= d.Line-8 {
+			exPlace.Hit++
+		} else if len(bad) < 40 {
+			got := "nothing"
+			if ex.Symbol != nil {
+				got = fmt.Sprintf("%s:%d", ex.Symbol.Path, ex.Symbol.StartLine)
+			}
+			bad = append(bad, fmt.Sprintf("explain %s (%s:%d): shows %s", d.Name, d.Path, d.Line, got))
+		}
+		if ex.Symbol == nil {
+			continue
+		}
+		want := "function"
+		if strings.Contains(d.Name, ".") {
+			want = "method"
+		}
+		switch ex.Symbol.Kind {
+		case "class", "type", "struct", "interface", "enum", "symbol":
+			continue // a class definition, or not judged
+		}
+		exKind.Total++
+		if ex.Symbol.Kind == want {
+			exKind.Hit++
+		} else if len(bad) < 40 {
+			bad = append(bad, fmt.Sprintf("explain %s: kind %s, want %s", d.Name, ex.Symbol.Kind, want))
+		}
+	}
 	fmt.Printf("  commands (%d definitions with static callers)\n", len(targets))
+	fmt.Printf("    explain place             %s\n", exPlace)
+	fmt.Printf("    explain kind              %s\n", exKind)
 	fmt.Printf("    tests recall (direct)     %s\n", testRecall)
 	fmt.Printf("    tests precision (direct)  %s\n", testPrec)
 	fmt.Printf("    context callers recall    %s\n", ctxRecall)
@@ -794,4 +843,6 @@ func checkCommands(st *sqlite.Store, repo, ref string, t truth, qidAt map[string
 	gate("context caller precision", ctxPrec, minPrecision)
 	gate("usages confirmed precision", usePrec, minPrecision)
 	gate("tests precision", testPrec, minPrecision)
+	gate("explain place", exPlace, minPrecision)
+	gate("explain kind", exKind, minPrecision)
 }
