@@ -1036,6 +1036,11 @@ func handlersFor(sc *errScan, sites []ErrorSite, budget int, truncated *bool) []
 				continue
 			}
 			sameRepo := h.Repo == x.Repo
+			if !sameRepo && x.Kind != "http_response" {
+				// an exception is caught in the process that raised it: an
+				// `except OSError` in an unrelated repo never sees this one
+				continue
+			}
 			h.OnPath = sameRepo && onPath[h.In]
 			// A catch-all far from the producer says little: keep it only on
 			// the path, or when it is a framework-level handler.

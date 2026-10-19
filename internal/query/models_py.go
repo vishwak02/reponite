@@ -524,8 +524,8 @@ func djangoModel(repo string, c *pyCls, r *pyRepo) DataModel {
 	}
 	for _, s := range c.body {
 		a := pyAssignRe.FindStringSubmatch(s.text)
-		if a == nil || strings.HasPrefix(a[1], "_") {
-			continue
+		if a == nil || strings.HasPrefix(a[1], "__") {
+			continue // a private-looking name (_id = AutoField(...)) is still a column
 		}
 		callee, pos, kw, ok := pyCall(a[3])
 		if !ok {
