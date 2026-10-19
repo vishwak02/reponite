@@ -112,6 +112,7 @@ type TraceNode struct {
 	lo, hi int // body line range (for effects and crossings)
 	fi     int // file index in its repo view, -1 = unknown
 	route  *Route
+	recv   string // the class of the object self is (a route's viewset), "" = unknown
 	verb   string // the HTTP method asked for at a route node
 	group  *CommGroup
 	fw     *fwInfo
@@ -721,7 +722,17 @@ func (t *tracer) downChildren(n *TraceNode) []*TraceNode {
 				if t.isTest(n.Repo, c.Name, "") || t.skipped(c.Name) || c.ResolutionMethod == "member-name-resolved" && ormOnly(body, baseName(c.Name)) {
 					continue
 				}
-				add(t.symbolNode(n.Repo, c.Name, EdgeCall, c.ResolutionMethod, c.Confidence))
+				if n.recv != "" && !t.dispatchesTo(n, c.Name) {
+					continue // a self call on this object runs another class's method
+				}
+				k := t.symbolNode(n.Repo, c.Name, EdgeCall, c.ResolutionMethod, c.Confidence)
+				if n.recv != "" && t.ownedByRecv(n.recv, c.Name) {
+					k.recv = n.recv // still a method of the same object
+					if c.ResolutionMethod == "virtual-override" {
+						k.Method, k.Confidence = "receiver-class", confHandler
+					}
+				}
+				add(k)
 			}
 		}
 		for _, k := range t.implsOf(n) {
@@ -1194,4 +1205,50 @@ func (t *tracer) note(r TraceResult) string {
 			" (depth/budget: More = children not walked; repeat: expanded elsewhere, see Same; ambiguous: Alt lists candidates)"
 	}
 	return note + ". Edges carry the call graph's resolution_method/confidence; http (route match by path+method), topic (name match), impl (class derivation) and framework (convention) crossings are medium confidence. Effects are read from each body's source lines; a framework's own behavior is inferred and labeled so."
+}
+
+// recvOrder is cls followed by its bases, nearest first.
+func (t *tracer) recvOrder(cls string) []string {
+	return append([]string{cls}, t.classGraph().ancestors(cls)...)
+}
+
+// ownedByRecv: qid is a method of n's object class or one of its bases.
+func (t *tracer) ownedByRecv(recv, qid string) bool {
+	c, _, ok := classOf(qid)
+	if !ok {
+		return false
+	}
+	for _, k := range t.recvOrder(recv) {
+		if k == c {
+			return true
+		}
+	}
+	return false
+}
+
+// dispatchesTo: with self's class known, a call edge to one of the method's
+// definitions (the base's, or a subclass override) is kept only when it is
+// the one that class's MRO reaches; edges to other methods are untouched.
+func (t *tracer) dispatchesTo(n *TraceNode, target string) bool {
+	_, m, ok := classOf(target)
+	if !ok {
+		return true
+	}
+	var defs []string
+	for _, c := range t.view(n.Repo).snapshot(t.s, t.ref).Callees[n.Symbol] {
+		if _, cm, ok := classOf(c.Name); ok && cm == m {
+			defs = append(defs, c.Name)
+		}
+	}
+	if len(defs) < 2 {
+		return true
+	}
+	for _, k := range t.recvOrder(n.recv) {
+		for _, d := range defs {
+			if c, _, _ := classOf(d); c == k {
+				return d == target // the nearest definition wins
+			}
+		}
+	}
+	return true // none in the class's lineage: keep them all
 }

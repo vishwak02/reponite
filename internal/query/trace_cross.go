@@ -215,7 +215,12 @@ func (t *tracer) routeHandlers(n *TraceNode) []*TraceNode {
 			if m != "" && m[0] >= 'a' && m[0] <= 'z' && cls != "" && cls[0] >= 'A' && cls[0] <= 'Z' {
 				for _, q := range v.byBase[m] {
 					if c, _, ok := classOf(q); ok && c == cls {
-						return []*TraceNode{t.symbolNode(r.Repo, q, EdgeHandler, "route-handler", confHandler)}
+						k := t.symbolNode(r.Repo, q, EdgeHandler, "route-handler", confHandler)
+						k.recv = r.Class
+						if k.recv == "" {
+							k.recv = cls
+						}
+						return []*TraceNode{k}
 					}
 				}
 			}

@@ -38,6 +38,10 @@ type Route struct {
 	// name=, a DRF router's basename-list / -detail / -<action>), which
 	// reverse("name") in code and tests resolves.
 	Name string `json:",omitempty"`
+	// Class is the class whose instance serves the route when the handler
+	// is a method it inherits (a DRF viewset using a mixin's @action): self
+	// calls inside dispatch on it.
+	Class string `json:",omitempty"`
 }
 
 // ClientCall is one HTTP call site whose URL could be resolved.
@@ -801,7 +805,7 @@ func drfActions(repo string, files []File, viewsets map[string][]drfMount) []Rou
 					name = b.basename + "-" + a.urlName
 				}
 				for _, method := range a.methods {
-					out = append(out, Route{Repo: repo, Path: a.path, Line: a.line, Method: method, Name: name,
+					out = append(out, Route{Repo: repo, Path: a.path, Line: a.line, Method: method, Name: name, Class: class,
 						Pattern: normURL(strings.TrimSuffix(b.pattern, "/") + "/" + detail + a.sub + "/"), Handler: handler, Framework: "django"})
 				}
 			}
