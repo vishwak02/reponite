@@ -354,7 +354,7 @@ which method was used. Confidence rises to 0.9 when both ends agree on the type.
 receive `raw_scan_front`, because a launch file rewrote it:
 
 ```xml
-<node pkg="rr_navigation" type="scan_filter" name="filter">
+<node pkg="nav_stack" type="scan_filter" name="filter">
   <remap from="scan" to="raw_scan_front"/>
 </node>
 ```
@@ -1113,7 +1113,7 @@ skipped and why:
 
 ```sh
 reponite coverage --local --format text
-# rr_app@HEAD: 8149 stored, 397 skipped
+# myapp@HEAD: 8149 stored, 397 skipped
 #   skipped   223  Git LFS pointer (the content is not in git)  (e.g. docs/images/flow.svg, …)
 #   skipped   142  binary format  (e.g. frontend/fonts/Geist.woff2, …)
 ```

@@ -1,7 +1,7 @@
 // suggest.go turns a miss into a hint. When an agent asks for a symbol that
 // isn't indexed, returning [] forces it to guess again; instead we return the
 // nearest indexed names (fleet-wide), so the tool self-heals: "Symbol Picking
-// not found — did you mean DynamicPicking in rr_io_amr?" (§ agent-optimized UX).
+// not found — did you mean PathPlanner in nav_stack?" (§ agent-optimized UX).
 // Pure over the Store, ranked by substring containment then edit distance.
 package query
 

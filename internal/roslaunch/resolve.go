@@ -27,7 +27,7 @@ const (
 
 // Table indexes every remap found across a set of launch files, keyed by the
 // package the remap's node belongs to. The package is the link back to source:
-// a `<node pkg="rr_navigation">` remap applies to endpoints in rr_navigation's
+// a `<node pkg="nav_stack">` remap applies to endpoints in nav_stack's
 // source, which is the only association a launch file offers.
 type Table struct {
 	// byPkgFrom maps package -> source topic name -> the distinct targets seen.

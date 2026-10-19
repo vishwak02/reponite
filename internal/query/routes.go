@@ -45,7 +45,7 @@ type ClientCall struct {
 	URL        string // as resolved, placeholders as {}
 	Raw        string // as resolved before normalization (scheme/host kept)
 	Recv       string // the client object (ims, this.http, requests)
-	Via        string // the gateway mount it goes through ("/ims → localhost:8002 (sootballs_ims)")
+	Via        string // the gateway mount it goes through ("/ims → localhost:8002 (inventory)")
 	Text       string
 	// Warning: the URL is malformed as written (a stray brace from a
 	// template-literal typo is sent literally: "/operations/}42/errors/").

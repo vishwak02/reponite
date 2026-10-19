@@ -3,18 +3,18 @@ package roslaunch
 import "testing"
 
 const sample = `<launch>
-  <arg name="robot" default="amr1"/>
+  <arg name="robot" default="robot1"/>
   <remap from="diagnostics" to="/global_diagnostics"/>
   <group ns="front">
-    <node pkg="rr_navigation" type="scan_filter" name="filter">
+    <node pkg="nav_stack" type="scan_filter" name="filter">
       <remap from="scan" to="raw_scan_front"/>
       <remap from="scan_filtered" to="scan_front"/>
     </node>
   </group>
-  <node pkg="rr_perception" type="detector" name="detect" ns="cam">
+  <node pkg="perception" type="detector" name="detect" ns="cam">
     <remap from="image" to="camera/image_raw"/>
   </node>
-  <include file="$(find rr_bringup)/launch/base.launch"/>
+  <include file="$(find robot_bringup)/launch/base.launch"/>
 </launch>`
 
 func TestParseNodesRemapsNamespaces(t *testing.T) {
@@ -26,7 +26,7 @@ func TestParseNodesRemapsNamespaces(t *testing.T) {
 		t.Fatalf("want 2 nodes, got %d (%+v)", len(f.Nodes), f.Nodes)
 	}
 	filter := f.Nodes[0]
-	if filter.Pkg != "rr_navigation" || filter.Type != "scan_filter" || filter.Name != "filter" {
+	if filter.Pkg != "nav_stack" || filter.Type != "scan_filter" || filter.Name != "filter" {
 		t.Fatalf("node attrs: %+v", filter)
 	}
 	if filter.Ns != "front" {
@@ -88,7 +88,7 @@ func TestTableEffective(t *testing.T) {
 	f, _ := Parse("bringup.launch", sample)
 	tbl := NewTable([]File{f})
 
-	eff, res, via := tbl.Effective("rr_navigation/rr_nav_core/src/filter.cpp", "scan")
+	eff, res, via := tbl.Effective("nav_stack/nav_core/src/filter.cpp", "scan")
 	if eff != "raw_scan_front" || res != ResolvedRemapped {
 		t.Fatalf("a remapped topic must resolve to its runtime name: %q %q", eff, res)
 	}
@@ -96,15 +96,15 @@ func TestTableEffective(t *testing.T) {
 		t.Errorf("the resolution must cite the launch file, got %q", via)
 	}
 	// Absolute and relative spellings compare equal.
-	if eff, _, _ := tbl.Effective("rr_navigation/src/x.cpp", "/scan"); eff != "raw_scan_front" {
+	if eff, _, _ := tbl.Effective("nav_stack/src/x.cpp", "/scan"); eff != "raw_scan_front" {
 		t.Errorf("/scan and scan must resolve the same, got %q", eff)
 	}
 	// A package with no remap for that name keeps the source name.
-	if eff, res, _ := tbl.Effective("rr_other/src/x.cpp", "scan"); eff != "scan" || res != ResolvedAsWritten {
+	if eff, res, _ := tbl.Effective("other_pkg/src/x.cpp", "scan"); eff != "scan" || res != ResolvedAsWritten {
 		t.Errorf("an unrelated package must not be remapped: %q %q", eff, res)
 	}
 	// A name nobody remaps is as-written.
-	if _, res, _ := tbl.Effective("rr_navigation/src/x.cpp", "odom"); res != ResolvedAsWritten {
+	if _, res, _ := tbl.Effective("nav_stack/src/x.cpp", "odom"); res != ResolvedAsWritten {
 		t.Errorf("unremapped name got %q", res)
 	}
 	if tbl.Unresolved != 1 {

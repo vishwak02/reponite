@@ -4,8 +4,8 @@ import "testing"
 
 func TestContentLang(t *testing.T) {
 	for p, want := range map[string]string{
-		"rr_nav_bringup/config/rviz/navigation.rviz": "rviz",
-		"sootballs_bringup/kiba/errors.json":         "json",
+		"nav_bringup/config/rviz/navigation.rviz": "rviz",
+		"app_bringup/site/errors.json":         "json",
 		"web/package-lock.json":                      "",
 		"src/a.cpp":                                  "",
 	} {

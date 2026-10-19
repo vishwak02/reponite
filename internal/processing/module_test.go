@@ -40,8 +40,8 @@ func TestDetectModulePath(t *testing.T) {
 		},
 		{
 			name:  "catkin/ROS package.xml name",
-			files: map[string][]byte{"package.xml": []byte("<?xml version=\"1.0\"?>\n<package format=\"2\">\n  <name>rr_pa_amr_bringup</name>\n  <version>0.1.0</version>\n</package>\n")},
-			want:  "rr_pa_amr_bringup",
+			files: map[string][]byte{"package.xml": []byte("<?xml version=\"1.0\"?>\n<package format=\"2\">\n  <name>robot_bringup</name>\n  <version>0.1.0</version>\n</package>\n")},
+			want:  "robot_bringup",
 		},
 		{
 			name:  "none",

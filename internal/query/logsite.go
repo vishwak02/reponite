@@ -1,6 +1,6 @@
 // logsite.go answers "which code printed this?" for a line copied out of a
 // real log. A log line is a format string with its placeholders filled in
-// ("Creating 5 new tasks for agent amr07"), so plain grep of the whole line
+// ("Creating 5 new tasks for agent robot07"), so plain grep of the whole line
 // finds nothing and grep of a guessed fragment finds too much. LogSites reads
 // every string literal on every code line at the ref, turns its placeholders
 // into wildcards (printf %d/%s/%.2f/%v, fmt/spdlog/Python {} and {name},

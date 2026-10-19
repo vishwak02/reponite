@@ -501,7 +501,7 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
   cites the launch file (`name_resolution: launch-remapped`); `$(arg …)` expands against
   declared defaults. A target that keeps an unexpanded substitution is **reported, not
   applied** — grouping endpoints under the literal `$(arg scan_topic)` would be worse than
-  not remapping. On `rr_io_amr`: 397 launch files parsed, **51 remaps applied**, 35
+  not remapping. On `robot-stack`: 397 launch files parsed, **51 remaps applied**, 35
   unexpanded reported, 0 groups keyed on a literal. ([#37])
 - **Shell/Bash language support** (the 10th language) — `.sh`, `.bash`, `.zsh`, `.ksh`, plus
   **extension-less scripts identified by their shebang**, since a CLI's entry point rarely
@@ -536,7 +536,7 @@ multi-repository robotics fleet, followed by the last of the deferred roadmap.
   ([#32])
 - **Index footprint reporting** — `index` now prints the file count, test-file count, and
   the directories that contributed most. A repo vendoring third-party code under a
-  non-standard path was previously invisible: `rr_sootballs` turned out to be **3,600 of
+  non-standard path was previously invisible: `fleet-app` turned out to be **3,600 of
   4,774 files** from one vendored firmware tree, discoverable before only by accident.
   ([#36])
 - **`context` now returns `caller_edges`** — callers as objects carrying `is_test`,

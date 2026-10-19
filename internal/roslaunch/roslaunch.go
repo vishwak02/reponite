@@ -7,7 +7,7 @@
 // subscribes to `scan` may actually receive `raw_scan_front`, because a launch
 // file rewrote it:
 //
-//	<node pkg="rr_navigation" type="scan_filter" name="filter">
+//	<node pkg="nav_stack" type="scan_filter" name="filter">
 //	  <remap from="scan" to="raw_scan_front" />
 //	</node>
 //

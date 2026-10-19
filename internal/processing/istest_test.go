@@ -14,10 +14,10 @@ func newTestMem() *storage.Mem { return storage.NewMem() }
 func TestIsTestPathPerLanguage(t *testing.T) {
 	tests := map[string]bool{
 		// the reported case: a C++ fixture under test/
-		"sootballs_pgs/test/include/sootballs_picker_guiding_system_test/test_helpers.hpp": true,
-		"sootballs_pgs/test/src/test_pgs.cpp":                                              true,
-		"sootballs_pgs/src/pgs.cpp":                                                        false,
-		"sootballs_pgs/include/sootballs_picker_guiding_system/pgs.hpp":                    false,
+		"route_planner/test/include/route_planner_test/test_helpers.hpp": true,
+		"route_planner/test/src/test_planner.cpp":                                              true,
+		"route_planner/src/planner.cpp":                                                        false,
+		"route_planner/include/route_planner/planner.hpp":                    false,
 
 		"internal/query/grep_test.go": true,
 		"internal/query/grep.go":      false,
@@ -79,8 +79,8 @@ func TestIndexFilesRecordsIsTestForNonGo(t *testing.T) {
 			Symbols: []Symbol{sym("PickerGuidingSystem", "type", "class PickerGuidingSystem", "b")},
 		},
 		{
-			Path: "pkg/test/src/test_pgs.cpp", Lang: "cpp", Content: "x",
-			IsTest:  IsTestPath("pkg/test/src/test_pgs.cpp"),
+			Path: "pkg/test/src/test_planner.cpp", Lang: "cpp", Content: "x",
+			IsTest:  IsTestPath("pkg/test/src/test_planner.cpp"),
 			Symbols: []Symbol{sym("PgsTestFixture", "type", "class PgsTestFixture", "b", "PickerGuidingSystem")},
 		},
 	}

@@ -200,17 +200,17 @@ func TestTopicFocusedAndSuggest(t *testing.T) {
 func TestCommGraphResolvesLaunchRemapping(t *testing.T) {
 	m := storage.NewMem()
 	m.PutFile("robot", "HEAD", query.File{
-		Path:    "rr_drivers/src/lidar.cpp",
+		Path:    "drivers/src/lidar.cpp",
 		Content: "void init() {\n  pub_ = nh.advertise<sensor_msgs::LaserScan>(\"raw_scan_front\", 10);\n}\n",
 	})
 	m.PutFile("robot", "HEAD", query.File{
-		Path:    "rr_navigation/src/filter.cpp",
+		Path:    "nav_stack/src/filter.cpp",
 		Content: "void init() {\n  sub_ = nh.subscribe(\"scan\", 10, &Filter::cb);\n}\nvoid Filter::cb(const sensor_msgs::LaserScan::ConstPtr& m) {}\n",
 	})
 	m.PutFile("robot", "HEAD", query.File{
-		Path: "rr_bringup/launch/bringup.launch",
+		Path: "robot_bringup/launch/bringup.launch",
 		Content: `<launch>
-  <node pkg="rr_navigation" type="scan_filter" name="filter">
+  <node pkg="nav_stack" type="scan_filter" name="filter">
     <remap from="scan" to="raw_scan_front"/>
   </node>
 </launch>`,
@@ -261,12 +261,12 @@ func TestCommGraphResolvesLaunchRemapping(t *testing.T) {
 func TestTopicFindsRemappedByEitherName(t *testing.T) {
 	m := storage.NewMem()
 	m.PutFile("r", "HEAD", query.File{
-		Path:    "rr_navigation/src/f.cpp",
+		Path:    "nav_stack/src/f.cpp",
 		Content: "void i() { sub_ = nh.subscribe(\"scan\", 1, &F::cb); }\n",
 	})
 	m.PutFile("r", "HEAD", query.File{
 		Path:    "l/x.launch",
-		Content: `<launch><node pkg="rr_navigation" type="t" name="n"><remap from="scan" to="raw_scan"/></node></launch>`,
+		Content: `<launch><node pkg="nav_stack" type="t" name="n"><remap from="scan" to="raw_scan"/></node></launch>`,
 	})
 	for _, ask := range []string{"raw_scan", "scan"} {
 		got := query.Topic(m, "r", "HEAD", ask)

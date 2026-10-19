@@ -12,7 +12,7 @@ import (
 
 // IndexDir applies the exclusion stack — defaults (vendor/ …), the repo's
 // .reponiteignore, and --exclude globs — at index time, so vendored trees never
-// reach the store (P1: rr_sootballs bundling external/ros_comm polluted every
+// reach the store (P1: fleet-app bundling external/ros_comm polluted every
 // search surface).
 func TestIndexDirHonorsIgnores(t *testing.T) {
 	dir := t.TempDir()

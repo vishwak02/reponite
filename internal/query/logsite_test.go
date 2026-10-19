@@ -41,7 +41,7 @@ func TestLogSitesFindsTheEmitter(t *testing.T) {
 		line      int
 		call      string
 	}{
-		{"[ INFO] [1727.1]: Creating 5 new tasks for amr07", "wm/src/work_manager.cpp", 2, "ROS_INFO"},
+		{"[ INFO] [1727.1]: Creating 5 new tasks for robot07", "wm/src/work_manager.cpp", 2, "ROS_INFO"},
 		{"Forgetting work 42 of picking", "wm/src/work_manager.cpp", 3, "ROS_WARN_STREAM"},
 		{"[wm] Queue size 17", "wm/src/work_manager.cpp", 4, "ROS_INFO_NAMED"},
 		{"Failed to split work W1: timeout", "wm/src/work_manager.cpp", 5, "RCLCPP_ERROR"},
@@ -61,7 +61,7 @@ func TestLogSitesFindsTheEmitter(t *testing.T) {
 			t.Errorf("%q: got %s:%d %s, want %s:%d %s", c.log, got.Path, got.Line, got.Call, c.path, c.line, c.call)
 		}
 	}
-	if r := LogSites(s, FleetRepo, "v1", "Creating 5 new tasks for amr07", 3); r.Sites[0].In != "tick" {
+	if r := LogSites(s, FleetRepo, "v1", "Creating 5 new tasks for robot07", 3); r.Sites[0].In != "tick" {
 		t.Errorf("enclosing symbol: %q", r.Sites[0].In)
 	}
 	// A line built by a stream operator<<: the log call that starts it wins
