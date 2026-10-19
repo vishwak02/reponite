@@ -602,7 +602,7 @@ func looksLikeMethod(f File, sp SymbolSpan, base string) bool {
 	if fileModuleStem(f.Path) != "" && nestedInClass(f, sp) {
 		return true // a def/method inside a class body
 	}
-	line := lineAt(f.Content, sp.StartLine)
+	line := declHead(f, sp)
 	return strings.Contains(line, "::"+base+"(") || strings.Contains(line, ") "+base+"(") && strings.HasPrefix(strings.TrimSpace(line), "func (")
 }
 
@@ -623,7 +623,7 @@ func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
 			return true
 		}
 	}
-	line := lineAt(f.Content, sp.StartLine)
+	line := declHead(f, sp)
 	return strings.Contains(line, owner+"::"+base) || strings.Contains(line, owner+") "+base)
 }
 
@@ -701,4 +701,19 @@ func nestedInClass(f File, sp SymbolSpan) bool {
 		}
 	}
 	return false
+}
+
+// declHead is a definition's head: from its first line through the line
+// that opens its parameter list (at most four lines), joined by spaces. A
+// C++ return type often sits on its own line above Class::name(.
+func declHead(f File, sp SymbolSpan) string {
+	var parts []string
+	for n := sp.StartLine; n < sp.StartLine+4 && (sp.EndLine == 0 || n <= sp.EndLine); n++ {
+		ln := lineAt(f.Content, n)
+		parts = append(parts, strings.TrimSpace(ln))
+		if strings.Contains(ln, "(") {
+			break
+		}
+	}
+	return strings.Join(parts, " ")
 }

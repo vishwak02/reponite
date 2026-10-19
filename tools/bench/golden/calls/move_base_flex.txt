@@ -1,0 +1,52 @@
+# move_base_flex (C++, ROS 2) at bf20360. Written by reading each function:
+# for every caller, every call it makes to a function defined in the repo,
+# as the definition's line (the out-of-class body for a method). A line
+# starting with ~ is a possible runtime target of a virtual call (an
+# override): allowed, not required. A call through an interface names the
+# method the static type declares, even a pure virtual one.
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:92 sumDistance
+  mbf_utility/src/navigation_utility.cpp:175 distance
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:109 getCost
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:115 reconfigure
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:150 getState
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:156 setState
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:177 isPatienceExceeded
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:219 start
+  mbf_abstract_nav/src/abstract_execution_base.cpp:57 start
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:243 cancel
+  mbf_abstract_core/include/mbf_abstract_core/abstract_planner.h:96 cancel
+  ~ mbf_simple_core/include/mbf_simple_core/simple_planner.h:98 cancel
+  ~ mbf_simple_nav/test/plugins/test_planner.cpp:20 cancel
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:259 makePlan
+  mbf_abstract_core/include/mbf_abstract_core/abstract_planner.h:87 makePlan
+  ~ mbf_simple_core/include/mbf_simple_core/simple_planner.h:89 makePlan
+  ~ mbf_simple_nav/test/plugins/test_planner.cpp:11 makePlan
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:269 run
+  mbf_abstract_nav/src/abstract_planner_execution.cpp:156 setState
+  mbf_abstract_nav/src/abstract_planner_execution.cpp:395 handle_thread_interrupted
+  mbf_abstract_nav/src/abstract_planner_execution.cpp:259 makePlan
+  mbf_abstract_nav/src/abstract_planner_execution.cpp:177 isPatienceExceeded
+  mbf_abstract_nav/src/abstract_planner_execution.cpp:92 sumDistance
+
+mbf_abstract_nav/src/abstract_planner_execution.cpp:395 handle_thread_interrupted
+  mbf_abstract_nav/src/abstract_planner_execution.cpp:156 setState
+
+mbf_utility/src/navigation_utility.cpp:53 getRobotPose
+  mbf_utility/src/navigation_utility.cpp:92 transformPose
+
+mbf_utility/src/navigation_utility.cpp:92 transformPose
+  mbf_utility/src/navigation_utility.cpp:86 isNormalized
+
+mbf_utility/src/navigation_utility.cpp:175 distance
+
+mbf_utility/src/navigation_utility.cpp:185 angle
