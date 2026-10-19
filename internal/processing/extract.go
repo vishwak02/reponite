@@ -285,6 +285,9 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		if len(ids) == 0 {
 			continue
 		}
+		if ids[len(ids)-1] == callResult {
+			continue // f(x)(y): the target is a returned value; f(x) itself is recorded
+		}
 		qc := QualifiedCall{Name: ids[len(ids)-1], Chain: len(ids)}
 		if len(ids) >= 2 {
 			qc.Qualifier = ids[0]
@@ -336,9 +339,34 @@ func calleeIdents(call content.AST, r LangRules) []string {
 		if m := superMember(c); m != "" {
 			return []string{"super", m}
 		}
-		ids = append(ids, identLeaves(c, types)...)
+		ids = append(ids, calleeLeaves(c, types, r.CallTypes)...)
 	}
 	return ids
+}
+
+// callResult marks, in a callee's identifiers, the value a nested call
+// returned: f(x).g() is [f, (), g] — g is looked up on that value, not on f
+// — and f(x)(y) ends in it: what runs is whatever f returned.
+const callResult = "()"
+
+// calleeLeaves is identLeaves for a callee expression: a nested call
+// contributes its own callee and a callResult marker, never the identifiers
+// of its arguments (withHOC(Panel)(props) does not call Panel).
+func calleeLeaves(n content.AST, nameTypes, callTypes []string) []string {
+	if containsStr(nameTypes, n.Type()) {
+		return []string{n.Text()}
+	}
+	if isArgNode(n.Type()) {
+		return nil
+	}
+	var out []string
+	for _, c := range n.Children() {
+		out = append(out, calleeLeaves(c, nameTypes, callTypes)...)
+	}
+	if containsStr(callTypes, n.Type()) {
+		out = append(out, callResult)
+	}
+	return out
 }
 
 // superMember is f of a Python super().f / super(Cls, self).f callee: the

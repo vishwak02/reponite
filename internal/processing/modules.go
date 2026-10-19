@@ -9,6 +9,8 @@ package processing
 
 import (
 	"path"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -53,16 +55,77 @@ func moduleStem(p string) string {
 type moduleIndex struct {
 	files map[string]string // path -> language
 	dirs  map[string]bool
+	ts    []tsPaths // tsconfig/jsconfig path aliases, deepest config first
+	// defaults is the name a JS/TS module exports as default (export
+	// default Name), by the module's package id
+	defaults map[string]string
+	// JS/TS re-exports, by the exporting module's package id: names passed
+	// on from another module (export { a as b } from './m', and imported
+	// names), and whole modules (export * from './m')
+	jsMods map[string]*jsModule
 }
 
+type jsModule struct {
+	path    string                   // the module's file
+	lang    string                   // its language
+	reexp   map[string]ImportBinding // exported name -> where it comes from (Symbol "default" = that module's default)
+	imports map[string]ImportBinding // module-level imports: an exported name may be one of them
+	stars   []string                 // export * from these modules
+}
+
+var (
+	reExportFrom = regexp.MustCompile(`(?m)^export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]`)
+	reExportStar = regexp.MustCompile(`(?m)^export\s+\*\s+from\s*['"]([^'"]+)['"]`)
+)
+
+// reExportDefault reads `export default Name` (a declared function or
+// class, or a name declared elsewhere in the module).
+var reExportDefault = regexp.MustCompile(`(?m)^export\s+default\s+(?:async\s+)?(?:function\*?\s+|class\s+)?([A-Za-z_$][\w$]*)\s*(?:;|$|\(|\{|<|extends\b)`)
+
 func newModuleIndex(files []ParsedFile) moduleIndex {
-	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}}
+	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}}
 	for _, f := range files {
 		mi.files[f.Path] = f.Lang
 		for d := path.Dir(f.Path); d != "." && d != "/" && !mi.dirs[d]; d = path.Dir(d) {
 			mi.dirs[d] = true
 		}
+		if langFamily(f.Lang) == "js" {
+			src := f.Content
+			if src == "" && f.Load != nil {
+				src, _ = f.Load()
+			}
+			pkg := pkgOfFile(f.Path, f.Lang)
+			if m := reExportDefault.FindStringSubmatch(src); m != nil && !jsDefaultNotName[m[1]] {
+				mi.defaults[pkg] = m[1]
+			}
+			jm := &jsModule{path: f.Path, lang: f.Lang, reexp: map[string]ImportBinding{}, imports: importsByLocal(f.Imports)}
+			for _, m := range reExportFrom.FindAllStringSubmatch(src, -1) {
+				for _, spec := range strings.Split(m[1], ",") {
+					fs := strings.Fields(strings.TrimPrefix(strings.TrimSpace(spec), "type "))
+					switch {
+					case len(fs) == 1:
+						jm.reexp[fs[0]] = ImportBinding{Local: fs[0], Module: m[2], Symbol: fs[0]}
+					case len(fs) == 3 && fs[1] == "as":
+						jm.reexp[fs[2]] = ImportBinding{Local: fs[2], Module: m[2], Symbol: fs[0]}
+					}
+				}
+			}
+			for _, m := range reExportStar.FindAllStringSubmatch(src, -1) {
+				jm.stars = append(jm.stars, m[1])
+			}
+			mi.jsMods[pkg] = jm
+		}
+		if b := path.Base(f.Path); (strings.HasPrefix(b, "tsconfig") || strings.HasPrefix(b, "jsconfig")) && strings.HasSuffix(b, ".json") {
+			src := f.Content
+			if src == "" && f.Load != nil {
+				src, _ = f.Load()
+			}
+			if tp, ok := parseTSConfig(f.Path, src); ok {
+				mi.ts = append(mi.ts, tp)
+			}
+		}
 	}
+	sort.SliceStable(mi.ts, func(i, j int) bool { return len(mi.ts[i].dir) > len(mi.ts[j].dir) })
 	return mi
 }
 
@@ -167,7 +230,16 @@ func (mi moduleIndex) resolveJS(callerPath, module string) (string, bool) {
 	case strings.HasPrefix(module, "/"):
 		cands = []string{strings.TrimPrefix(module, "/")}
 	default:
-		return "", false // a package name: outside the repo
+		// a package name — unless a tsconfig/jsconfig over the caller maps it
+		// (paths aliases, baseUrl) onto the repo's own files
+		for _, tp := range mi.ts {
+			if tp.dir == "" || strings.HasPrefix(callerPath, tp.dir+"/") {
+				cands = append(cands, tp.candidates(module)...)
+			}
+		}
+		if len(cands) == 0 {
+			return "", false
+		}
 	}
 	for _, c := range cands {
 		c = strings.TrimPrefix(path.Clean(c), "./")
@@ -244,4 +316,65 @@ func (mi moduleIndex) resolveJava(callerPath, pkg string) (string, bool) {
 		}
 	}
 	return best, bestShared >= 0
+}
+
+// jsDefaultNotName are words reExportDefault can meet that name no binding.
+var jsDefaultNotName = map[string]bool{"new": true, "function": true, "class": true, "async": true, "await": true}
+
+// resolveExport follows a JS/TS module's exports to the definition of name
+// (a re-export, an imported name it exports, `export *`, the default
+// export) and returns the module and name it is defined under, for which
+// defined reports true. ok is false when the chain leaves the repo or ends
+// without a definition.
+func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name string) bool) (string, string, bool) {
+	seen := map[string]bool{}
+	var walk func(pkg, name string, depth int) (string, string, bool)
+	walk = func(pkg, name string, depth int) (string, string, bool) {
+		if depth > 10 || seen[pkg+"\x00"+name] {
+			return "", "", false
+		}
+		seen[pkg+"\x00"+name] = true
+		if name == "default" {
+			if d := mi.defaults[pkg]; d != "" {
+				return walk(pkg, d, depth+1)
+			}
+			return "", "", false
+		}
+		if defined(pkg, name) {
+			return pkg, name, true
+		}
+		jm := mi.jsMods[pkg]
+		if jm == nil {
+			return "", "", false
+		}
+		follow := func(b ImportBinding) (string, string, bool) {
+			p, ok := mi.resolve(jm.lang, jm.path, b.Module)
+			if !ok {
+				return "", "", false
+			}
+			n := b.Symbol
+			if n == "" {
+				if !b.Default {
+					return "", "", false // a namespace (import * as x) is not a definition
+				}
+				n = "default"
+			}
+			return walk(p, n, depth+1)
+		}
+		if b, ok := jm.reexp[name]; ok {
+			return follow(b)
+		}
+		if b, ok := jm.imports[name]; ok {
+			return follow(b)
+		}
+		for _, star := range jm.stars {
+			if p, ok := mi.resolve(jm.lang, jm.path, star); ok {
+				if rp, rn, ok := walk(p, name, depth+1); ok {
+					return rp, rn, true
+				}
+			}
+		}
+		return "", "", false
+	}
+	return walk(pkg, name, 0)
 }

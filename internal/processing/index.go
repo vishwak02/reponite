@@ -109,6 +109,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 		pkg := pkgOfFile(f.Path, lang)
 		byLocal := importsByLocal(moduleLevelImports(f.Imports, f.Symbols))
+		if langFamily(lang) == "js" {
+			// import X from './m' binds X to what m exports as default
+			for k, b := range byLocal {
+				if b.Default && b.Symbol == "" {
+					if mp, ok := mods.resolve(lang, f.Path, b.Module); ok && mods.defaults[mp] != "" {
+						b.Symbol = mods.defaults[mp]
+						byLocal[k] = b
+					}
+				}
+			}
+		}
 		if lang == "java" {
 			// import a.b.C binds C to class C of package a.b
 			for k, b := range byLocal {
@@ -233,6 +244,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		return v
 	}
 
+	allDefs := map[string]bool{}
+	for _, q := range order {
+		allDefs[q] = true
+	}
+	defined := func(pkg, name string) bool { return allDefs[qualifyModule(pkg, name)] }
+
 	nodes := make([]Node, 0, len(order))
 	var edges []Edge
 	resolved := make(map[string][]query.Callee, len(order))
@@ -253,6 +270,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		} else if qualifiedSiteLangs[c.lang] && len(c.sym.QualifiedCalls) > 0 {
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
 			sites := sitesFromQualified(selfAsPlain(c.sym.QualifiedCalls), c.imports, c.lang, inRepo, modPkg)
+			if langFamily(c.lang) == "js" {
+				// a name a module passes on (barrel index files, export default
+				// of an import): the module that defines it
+				for i, s := range sites {
+					if s.Kind == CallModule && !nodeSet[qualifyModule(s.Scope, s.Name)] {
+						if p, n, ok := mods.resolveExport(s.Scope, s.Name, defined); ok {
+							sites[i].Scope, sites[i].Name = p, n
+						}
+					}
+				}
+			}
 			if c.lang == "java" {
 				for i, s := range sites {
 					if s.Kind == CallMember && s.Recv != "" {

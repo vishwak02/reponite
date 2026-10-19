@@ -370,7 +370,25 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 				continue
 			}
-			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
+			// re-exported (a barrel index, __init__): a definition elsewhere —
+			// never the caller's own module, whose name it would shadow, nor
+			// a method (an import names a module-level thing)
+			var elsewhere []string
+			for _, q := range x.nonMethods(name) {
+				if x.pkgOfQID[q] != callerPkg {
+					elsewhere = append(elsewhere, q)
+				}
+			}
+			switch len(elsewhere) {
+			case 1:
+				add(query.Callee{Name: elsewhere[0], ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+			case 0:
+				// the module defines it as something other than a function (a
+				// styled component, a constant) or takes it from a package
+				add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+			default:
+				add(query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous})
+			}
 		case CallExternal:
 			add(query.Callee{Name: s.Scope + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 		case CallMember:

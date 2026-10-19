@@ -71,7 +71,10 @@ const (
 	//      runs; TypeScript abstract classes are symbols. Rust calls resolve
 	//      by shape (Type::f, module paths, self.f) and receiver type; Java
 	//      receivers are typed from fields, parameters and locals, imports
-	//      resolve to package directories, new Foo() is the class.
+	//      resolve to package directories, new Foo() is the class. JS/TS
+	//      imports follow tsconfig/jsconfig paths and baseUrl, default
+	//      imports and barrel re-exports to the defining module; f(x)(y)
+	//      no longer calls the argument x.
 	IndexVer = 14
 
 	// GoTarget documents the intended production Go toolchain. The build

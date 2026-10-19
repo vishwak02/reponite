@@ -89,6 +89,10 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 	t.Helper()
 	var parsed []ParsedFile
 	for path, src := range files {
+		if strings.HasSuffix(path, ".json") {
+			parsed = append(parsed, ParsedFile{Path: path, Content: src, Lang: "json"})
+			continue
+		}
 		ext := ".ts"
 		switch {
 		case strings.HasSuffix(path, ".py"):
@@ -432,4 +436,74 @@ public class ArticleApi {
 	fill := edges["app/query.ArticleQueryService.fill"]
 	wantMethod(t, fill, "app/query.ArticleQueryService.format", MethodResolved)
 	wantMethod(t, fill, "app/query.ArticleQueryService.findBySlug", MethodResolved)
+}
+
+// tsconfig paths and baseUrl make an aliased import the project's own code.
+func TestTSConfigPathAliases(t *testing.T) {
+	files := map[string]string{
+		"web/tsconfig.json": `{
+  // comments and trailing commas, as tsconfig allows
+  "compilerOptions": {
+    "baseUrl": "./src",
+    "paths": {
+      "@app/*": ["./*"],
+      "@app/types": ["types/index.ts"], /* exact */
+    },
+  },
+}`,
+		"web/src/components/empty/index.tsx": `export const EmptyPlaceholder = () => null;`,
+		"web/src/types/index.ts": `export function isAgent(x: unknown) { return !!x; }`,
+		"web/src/utils/fmt.ts": `export function fmt(s: string) { return s; }`,
+		"web/src/components/popConfirm/index.tsx": `const PopconfirmCustom = () => null;
+export default PopconfirmCustom;`,
+		"web/src/dash/Header/Header.tsx": `const GrafanaHeader = () => null;
+export default GrafanaHeader;`,
+		"web/src/dash/Header/index.ts": `import Header from './Header';
+export default Header;`,
+		"web/src/lib/index.ts": `export { fmt as format } from '../utils/fmt';
+export * from './more';`,
+		"web/src/lib/more.ts": `export function helper() { return 1; }`,
+		"web/src/changelog.ts": `class Changelog { undo() { return 1; } }
+const changelog = new Changelog();
+export default changelog;`,
+		"web/src/app/page.tsx": `import { EmptyPlaceholder } from '@app/components/empty';
+import { isAgent } from '@app/types';
+import { fmt } from 'utils/fmt';
+import PopConfirm from '@app/components/popConfirm';
+import changelog from '@app/changelog';
+export function Page() { isAgent(1); fmt('x'); return <EmptyPlaceholder />; }
+import DashboardHeader from '@app/dash/Header';
+import { format, helper } from '@app/lib';
+export function Confirm() { return <PopConfirm />; }
+export function Dash() { format('x'); helper(); return <DashboardHeader />; }
+export function undo() { changelog.undo(); }`,
+	}
+	edges := indexAndEdges(t, files)
+	p := edges["web/src/app.page.Page"]
+	if p == nil {
+		t.Fatalf("Page not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, p, "web/src/components/empty.EmptyPlaceholder", MethodResolved)
+	wantMethod(t, p, "web/src/types.isAgent", MethodResolved)
+	wantMethod(t, p, "web/src/utils.fmt", MethodResolved) // baseUrl-relative
+	// a default import is the module's default export, under any local name
+	wantMethod(t, edges["web/src/app.page.Confirm"], "web/src/components/popConfirm.PopconfirmCustom", MethodResolved)
+	// barrels and default re-exports lead to the defining module
+	d := edges["web/src/app.page.Dash"]
+	wantMethod(t, d, "web/src/dash/Header.Header.GrafanaHeader", MethodResolved)
+	wantMethod(t, d, "web/src/utils.fmt", MethodResolved)
+	wantMethod(t, d, "web/src/lib.more.helper", MethodResolved)
+	// changelog.undo() is the default export's method, never the caller undo
+	u := edges["web/src/app.page.undo"]
+	if _, self := u["web/src/app.page.undo"]; self {
+		t.Error("changelog.undo() resolved to the caller itself")
+	}
+	wantMethod(t, u, "web/src.changelog.Changelog.undo", MethodMember)
+}
+
+func TestJSONCToJSON(t *testing.T) {
+	got := jsoncToJSON("{\"a\": \"http://x\", // c\n \"b\": [1, 2,], /* d */ }")
+	if got != "{\"a\": \"http://x\", \n \"b\": [1, 2]  }" {
+		t.Errorf("jsoncToJSON = %q", got)
+	}
 }

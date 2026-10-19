@@ -292,7 +292,7 @@ func sitesFromQualified(qcs []QualifiedCall, byLocal map[string]ImportBinding, l
 			} else {
 				add(CallSite{Name: qc.Name, Kind: CallPlain})
 			}
-		case imported && qc.Chain <= 2 && moduleCall(b, lang, modPkg) != "":
+		case imported && !b.Default && qc.Chain <= 2 && moduleCall(b, lang, modPkg) != "":
 			// m.f() on an imported repo module (import x as m, * as m,
 			// from pkg import submodule)
 			add(CallSite{Name: qc.Name, Kind: CallModule, Scope: moduleCall(b, lang, modPkg)})

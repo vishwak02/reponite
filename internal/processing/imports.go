@@ -25,6 +25,9 @@ type ImportBinding struct {
 	Local  string
 	Module string
 	Symbol string
+	// Default: a JS/TS default import — the module's default export value,
+	// not its namespace (x.f() is a member of that value).
+	Default bool
 }
 
 // importsByLocal indexes import bindings by their local name for call-site
@@ -295,7 +298,7 @@ func jsImportStatement(stmt content.AST) []ImportBinding {
 	for _, c := range clause.Children() {
 		switch c.Type() {
 		case "identifier": // default import: `import foo from 'mod'`
-			out = append(out, ImportBinding{Local: c.Text(), Module: mod})
+			out = append(out, ImportBinding{Local: c.Text(), Module: mod, Default: true})
 		case "namespace_import": // `* as ns`
 			if id := lastIdentLeaf(c); id != "" {
 				out = append(out, ImportBinding{Local: id, Module: mod})
