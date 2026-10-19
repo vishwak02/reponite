@@ -337,7 +337,46 @@ type configDTO struct {
 	Omitted      int            `json:"omitted,omitempty"`
 	Next         string         `json:"next,omitempty"`
 	Note         string         `json:"note,omitempty"`
+	Flow         *cfgFlowDTO    `json:"flow,omitempty"`
 	Meta         metaDTO        `json:"_meta"`
+}
+
+// cfgFlowDTO is a key's path: defined → templated → read → used.
+type cfgFlowDTO struct {
+	Key       string        `json:"key"`
+	NDefined  int           `json:"n_defined"`
+	Defined   []cfgFlowSite `json:"defined"`
+	Templates []cfgFlowSite `json:"templates"`
+	Readers   []cfgFlowSite `json:"readers"`
+	Uses      []cfgFlowSite `json:"uses"`
+	Note      string        `json:"note,omitempty"`
+}
+
+type cfgFlowSite struct {
+	Repo   string `json:"repo"`
+	Path   string `json:"path"`
+	Line   int    `json:"line"`
+	Text   string `json:"text"`
+	In     string `json:"in,omitempty"`
+	Via    string `json:"via,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	Writes string `json:"writes,omitempty"`
+	Copies int    `json:"copies,omitempty"`
+}
+
+func cfgFlowToDTO(f *query.ConfigFlow) *cfgFlowDTO {
+	if f == nil {
+		return nil
+	}
+	conv := func(xs []query.ConfigFlowSite) []cfgFlowSite {
+		out := make([]cfgFlowSite, 0, len(xs))
+		for _, x := range xs {
+			out = append(out, cfgFlowSite{Repo: x.Repo, Path: x.Path, Line: x.Line, Text: x.Text, In: x.In, Via: x.Via, Kind: x.Kind, Writes: x.Writes, Copies: x.Copies})
+		}
+		return out
+	}
+	return &cfgFlowDTO{Key: f.Key, NDefined: f.NDefined, Defined: conv(f.Defined), Templates: conv(f.Templates),
+		Readers: conv(f.Readers), Uses: conv(f.Uses), Note: f.Note}
 }
 
 func cfgKeyToDTO(k query.ConfigKey) cfgKeyDTO {
@@ -354,7 +393,7 @@ func cfgKeyToDTO(k query.ConfigKey) cfgKeyDTO {
 // ConfigJSON renders the configuration surface or one key's reads and sets.
 func ConfigJSON(r query.ConfigResult) (string, error) {
 	dto := configDTO{Query: r.Query, Total: r.Total, Counts: r.Counts, Keys: make([]cfgKeyDTO, 0, len(r.Keys)), Truncated: r.Truncated,
-		Omitted: r.Omitted, Next: r.Next, Note: r.Note, Meta: metaOf(r.Meta)}
+		Omitted: r.Omitted, Next: r.Next, Note: r.Note, Flow: cfgFlowToDTO(r.Flow), Meta: metaOf(r.Meta)}
 	for _, k := range r.ReadNeverSet {
 		dto.ReadNeverSet = append(dto.ReadNeverSet, cfgKeyToDTO(k))
 	}
@@ -438,8 +477,46 @@ func ConfigText(r query.ConfigResult) string {
 	if r.Truncated {
 		fmt.Fprintf(&b, "truncated: %s\n", r.Next)
 	}
-	if r.Note != "" && detail {
+	if r.Note != "" && detail && r.Flow == nil {
 		fmt.Fprintf(&b, "note: %s\n", r.Note)
+	}
+	if f := r.Flow; f != nil {
+		fmt.Fprintf(&b, "flow of %s:\n", f.Key)
+		site := func(x query.ConfigFlowSite) string {
+			s := fmt.Sprintf("%s:%s:%d", x.Repo, x.Path, x.Line)
+			if x.In != "" {
+				s += " in " + x.In
+			}
+			return s
+		}
+		fmt.Fprintf(&b, "  1. defined in %d file(s)\n", f.NDefined)
+		for _, x := range f.Defined[:min(len(f.Defined), 4)] {
+			fmt.Fprintf(&b, "     %s | %s\n", site(x), x.Text)
+		}
+		fmt.Fprintf(&b, "  2. templates reading it: %d\n", len(f.Templates))
+		for _, x := range f.Templates {
+			w, c := "", ""
+			if x.Writes != "" {
+				w = " → " + x.Writes
+			}
+			if x.Copies > 0 {
+				c = fmt.Sprintf(" (+%d copies)", x.Copies)
+			}
+			fmt.Fprintf(&b, "     %s [%s]%s%s | %s\n", site(x), x.Kind, w, c, x.Text)
+		}
+		fmt.Fprintf(&b, "  3. read by: %d\n", len(f.Readers))
+		for _, x := range f.Readers {
+			fmt.Fprintf(&b, "     %s [%s via %q] | %s\n", site(x), x.Kind, x.Via, x.Text)
+		}
+		if len(f.Uses) > 0 {
+			fmt.Fprintf(&b, "  4. then used: %d\n", len(f.Uses))
+			for _, x := range f.Uses {
+				fmt.Fprintf(&b, "     %s [%s] | %s\n", site(x), x.Via, x.Text)
+			}
+		}
+		if f.Note != "" {
+			fmt.Fprintf(&b, "  note: %s\n", f.Note)
+		}
 	}
 	return b.String()
 }

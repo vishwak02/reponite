@@ -561,8 +561,15 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 			if p != "" {
 				mod = p + "." + stem
 			}
-			if strings.HasPrefix(qid, mod+".") {
+			switch {
+			case strings.HasPrefix(qid, mod+"."):
 				score += 2
+			case qid == mod && stem == base:
+				score += 2 // dir.main for main.py's main(): the id names its file
+			default:
+				// dir.f names the directory's own module (index.ts, __init__.py),
+				// not card.ts beside it, whose f is dir.card.f
+				score--
 			}
 		}
 		for _, sp := range f.Symbols {

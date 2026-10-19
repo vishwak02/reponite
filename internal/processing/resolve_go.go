@@ -17,6 +17,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -51,7 +53,7 @@ func typeCheckTree(files []ParsedFile, manifests map[string][]byte, read func(st
 		if path.Base(p) != "go.mod" {
 			continue
 		}
-		if !write(p, string(b)) {
+		if !write(p, capGoDirective(string(b))) {
 			return nil
 		}
 		if sum, ok := read(path.Join(path.Dir(p), "go.sum")); ok {
@@ -98,9 +100,20 @@ func TypeResolvedEdges(dir string) map[string]map[string][]string {
 		Env:   offlineGoEnv(),
 		Tests: true,
 	}
-	pkgs, err := packages.Load(cfg, "./...")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "reponite: Go type check unavailable (%v); Go calls are resolved by name\n", err)
+	// every module of the tree: the root's, and nested ones (a repo whose Go
+	// code is a module in a subdirectory, or several modules side by side)
+	var pkgs []*packages.Package
+	for _, mod := range moduleDirs(absDir) {
+		c := *cfg
+		c.Dir = mod
+		ps, err := packages.Load(&c, "./...")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "reponite: Go type check unavailable (%v); Go calls are resolved by name\n", err)
+			continue
+		}
+		pkgs = append(pkgs, ps...)
+	}
+	if len(pkgs) == 0 {
 		return out
 	}
 	failed, firstErr := 0, ""
@@ -252,4 +265,50 @@ func isInterfaceType(t types.Type) bool {
 	}
 	_, ok := t.Underlying().(*types.Interface)
 	return ok
+}
+
+// moduleDirs are the directories under root holding a go.mod (root itself
+// when it has none: a GOPATH-style tree is still loaded from there).
+func moduleDirs(root string) []string {
+	var out []string
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && p != root && (strings.HasPrefix(d.Name(), ".") || d.Name() == "vendor" || d.Name() == "testdata" || d.Name() == "node_modules") {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && d.Name() == "go.mod" {
+			out = append(out, filepath.Dir(p))
+		}
+		return nil
+	})
+	if len(out) == 0 {
+		out = []string{root}
+	}
+	return out
+}
+
+var reGoDirective = regexp.MustCompile(`(?m)^go\s+(\d+)\.(\d+)(?:\.\d+)?\s*$`)
+var reToolchain = regexp.MustCompile(`(?m)^toolchain\s+\S+\s*$`)
+
+// capGoDirective lowers a go.mod's language version to the one this binary's
+// type checker knows (go/types refuses newer code outright) and drops a
+// toolchain line: the check is of names and types, not of new language
+// features, and with the proxy off no other toolchain could be fetched.
+func capGoDirective(gomod string) string {
+	var maj, min int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(runtime.Version(), "go"), "%d.%d", &maj, &min); err != nil {
+		return gomod
+	}
+	gomod = reToolchain.ReplaceAllString(gomod, "")
+	return reGoDirective.ReplaceAllStringFunc(gomod, func(m string) string {
+		sm := reGoDirective.FindStringSubmatch(m)
+		var a, b int
+		fmt.Sscanf(sm[1]+" "+sm[2], "%d %d", &a, &b)
+		if a > maj || a == maj && b > min {
+			return fmt.Sprintf("go %d.%d", maj, min)
+		}
+		return m
+	})
 }

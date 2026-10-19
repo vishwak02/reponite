@@ -172,6 +172,12 @@ func Open(path string) (*Store, error) {
 	// One connection: every statement sees the same (possibly :memory:) db,
 	// and writes never contend with each other.
 	db.SetMaxOpenConns(1)
+	// Another process (an index run, the MCP server, a second query) may hold
+	// the write lock for a moment: wait for it instead of failing at once.
+	if _, err := db.Exec(`PRAGMA busy_timeout = 30000`); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
@@ -183,9 +189,14 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("migrate v1 index: %w", err)
 		}
 	}
-	if _, err := db.Exec(`INSERT INTO store_meta(k, v) VALUES('format', ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, fmt.Sprint(FormatVersion)); err != nil {
-		db.Close()
-		return nil, err
+	// written only when it changes: a reader opening the store takes no write lock
+	var format string
+	_ = db.QueryRow(`SELECT v FROM store_meta WHERE k = 'format'`).Scan(&format)
+	if format != fmt.Sprint(FormatVersion) {
+		if _, err := db.Exec(`INSERT INTO store_meta(k, v) VALUES('format', ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, fmt.Sprint(FormatVersion)); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return s, nil
 }

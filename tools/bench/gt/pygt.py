@@ -150,7 +150,8 @@ def main():
         # src/, backend/ ...): the deepest one above the importing file
         first = dotted.split(".")[0]
         roots = [d for d in dirs if (os.path.join(d, first) in dirs or os.path.join(d, first + ".py") in files)
-                 and os.path.join(d, "__init__.py") not in files]  # a package is not a source root
+                 # a package is not a source root; the repo root is, __init__.py or not
+                 and (d == "" or os.path.join(d, "__init__.py") not in files)]
         above = [d for d in roots if d == "" or rel.startswith(d + "/")]
         for root in sorted(above, key=len, reverse=True) + sorted(set(roots) - set(above), key=len):
             prefix = root.replace("/", ".") + "." if root else ""
@@ -158,10 +159,28 @@ def main():
                 return mods[prefix + dotted]
         return None
 
+    def reexported(src, name):
+        """what module src binds name to by importing it (a package __init__
+        re-exporting a submodule's class): ("func", id) | ("class", key)"""
+        if src not in files:
+            return None
+        got = imports_of(src, files[src]).get(name)
+        return got if got and got[0] in ("func", "class") else None
+
+    imports_memo = {}
+
     def imports_of(rel, tree, body=None):
         """local name -> ("module", rel) | ("func", id) | ("class", (rel, name))"""
+        if body is None:
+            if rel not in imports_memo:
+                imports_memo[rel] = {}  # an import cycle reads as no bindings
+                imports_memo[rel] = module_imports(rel, tree, tree.body)
+            return imports_memo[rel]
+        return module_imports(rel, tree, body)
+
+    def module_imports(rel, tree, body):
         b = {}
-        for node in (body if body is not None else tree.body):
+        for node in body:
             if isinstance(node, ast.Import):
                 for a in node.names:
                     r = resolve_module(rel, a.name)
@@ -178,6 +197,8 @@ def main():
                         b[local] = ("func", funcs[src][a.name])
                     elif src and (src, a.name) in classes:
                         b[local] = ("class", (src, a.name))
+                    elif src and (r := reexported(src, a.name)):
+                        b[local] = r
         return b
 
     INERT = {"object", "ABC", "Generic", "Protocol"}

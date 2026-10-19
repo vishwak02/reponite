@@ -56,7 +56,7 @@ func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []Cal
 				cs.Recv = recvExpr(k[0], vars)
 			}
 		}
-		if !ok || cs.Name == "" || r.Builtins[cs.Name] || seen[cs] {
+		if !ok || cs.Name == "" || cs.Kind == CallPlain && r.Builtins[cs.Name] || seen[cs] {
 			continue
 		}
 		seen[cs] = true

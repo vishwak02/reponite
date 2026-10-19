@@ -266,13 +266,13 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	// Python receiver typing (pytypes.go): a dotted type or function name is
 	// resolved in the context of the file that writes it
-	py := &pyTyper{classes: classes, allDefs: allDefs, fields: map[string]map[string]string{}, returns: map[string]string{}}
+	py := &pyTyper{classes: classes, allDefs: allDefs, isMethod: x.isMethod, fields: map[string]map[string]string{}, returns: map[string]string{}}
 	py.ctx = func(q string) (pyCtx, bool) {
 		c, ok := byQID[q]
 		if !ok {
 			return pyCtx{}, false
 		}
-		return pyCtx{pkg: c.pkg, recv: c.sym.Recv, vars: c.sym.Vars, returns: c.sym.Returns, sites: func(qcs []QualifiedCall) []CallSite {
+		return pyCtx{pkg: c.pkg, recv: c.sym.Recv, path: c.path, vars: c.sym.Vars, returns: c.sym.Returns, sites: func(qcs []QualifiedCall) []CallSite {
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
 			return sitesFromQualified(qcs, c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
 		}}, true
@@ -296,7 +296,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		c := byQID[qid]
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
 		var callees []query.Callee
-		x.callerTest = x.isTest[qid]
+		x.callerTest, x.caller = x.isTest[qid], qid
 		v := viewFor(c.lang)
 		x.nodeSet, x.byBase = v.nodeSet, v.byBase
 		nodeSet, byBase := v.nodeSet, v.byBase

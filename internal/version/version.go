@@ -75,7 +75,13 @@ const (
 	//      imports follow tsconfig/jsconfig paths and baseUrl, default
 	//      imports and barrel re-exports to the defining module; f(x)(y)
 	//      no longer calls the argument x.
-	IndexVer = 14
+	//  15: Git LFS pointers are skipped whatever their extension; obj.set() /
+	//      qs.filter() are calls (only a bare builtin name is skipped);
+	//      Python receivers typed as library or builtin classes call the
+	//      library, pytest fixtures type a test's parameters, a repo root
+	//      with its own __init__.py is still the import root, and a method
+	//      calling its own name on another object delegates, not recurses.
+	IndexVer = 15
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

@@ -52,6 +52,18 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   instead of a guessed edge. Reindex to pick it up — answers from older refs say so.
 - **Scope**: inside a repo, fleet-wide commands answer for that repo's workspace, not every
   repo ever indexed on the machine.
+- **Call edges (IndexVer 15)**: a Python receiver annotated or constructed as a library or
+  builtin class (`spinner: Yaspin`, `name: str`, `self._event = threading.Event()`, a factory
+  annotated to return one) calls the library, never a same-named repo method; a test's
+  parameters are typed by the pytest fixture of that name (its module's, else the nearest
+  `conftest.py`); `x.field.f()` resolves through the field's class; `db.set()`/`qs.filter()`
+  are calls (only a bare builtin name is skipped); a method calling its own name on another
+  object is a delegation, not a recursion. Reindex to pick it up.
+- **`config <key>`** follows the key from the file that defines it through the templates
+  that render it (and the name they write it under) to the code reading the rendered key
+  and where that value is used next; keys deeper than three levels are read too.
+- `config` over a large fleet is about 3× faster (pattern scans only on lines and files
+  that can match).
 
 #### Fixed
 
@@ -72,6 +84,18 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   `topics` read docstring examples and class lines as endpoints.
 - `/api/search` covered only the first repo; it covers the fleet as the CLI and MCP do.
 - JSON answers write empty lists as `[]`, never `null`.
+- A repository whose root holds an `__init__.py` read every absolute import of its own
+  packages as a library; the root is the import root.
+- Git LFS placeholders with a source extension (`.py`) were parsed as code; every LFS
+  pointer is skipped and reported by `coverage`.
+- `explain` and `trace` placed `dir.f` on a sibling module's `f` (`card.tsx`) instead of the
+  directory's own module (`index.tsx`).
+- Two commands against one store at once failed with "database is locked"; opening the
+  store waits for a writer and a reader takes no write lock.
+- Benchmark truth: the Python extractor follows package re-exports and a root
+  `__init__.py`, the type-inferring pass retries a call Jedi gave up on and marks the ones
+  it never resolves, and the TypeScript extractor names a function after a variable only
+  when a wrapper (`memo`, `forwardRef`) is called on it.
 
 ### A new dashboard
 

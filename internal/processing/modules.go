@@ -186,8 +186,11 @@ func (mi moduleIndex) resolvePython(callerPath, module string) (string, bool) {
 		if !mi.dirs[path.Join(d, first)] && mi.files[path.Join(d, first+".py")] == "" {
 			continue
 		}
-		if mi.files[path.Join(d, "__init__.py")] != "" {
-			continue // a package is not a source root: `import json` inside it is the stdlib's
+		if d != "" && mi.files[path.Join(d, "__init__.py")] != "" {
+			// a package is not a source root: `import json` inside it is the
+			// stdlib's. The repo root is one even with an __init__.py of its
+			// own: the project runs from there.
+			continue
 		}
 		if d == "" || strings.HasPrefix(callerPath, d+"/") {
 			ancestors = append(ancestors, d)

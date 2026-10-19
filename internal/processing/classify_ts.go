@@ -24,6 +24,14 @@ func classifyFile(in fileInput, ig *Ignore, repo string, normVer int, finish fun
 	if inNoiseDir(p) {
 		return quiet("tool or cache directory")
 	}
+	if in.size <= maxLFSPointerBytes {
+		// a placeholder for content kept outside git, whatever its extension
+		src, err := in.read()
+		if err == nil && strings.HasPrefix(src, lfsPointer) {
+			return quiet(lfsSkipReason)
+		}
+		in.read = func() (string, error) { return src, err }
+	}
 	keep := func(pf ParsedFile, ok bool) (classified, error) {
 		if !ok {
 			return quiet("not stored (empty or over the size limit for its kind)")

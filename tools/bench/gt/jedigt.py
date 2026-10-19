@@ -46,7 +46,7 @@ def main():
         return best
 
     added = 0
-    external = set()
+    external, unresolved = set(), set()
     for rel in sorted(defs_by_path):
         full = os.path.join(root, rel)
         try:
@@ -72,10 +72,23 @@ def main():
                 continue
             try:
                 targets = script.goto(line, col, follow_imports=True)
+                if not targets:
+                    # Jedi's inference state builds up across one script's
+                    # queries and it can give up on a call it resolves fresh
+                    targets = jedi.Script(src, path=full, project=project).goto(line, col, follow_imports=True)
             except Exception:  # jedi gives up on some constructs
-                continue
+                targets = []
             name = f.attr if isinstance(f, ast.Attribute) else f.id
-            if targets and all(t.module_path is None or not str(t.module_path).startswith(root + os.sep) for t in targets):
+            if not targets:
+                # this call stays undetermined, whatever another call of the
+                # same name in the caller resolved to
+                unresolved.add(caller["id"] + ">" + name)
+                continue
+            # outside the repo only when Jedi names a real function, class or
+            # module there: on some code it lands on an unrelated stub line
+            # (an Enum classmethod "resolved" to builtins.pyi as an instance)
+            if targets and all((t.module_path is None or not str(t.module_path).startswith(root + os.sep))
+                               and t.type in ("function", "class", "module") for t in targets):
                 external.add(caller["id"] + ">" + name)  # a builtin or library function
                 continue
             for t in targets:
@@ -89,6 +102,7 @@ def main():
                 truth["edges"].append({"from": caller["id"], "to": to, "kind": "inferred", "line": node.lineno})
                 added += 1
     truth["resolved_external"] = sorted(external)
+    truth["unresolved"] = sorted(unresolved)
     print(f"jedigt: {added} inferred edges, {len(external)} calls resolved outside the repo", file=sys.stderr)
     json.dump(truth, sys.stdout, indent=1)
 

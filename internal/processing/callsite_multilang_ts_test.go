@@ -561,3 +561,170 @@ def test_direct():
 		}
 	}
 }
+
+// A receiver annotated (or constructed) as a library or builtin class calls
+// that class's method, never the one repo method of the same name.
+func TestPythonLibraryTypedReceiver(t *testing.T) {
+	files := map[string]string{
+		"app/spin.py": `class DummySpinner:
+    def fail(self, text):
+        pass
+    def split(self):
+        pass
+`,
+		"app/cmd.py": `from yaspin.core import Yaspin
+from typing import Any
+from app.make import make_client
+def run(spinner: Yaspin, name: str, other: Any):
+    spinner.fail("x")
+    name.split()
+    other.fail("y")
+def run2(spinner: Yaspin):
+    spinner.red.ok()
+    client = make_client()
+    client.get_device(1)
+`,
+		"app/make.py": `from cloudsdk import Client
+def make_client() -> Client:
+    return Client()
+class Device:
+    def get_device(self, i):
+        pass
+    def ok(self):
+        pass
+    def set(self):
+        pass
+`,
+		"app/worker.py": `import threading
+class Worker:
+    def __init__(self):
+        self._event = threading.Event()
+    def stop(self):
+        self._event.set()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["app.cmd.run"]
+	if run == nil {
+		t.Fatalf("run not indexed; have %v", symKeys(edges))
+	}
+	wantMethod(t, run, "Yaspin::fail", MethodExternal)
+	wantMethod(t, run, "str::split", MethodExternal)
+	if _, bad := run["app.spin.DummySpinner.split"]; bad {
+		t.Errorf("str.split pinned on the repo's split")
+	}
+	// typing.Any says nothing: the member-name guess stands
+	wantMethod(t, run, "app.spin.DummySpinner.fail", MethodMember)
+	run2 := edges["app.cmd.run2"]
+	for _, bad := range []string{"app.make.Device.ok", "app.make.Device.get_device"} {
+		if _, ok := run2[bad]; ok {
+			t.Errorf("a library object's member pinned on %s: %v", bad, run2)
+		}
+	}
+	wantMethod(t, run2, "Client::get_device", MethodExternal)
+	wantMethod(t, edges["app.worker.Worker.stop"], "threading.Event::set", MethodExternal)
+}
+
+// A repository root that is itself a package (an __init__.py at the top) is
+// still the source root its absolute imports start from.
+func TestPythonRootPackageImports(t *testing.T) {
+	files := map[string]string{
+		"__init__.py":           "",
+		"cli/__init__.py":       "",
+		"cli/utils/__init__.py": "def tabulate(rows):\n    return rows\n",
+		"cli/cmd/list.py":       "from cli.utils import tabulate\ndef list_all():\n    tabulate([])\n",
+	}
+	edges := indexAndEdges(t, files)
+	wantMethod(t, edges["cli/cmd.list.list_all"], "cli/utils.tabulate", MethodResolved)
+}
+
+// x.field.f() on a var whose class is known: the method on the class that
+// field holds.
+func TestPythonTypedVarField(t *testing.T) {
+	files := map[string]string{
+		"app/svc.py": `class Repo:
+    def save(self):
+        pass
+class Other:
+    def save(self):
+        pass
+class Service:
+    def __init__(self):
+        self.repo = Repo()
+def run(s: Service):
+    s.repo.save()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["app.svc.run"]
+	wantMethod(t, run, "app.svc.Repo.save", MethodTyped)
+	if _, bad := run["app.svc.Other.save"]; bad {
+		t.Errorf("save pinned on Other: %v", run)
+	}
+}
+
+// A method or module function named like a builtin (set, filter, open) is
+// called through its receiver; only a bare set(...) is the builtin.
+func TestPythonBuiltinNamedMembers(t *testing.T) {
+	files := map[string]string{
+		"auth/db.py": "def set(key, value):\n    pass\n",
+		"auth/data.py": `from auth import db
+class Base:
+    def set(self, k, v):
+        pass
+class Store(Base):
+    def set(self, k, v):
+        super().set(k, v)
+    def save(self):
+        db.set("k", 1)
+        self.set("k", 2)
+        return set([1])
+`,
+	}
+	edges := indexAndEdges(t, files)
+	save := edges["auth.data.Store.save"]
+	wantMethod(t, save, "auth.db.set", MethodResolved)
+	wantMethod(t, save, "auth.data.Store.set", MethodResolved)
+	wantMethod(t, edges["auth.data.Store.set"], "auth.data.Base.set", MethodResolved)
+}
+
+// A test's parameter is the pytest fixture of that name (its own module's,
+// else the nearest conftest.py's): calls on it resolve on what it returns.
+func TestPythonPytestFixtureTyping(t *testing.T) {
+	files := map[string]string{
+		"app/core.py": `class App:
+    def send(self):
+        pass
+class Other:
+    def send(self):
+        pass
+`,
+		"tests/conftest.py": `import pytest
+from app.core import App
+@pytest.fixture
+def app():
+    a = App()
+    return a
+`,
+		"tests/unit/test_core.py": `def test_send(app):
+    app.send()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	wantMethod(t, edges["tests/unit.test_core.test_send"], "app.core.App.send", MethodTyped)
+}
+
+// A method calling the same-named method on another object of unknown type
+// delegates; the one repo method of that name (itself) is not the target.
+func TestPythonDelegationNotRecursion(t *testing.T) {
+	files := map[string]string{
+		"app/group.py": `class Group:
+    def get_command(self, ctx, name):
+        return self.app().cli.get_command(ctx, name)
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, bad := edges["app.group.Group.get_command"]["app.group.Group.get_command"]; bad {
+		t.Errorf("delegation read as recursion: %v", edges["app.group.Group.get_command"])
+	}
+}

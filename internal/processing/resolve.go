@@ -197,6 +197,7 @@ type siteIndex struct {
 	rust       *rustCrate          // Rust module tree (nil: no Rust in the ref)
 	callerPkg  string
 	callerTest bool
+	caller     string // the calling definition's qid
 }
 
 // MethodTyped: a member call resolved on the receiver's DECLARED type (its
@@ -352,8 +353,9 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(rustPlainCallee(callerPkg, s, x))
 				continue
 			}
-			if lang == "java" && isTypeName(name) {
-				// new Foo(): the class, not one of its constructors
+			if lang == "java" && isTypeName(name) || s.Kind == CallPlain && bareNameSkipsClass[lang] {
+				// new Foo(): the class, not one of its constructors; a bare f()
+				// in Python/JS (all(…), format(…)) is never some class's method
 				add(resolveEdges(callerPkg, []string{name}, x.nodeSet, map[string][]string{name: x.nonMethods(name)}, x.precise)[0])
 				continue
 			}
@@ -500,9 +502,13 @@ func memberCalleeLang(name, lang string, x siteIndex) query.Callee {
 		// Only a method can be a member call's target, and no repo class has one:
 		// a library type's member (or a function pointer field).
 		return query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
-	case memberBuiltins[lang][name]:
+	case memberBuiltins[lang][name] || lang == "python" && strings.HasPrefix(name, "__") && strings.HasSuffix(name, "__"):
 		// The repo defines it, but so does every standard container: which one
 		// this object is cannot be told without its type.
+		return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
+	case len(cands) == 1 && cands[0] == x.caller:
+		// get_command() calling app.cli.get_command(): a wrapper delegating
+		// to another object's method of its own name, not a recursion
 		return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
 	case len(cands) == 1 && x.isTest[cands[0]] && !x.callerTest:
 		// Production code never calls into a test file; the one same-named

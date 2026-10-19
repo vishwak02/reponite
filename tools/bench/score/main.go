@@ -49,6 +49,10 @@ type truth struct {
 	// resolved to something outside the repo (a builtin, a library): an
 	// edge from there to a repo definition of that name is wrong.
 	ResolvedExternal []string `json:"resolved_external"`
+	// Unresolved lists "from>name" calls the type-inferring extractor gave
+	// up on at some call site: an edge from there to a repo definition of
+	// that name is undetermined, whatever another call of the name resolved.
+	Unresolved []string `json:"unresolved"`
 }
 
 // Score is one repository's result.
@@ -67,7 +71,7 @@ type Score struct {
 type ratio struct{ Hit, Total int }
 
 var minPrecision, minRecall float64
-var showUndet *int
+var showUndet, listN *int
 var gateFailed []string
 
 // gate records a failure when r is below min percent (min < 0: no gate; an
@@ -116,6 +120,7 @@ func main() {
 	rf := flag.String("routes", "", "golden endpoint list (tools/bench/golden/routes): score routes instead")
 	cf := flag.String("calls", "", "golden call list (tools/bench/golden/calls): score those callers' edges instead")
 	showUndet = flag.Int("show-undetermined", 0, "print up to N resolved edges the truth cannot judge (stderr)")
+	listN = flag.Int("list", 25, "print up to N false and N missed edges")
 	cmds := flag.Bool("commands", false, "with -truth: also check what context (callers) and usages (call sites) answer for each definition")
 	jsonOut := flag.Bool("json", false, "print JSON")
 	flag.Float64Var(&minPrecision, "min-precision", -1, "gate: exit 1 when precision of resolved edges (or routes) is below this percent")
@@ -197,6 +202,9 @@ func main() {
 	for _, k := range t.ResolvedExternal {
 		resolvedName[k] = true
 	}
+	for _, k := range t.Unresolved {
+		delete(resolvedName, k)
+	}
 	calls := map[string]bool{} // from + ">" + name: the definition calls that name
 	for from, ns := range t.Names {
 		for _, n := range ns {
@@ -240,7 +248,7 @@ func main() {
 			r.Total++
 			if anyEdge[k] {
 				r.Hit++
-			} else if len(sc.FalseEdges) < 25 {
+			} else if len(sc.FalseEdges) < *listN {
 				sc.FalseEdges = append(sc.FalseEdges, fmt.Sprintf("[%s %.2f] %s (%s) -> %s (%s)", c.ResolutionMethod, c.Confidence,
 					caller, from, c.Name, to))
 			}
@@ -272,7 +280,7 @@ func main() {
 		sc.EdgeRecall.Total++
 		if got[k] {
 			sc.EdgeRecall.Hit++
-		} else if len(sc.MissedEdges) < 25 {
+		} else if len(sc.MissedEdges) < *listN {
 			ft := strings.SplitN(k, ">", 2)
 			sc.MissedEdges = append(sc.MissedEdges, fmt.Sprintf("%s %s -> %s %s", ft[0], defByID[ft[0]].Name, ft[1], defByID[ft[1]].Name))
 		}

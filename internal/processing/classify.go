@@ -110,6 +110,12 @@ func looksBinary(head []byte) bool {
 
 const lfsPointer = "version https://git-lfs.github.com/spec/v1"
 
+// maxLFSPointerBytes bounds a Git LFS pointer file (version, oid and size
+// lines, plus optional extension lines).
+const maxLFSPointerBytes = 1024
+
+const lfsSkipReason = "Git LFS pointer (the content is not in git)"
+
 // sniffLang recognizes a text file's structure from its content.
 func sniffLang(content string) string {
 	t := strings.TrimLeft(content, " \t\r\n\ufeff")
@@ -156,7 +162,7 @@ func textFile(in fileInput) classified {
 		return skip("unreadable")
 	}
 	if strings.HasPrefix(src, lfsPointer) {
-		return skip("Git LFS pointer (the content is not in git)")
+		return skip(lfsSkipReason)
 	}
 	if looksBinary([]byte(src)) {
 		return skip("binary content")

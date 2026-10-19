@@ -78,7 +78,10 @@ type ConfigResult struct {
 	Omitted      int
 	Next         string
 	Note         string
-	Meta         Meta
+	// Flow follows the queried key from the file that defines it through the
+	// templates that render it to the code that reads it (configflow.go).
+	Flow *ConfigFlow
+	Meta Meta
 }
 
 // ConfigOptions bound a config query.
@@ -100,6 +103,7 @@ func Config(s Store, repo, ref, key string, opt ConfigOptions) ConfigResult {
 	res.Total = len(keys)
 	if key != "" {
 		configDetail(&res, keys, key, opt)
+		res.Flow = FollowConfigKey(s, repo, ref, key)
 		return res
 	}
 	configList(&res, keys, opt)
@@ -495,6 +499,10 @@ var (
 
 	featureCall = regexp.MustCompile(`\b(isFeatureEnabled|is_feature_enabled|isEnabled|is_enabled|flag_is_active|switch_is_active|sample_is_active|feature_enabled|isOn|getFeatureValue|useFlag|useFeatureFlag\w*|useFeatureIsOn|useFeatureValue|useVariable|boolVariation|stringVariation|numberVariation|jsonVariation|variation|isFeatureOn)\(\s*(?:[\w.]+\s*,\s*)?["'` + "`" + `]([\w.:\-]+)["'` + "`" + `]`)
 
+	// featureLits: one of these is in every name featureCall matches, so a
+	// file without any is not scanned with it
+	featureLits = []string{"nabled", "_active", "eature", "isOn", "useFlag", "useVariable", "ariation"}
+
 	launchEnvRead = regexp.MustCompile(`\$\((env|optenv)\s+([A-Za-z_]\w*)(?:\s+([^)]*))?\)`)
 	launchEnvSet  = regexp.MustCompile(`<env\s+name\s*=\s*"([\w.-]+)"\s+value\s*=\s*"([^"]*)"`)
 	ciExprEnv     = regexp.MustCompile(`\$\{\{\s*env\.([A-Za-z_]\w*)\s*\}\}`)
@@ -592,7 +600,7 @@ func scanConfig(repo string, files []File, syms map[string]SymbolRef) ([]ConfigR
 		case base == "dockerfile" || strings.HasPrefix(base, "dockerfile.") || ext == ".dockerfile" || strings.HasPrefix(base, "containerfile"):
 			c.dockerfile(f)
 		}
-		if codeExts[ext] != "" {
+		if codeExts[ext] != "" && mayCallFeature(f.Content) {
 			for _, m := range featureCall.FindAllStringSubmatchIndex(f.Content, -1) {
 				c.read(f, m[0], CfgFeature, f.Content[m[4]:m[5]], "", false, f.Content[m[2]:m[3]])
 			}
@@ -1378,6 +1386,46 @@ func rosParamSets(all map[string][]File) []ConfigSet {
 
 func itoa3(n int) string { return fmt.Sprintf("%08d", n) }
 
+func mayCallFeature(content string) bool {
+	for _, l := range featureLits {
+		if strings.Contains(content, l) {
+			return true
+		}
+	}
+	return false
+}
+
+// linesMatching runs re (submatch indexes, offsets into content) only on the
+// lines of content that contain lit, which every match of re contains: an
+// unanchored pattern over a whole file costs far more than a substring scan.
+func linesMatching(content, lit string, re *regexp.Regexp) [][]int {
+	var out [][]int
+	for from := 0; from < len(content); {
+		i := strings.Index(content[from:], lit)
+		if i < 0 {
+			break
+		}
+		at := from + i
+		start := strings.LastIndexByte(content[:at], '\n') + 1
+		end := strings.IndexByte(content[at:], '\n')
+		if end < 0 {
+			end = len(content)
+		} else {
+			end += at
+		}
+		for _, m := range re.FindAllStringSubmatchIndex(content[start:end], -1) {
+			for j := range m {
+				if m[j] >= 0 {
+					m[j] += start
+				}
+			}
+			out = append(out, m)
+		}
+		from = end + 1
+	}
+	return out
+}
+
 // expansionReads: for an env key only ever set, a $KEY/${KEY} in a shell
 // script, Dockerfile, compose/CI/k8s YAML or launch file reads it; for a flag,
 // a --flag in those files is where it is set.
@@ -1416,9 +1464,9 @@ func expansionReads(keys []ConfigKey, all map[string][]File) {
 				if !isScript(f.Path) || !strings.Contains(f.Content, k.Key) {
 					continue
 				}
-				if loc := re.FindStringIndex(f.Content); loc != nil {
-					k.Reads = append(k.Reads, ConfigRead{Kind: CfgEnv, Key: k.Key, Repo: r, Path: f.Path, Line: dataLineOf(f.Content, loc[0]),
-						Via: "shell expansion", Text: dataClip(dataLineAt(f.Content, loc[0]))})
+				if loc := linesMatching(f.Content, "$", re); len(loc) > 0 {
+					k.Reads = append(k.Reads, ConfigRead{Kind: CfgEnv, Key: k.Key, Repo: r, Path: f.Path, Line: dataLineOf(f.Content, loc[0][0]),
+						Via: "shell expansion", Text: dataClip(dataLineAt(f.Content, loc[0][0]))})
 				}
 			}
 		}
@@ -1442,7 +1490,7 @@ func expansionReads(keys []ConfigKey, all map[string][]File) {
 				if path.Ext(f.Path) == ".py" && !strings.Contains(f.Content, "subprocess") {
 					continue
 				}
-				for _, m := range re.FindAllStringSubmatchIndex(f.Content, -1) {
+				for _, m := range linesMatching(f.Content, "-"+name, re) {
 					v := ""
 					if m[2] >= 0 {
 						v = f.Content[m[2]:m[3]]

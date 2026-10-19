@@ -70,6 +70,15 @@ const edges = [];
 const names = {};
 const seenEdge = new Set();
 
+// const X = memo(function X(){}) / forwardRef((p, r) => ...) / React.memo(...):
+// a wrapper called on the function names it after the variable. A method
+// called on a value (z.object().refine((d) => ...)) is not a wrapper.
+function wrapperCall(call, fn) {
+  if (!ts.isCallExpression(call) || call.arguments[0] !== fn) return false;
+  const c = call.expression;
+  return ts.isIdentifier(c) || (ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression));
+}
+
 function nameOf(node) {
   if (node.name && ts.isIdentifier(node.name)) return node.name.text;
   if (node.name && ts.isPrivateIdentifier && ts.isPrivateIdentifier(node.name)) return node.name.text;
@@ -78,8 +87,7 @@ function nameOf(node) {
   if (p && ts.isVariableDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
   if (p && ts.isPropertyDeclaration(p) && p.name && ts.isIdentifier(p.name)) return p.name.text;
   if (p && ts.isPropertyAssignment(p) && p.name && ts.isIdentifier(p.name)) return p.name.text;
-  // const X = memo(function X(){}) / forwardRef((p, r) => ...): the variable names it
-  if (p && ts.isCallExpression(p) && p.parent && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) return p.parent.name.text;
+  if (p && wrapperCall(p, node) && p.parent && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) return p.parent.name.text;
   return null;
 }
 
@@ -99,7 +107,7 @@ function isDefNode(n) {
   return ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n) || ts.isClassDeclaration(n) ||
     ((ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && nameOf(n) !== null &&
       (ts.isVariableDeclaration(n.parent) || ts.isPropertyDeclaration(n.parent) ||
-        (ts.isCallExpression(n.parent) && n.parent.parent && ts.isVariableDeclaration(n.parent.parent))));
+        (wrapperCall(n.parent, n) && n.parent.parent && ts.isVariableDeclaration(n.parent.parent))));
 }
 
 function className(n) {
@@ -149,7 +157,8 @@ function targetDecl(checker, expr) {
   // const f = () => ... : the variable's initializer is the definition
   if (ts.isVariableDeclaration(d) && d.initializer) {
     let init = d.initializer;
-    if (ts.isCallExpression(init) && init.arguments.length && (ts.isArrowFunction(init.arguments[0]) || ts.isFunctionExpression(init.arguments[0]))) init = init.arguments[0];
+    if (ts.isCallExpression(init) && init.arguments.length && (ts.isArrowFunction(init.arguments[0]) || ts.isFunctionExpression(init.arguments[0])) &&
+      wrapperCall(init, init.arguments[0])) init = init.arguments[0];
     return init;
   }
   if (ts.isPropertyDeclaration(d) && d.initializer) return d.initializer;

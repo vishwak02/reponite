@@ -32,6 +32,8 @@ func TestClassifyAnyFile(t *testing.T) {
 	write("img/logo.png", "\x89PNG\r\n\x1a\n\x00\x00")
 	write("model/weights.dat", "abc\x00def")
 	write("assets/big.bin.txt", "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n")
+	write("maps/align.py", "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n")
+	write("maps/site.yaml", "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12\n")
 	write(".github/scripts/release.sh", "#!/bin/bash\nrelease() { echo hi; }\n")
 	write(".venv/lib/site.py", "def x(): pass\n")
 	write("justfile", "build:\n\tgo build\ntest: build\n\tgo test\n")
@@ -80,7 +82,8 @@ func TestClassifyAnyFile(t *testing.T) {
 		reasons[s.Path] = s.Reason
 	}
 	for p, want := range map[string]string{"big/fixture.csv": "large data table", "img/logo.png": "binary format",
-		"model/weights.dat": "binary content", "assets/big.bin.txt": "Git LFS pointer", ".venv/": "tool or cache"} {
+		"model/weights.dat": "binary content", "assets/big.bin.txt": "Git LFS pointer", ".venv/": "tool or cache",
+		"maps/align.py": "Git LFS pointer", "maps/site.yaml": "Git LFS pointer"} {
 		if !strings.Contains(reasons[p], want) {
 			t.Errorf("%s: reason %q, want %q", p, reasons[p], want)
 		}

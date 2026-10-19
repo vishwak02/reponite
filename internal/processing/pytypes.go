@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"path"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -13,11 +14,13 @@ import (
 // (self.repo = Repo(...); self.repo.save()). The class is then found through
 // the file's imports and the call resolves in its method resolution order.
 
-// Encoded var types: "t:<dotted class>" or "r:<dotted function>" (the
-// value that function returns).
+// Encoded var types: "t:<dotted class>", "r:<dotted function>" (the value
+// that function returns) or "x:<name>" (a test's parameter: the pytest
+// fixture of that name, what it returns).
 const (
-	pyTypeTag   = "t:"
-	pyReturnTag = "r:"
+	pyTypeTag    = "t:"
+	pyReturnTag  = "r:"
+	pyFixtureTag = "x:"
 )
 
 // pyTypeRef is the dotted class a type annotation names: Order, models.Order,
@@ -138,11 +141,16 @@ func pyValueType(v content.AST) string {
 }
 
 // pyVarTypes are a function's parameters and local names with their types:
-// annotations first, else what they are assigned.
-func pyVarTypes(fn content.AST) map[string]string {
+// annotations first, else what they are assigned. A test's plain parameters
+// (fixtures) are the pytest fixtures of their names.
+func pyVarTypes(fn content.AST, test bool) map[string]string {
 	vars := map[string]string{}
 	if ps := firstChildAny(fn, []string{"parameters"}); ps != nil {
 		for _, p := range ps.Children() {
+			if test && p.Type() == "identifier" && p.Text() != "self" {
+				vars[p.Text()] = pyFixtureTag + p.Text()
+				continue
+			}
 			if p.Type() != "typed_parameter" && p.Type() != "typed_default_parameter" {
 				continue
 			}
@@ -219,6 +227,7 @@ func pyReturnType(fn content.AST) string {
 		return ""
 	}
 	cls := ""
+	var locals map[string]string
 	for _, r := range descendantsAny(body, []string{"return_statement"}) {
 		var v content.AST
 		for _, c := range r.Children() {
@@ -227,6 +236,13 @@ func pyReturnType(fn content.AST) string {
 			}
 		}
 		t := pyValueType(v)
+		if v != nil && v.Type() == "identifier" {
+			// app = Flask(...); ...; return app
+			if locals == nil {
+				locals = pyVarTypes(fn, false)
+			}
+			t = locals[v.Text()]
+		}
 		if !strings.HasPrefix(t, pyTypeTag) || cls != "" && cls != t[len(pyTypeTag):] {
 			return "" // a return of something else, or of two classes
 		}
@@ -302,6 +318,7 @@ const pyClassScope = "\x00pycls:"
 // names, and how its file's imports read a dotted name.
 type pyCtx struct {
 	pkg, recv string
+	path      string
 	vars      map[string]string
 	returns   string
 	sites     func([]QualifiedCall) []CallSite
@@ -311,6 +328,7 @@ type pyCtx struct {
 type pyTyper struct {
 	classes     *classGraph
 	allDefs     map[string]bool
+	isMethod    map[string]bool
 	ctx         func(qid string) (pyCtx, bool)
 	classByName map[string][]string // class name -> class keys
 	funcByName  map[string][]string // module-level function name -> qids
@@ -362,6 +380,59 @@ func (p *pyTyper) class(c pyCtx, dotted string) string {
 	return ""
 }
 
+// pyBuiltinTypes are the builtin classes an annotation or constructor names
+// bare: their methods are the language's, never a repo method of that name.
+var pyBuiltinTypes = map[string]bool{
+	"str": true, "bytes": true, "bytearray": true, "int": true, "float": true, "complex": true, "bool": true,
+	"dict": true, "list": true, "set": true, "frozenset": true, "tuple": true,
+}
+
+// pyTypingModules name types that say nothing about the object (Any, a
+// Callable, a Protocol or ABC a repo class may implement).
+var pyTypingModules = map[string]bool{"typing": true, "typing_extensions": true, "collections.abc": true, "abc": true}
+
+// externalClass is the library class a dotted name written in ctx names: one
+// imported from outside the repo, or a builtin; "" when it is the repo's or
+// not known.
+func (p *pyTyper) externalClass(c pyCtx, dotted string) string {
+	if p.class(c, dotted) != "" {
+		return ""
+	}
+	for _, s := range c.sites([]QualifiedCall{dottedCall(dotted)}) {
+		switch {
+		case s.Kind == CallExternal && !pyTypingModules[s.Scope]:
+			return dotted
+		case s.Kind == CallPlain && pyBuiltinTypes[dotted] && len(p.classByName[dotted]) == 0:
+			return dotted
+		}
+	}
+	return ""
+}
+
+// externalValue is the library class an encoded var type is, in ctx: a
+// library class annotated or constructed, or what a repo function annotated
+// to return one returns.
+func (p *pyTyper) externalValue(c pyCtx, v string) string {
+	switch {
+	case strings.HasPrefix(v, pyTypeTag):
+		return p.externalClass(c, v[len(pyTypeTag):])
+	case strings.HasPrefix(v, pyReturnTag), strings.HasPrefix(v, pyFixtureTag):
+		var q string
+		if strings.HasPrefix(v, pyFixtureTag) {
+			q = p.fixture(c, v[len(pyFixtureTag):])
+		} else {
+			q = p.function(c, v[len(pyReturnTag):])
+		}
+		if q == "" {
+			return ""
+		}
+		if fc, ok := p.ctx(q); ok && fc.returns != "" {
+			return p.externalClass(fc, fc.returns)
+		}
+	}
+	return ""
+}
+
 // function is the qid of the module-level function a dotted name written
 // in ctx calls.
 func (p *pyTyper) function(c pyCtx, dotted string) string {
@@ -408,20 +479,55 @@ func (p *pyTyper) valueClass(c pyCtx, v string) string {
 		if q := p.function(c, v[len(pyReturnTag):]); q != "" {
 			return p.returnClass(q)
 		}
+	case strings.HasPrefix(v, pyFixtureTag):
+		if q := p.fixture(c, v[len(pyFixtureTag):]); q != "" {
+			return p.returnClass(q)
+		}
 	}
 	return ""
+}
+
+// fixture is the qid of the pytest fixture a test's parameter name receives:
+// a function of that name in the test's own module, else in the nearest
+// conftest.py above it.
+func (p *pyTyper) fixture(c pyCtx, name string) string {
+	if q := qualifyModule(c.pkg, name); p.allDefs[q] && !p.isMethod[q] {
+		return q
+	}
+	if c.path == "" {
+		return ""
+	}
+	for dir := path.Dir(c.path); ; dir = path.Dir(dir) {
+		if q := qualifyModule(pkgOfFile(path.Join(dir, "conftest.py"), "python"), name); p.allDefs[q] && !p.isMethod[q] {
+			return q
+		}
+		if dir == "." || dir == "/" || dir == "" {
+			return ""
+		}
+	}
 }
 
 // fieldClass is the class key of attribute attr on an instance of cls: set
 // on self by cls or a base (MRO order).
 func (p *pyTyper) fieldClass(cls, attr string) string {
+	k, _ := p.fieldType(cls, attr)
+	return k
+}
+
+// pyExtField marks a field holding a library class's instance in
+// pyTyper.fields.
+const pyExtField = "\x00ext:"
+
+// fieldType is what attribute attr on an instance of cls holds: a repo class
+// key, or the library class it is constructed or annotated as.
+func (p *pyTyper) fieldType(cls, attr string) (key, ext string) {
 	order, ok := p.classes.mro(cls)
 	if !ok {
-		return ""
+		return "", ""
 	}
 	for _, k := range order {
 		if isExtBase(k) {
-			return ""
+			return "", ""
 		}
 		fs, done := p.fields[k]
 		if !done {
@@ -431,16 +537,21 @@ func (p *pyTyper) fieldClass(cls, attr string) string {
 				for f, v := range c.vars {
 					if fk := p.valueClass(c, v); fk != "" {
 						fs[f] = fk
+					} else if e := p.externalValue(c, v); e != "" {
+						fs[f] = pyExtField + e
 					}
 				}
 			}
 			p.fields[k] = fs
 		}
 		if fk, ok := fs[attr]; ok {
-			return fk
+			if strings.HasPrefix(fk, pyExtField) {
+				return "", fk[len(pyExtField):]
+			}
+			return fk, ""
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // typedCalls splits a Python definition's calls into those whose receiver
@@ -455,13 +566,32 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 	for _, qc := range qcs {
 		cls := ""
 		switch {
-		case qc.Chain == 2 && qc.Qualifier != "self" && qc.Qualifier != "cls":
-			if v, ok := c.vars[qc.Qualifier]; ok {
-				cls = p.valueClass(c, v)
+		case qc.Chain >= 2 && qc.Qualifier != "self" && qc.Qualifier != "cls":
+			v, ok := c.vars[qc.Qualifier]
+			if !ok {
+				break
+			}
+			if ext := p.externalValue(c, v); ext != "" {
+				// a library object's method (or its attribute's: spinner.green.ok()),
+				// whatever the repo names alike
+				typed = append(typed, CallSite{Name: qc.Name, Kind: CallExternal, Scope: ext})
+				continue
+			}
+			switch cls = p.valueClass(c, v); {
+			case cls == "" || qc.Chain == 2:
+			case qc.Chain == 3 && qc.Attr != "":
+				cls = p.fieldClass(cls, qc.Attr) // x.repo.save(): the field's class
+			default:
+				cls = ""
 			}
 		case qc.Chain == 3 && qc.Qualifier == "self" && qc.Attr != "" && c.recv != "":
 			if own, ok := p.classes.has(c.pkg, c.recv); ok {
-				cls = p.fieldClass(own, qc.Attr)
+				var ext string
+				if cls, ext = p.fieldType(own, qc.Attr); ext != "" {
+					// self._event = threading.Event(); self._event.set()
+					typed = append(typed, CallSite{Name: qc.Name, Kind: CallExternal, Scope: ext})
+					continue
+				}
 			}
 		}
 		if cls == "" {

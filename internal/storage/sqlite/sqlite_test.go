@@ -489,3 +489,41 @@ func TestSQLiteAliasRefAndRefByCommit(t *testing.T) {
 		t.Fatalf("alias commit: %q", m.Commit)
 	}
 }
+
+// A store another process is writing opens anyway: Open waits for the lock
+// instead of failing, and a reader's Open writes nothing.
+func TestSQLiteOpenWhileAnotherWrites(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.db")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	w, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	w.SetMaxOpenConns(1)
+	tx, err := w.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO store_meta(k, v) VALUES('probe', '1')`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		r, err := Open(p)
+		if err == nil {
+			r.Close()
+		}
+		done <- err
+	}()
+	if err := <-done; err != nil {
+		t.Fatalf("open while another connection holds the write lock: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+}

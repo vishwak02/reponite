@@ -158,6 +158,14 @@ func (x *spanIndex) locate0(qid string) (symLoc, bool) {
 		}
 	}
 	if len(parts) == 1 {
+		// dir.main is main.py's main() (the id names its file), and dir.f is
+		// the directory's own module's f (index.ts, __init__.py) — not another
+		// module's of the same directory
+		for _, c := range cands {
+			if stem := fileModuleStem(c.Path); (stem == base || stem == "") && !looksLikeMethod(*x.byPath[c.Path], c.Span, base) {
+				return c, true
+			}
+		}
 		// a free function's id: not a method that shares its name
 		for _, c := range cands {
 			if !looksLikeMethod(*x.byPath[c.Path], c.Span, base) {
@@ -200,6 +208,21 @@ func (x *spanIndex) qidAt(s Store, repo, ref, path string, line int) (string, Sy
 		}
 	}
 	try := []string{}
+	if stem := fileModuleStem(path); stem != "" {
+		// a Python/JS/TS module is its file: dir.card.f for card.tsx's f,
+		// never index.tsx's dir.f; a symbol named like its file is dir.name
+		mod := qualifyQID(dir, stem)
+		if hasOuter {
+			try = append(try, qualifyQID(mod, outer.Name+"."+inner.Name))
+			if outer.Name == stem {
+				try = append(try, qualifyQID(dir, outer.Name+"."+inner.Name))
+			}
+		}
+		try = append(try, qualifyQID(mod, inner.Name))
+		if inner.Name == stem {
+			try = append(try, qualifyQID(dir, inner.Name))
+		}
+	}
 	if hasOuter {
 		try = append(try, qualifyQID(dir, outer.Name+"."+inner.Name))
 	}

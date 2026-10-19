@@ -32,9 +32,9 @@ type pyCls struct {
 
 var (
 	modelsPyClassHead = regexp.MustCompile(`^(\s*)class\s+(\w+)\s*([(:])`)
-	pyAssignRe  = regexp.MustCompile(`^(\w+)\s*(?::\s*(.+?))?\s*=\s*(.+)$`)
-	pyAnnRe     = regexp.MustCompile(`^(\w+)\s*:\s*(.+)$`)
-	pyCallRe    = regexp.MustCompile(`^([\w.]+)\s*\(`)
+	pyAssignRe        = regexp.MustCompile(`^(\w+)\s*(?::\s*(.+?))?\s*=\s*(.+)$`)
+	pyAnnRe           = regexp.MustCompile(`^(\w+)\s*:\s*(.+)$`)
+	pyCallRe          = regexp.MustCompile(`^([\w.]+)\s*\(`)
 )
 
 func indentOf(s string) int {

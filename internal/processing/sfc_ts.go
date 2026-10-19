@@ -62,7 +62,7 @@ func sfcFile(path, src string, normVer int) (ParsedFile, bool) {
 	var callees []string
 	var uq []QualifiedCall
 	for _, qc := range qcalls {
-		if qc.Name == "" || seenQ[qc] || rules.Builtins[qc.Name] {
+		if qc.Name == "" || seenQ[qc] || qc.Qualifier == "" && rules.Builtins[qc.Name] {
 			continue
 		}
 		seenQ[qc] = true

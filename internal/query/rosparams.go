@@ -204,7 +204,8 @@ func paramCallArgs(fn string, args []string) (param, target, def string, hasDef 
 // scanParamReads finds every parameter read in a C++/Python file and the
 // variable it lands in.
 func scanParamReads(p, content string) []paramRead {
-	if commLang(p) == "" || !paramCallRe.MatchString(content) {
+	// every read names "param"/"Param": skip the pattern on files that do not
+	if commLang(p) == "" || !strings.Contains(content, "aram") {
 		return nil
 	}
 	var out []paramRead

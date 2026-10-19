@@ -200,7 +200,7 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	case "java":
 		vars = javaVarTypes(fn)
 	case "python":
-		vars, returns = pyVarTypes(fn), pyReturnType(fn)
+		vars, returns = pyVarTypes(fn, strings.HasPrefix(nameOf(fn, r), "test")), pyReturnType(fn)
 	}
 	return Symbol{
 		Vars:           vars,
@@ -320,7 +320,7 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		if len(ids) == 3 && ids[1] != callResult {
 			qc.Attr = ids[1]
 		}
-		if r.Builtins[qc.Name] || seen[qc] {
+		if qc.Qualifier == "" && r.Builtins[qc.Name] || seen[qc] { // db.set(), qs.filter(): a method, not the builtin
 			continue
 		}
 		seen[qc] = true
@@ -367,7 +367,13 @@ func calleeIdents(call content.AST, r LangRules) []string {
 		if m := superMember(c); m != "" {
 			return []string{"super", m}
 		}
-		ids = append(ids, calleeLeaves(c, types, r.CallTypes)...)
+		leaves := calleeLeaves(c, types, r.CallTypes)
+		if objectIsExpression(c, types) {
+			// "x {}".format(…), [a].append(…), (a or b).run(…): a method of a
+			// value, never a function named like it
+			leaves = append([]string{callResult}, leaves...)
+		}
+		ids = append(ids, leaves...)
 	}
 	return ids
 }
@@ -737,3 +743,21 @@ func decoratesFunction(n content.AST) bool {
 // classBodyCalls are the languages whose class bodies run code at
 // definition time (attribute values), attributed to the class.
 var classBodyCalls = map[string]bool{"python": true}
+
+// objectIsExpression: a member callee (x.f) whose object is a literal or an
+// expression holding no name at all ("…".format, [].append).
+func objectIsExpression(callee content.AST, nameTypes []string) bool {
+	switch callee.Type() {
+	case "attribute", "member_expression", "field_expression", "selector_expression":
+	default:
+		return false
+	}
+	for _, c := range callee.Children() {
+		if !c.IsNamed() {
+			continue
+		}
+		// the first named child is the object
+		return len(identLeaves(c, nameTypes)) == 0
+	}
+	return false
+}
