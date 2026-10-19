@@ -84,7 +84,7 @@ jobs:
           go-version: 'stable'
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14' # the ast must parse the newest syntax the repos use
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

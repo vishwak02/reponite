@@ -86,8 +86,10 @@ def main():
                 try:
                     with open(full, encoding="utf-8") as fh:
                         files[rel] = ast.parse(fh.read(), filename=rel)
-                except (SyntaxError, UnicodeDecodeError, ValueError):
-                    pass
+                except (SyntaxError, UnicodeDecodeError, ValueError) as e:
+                    # a file this Python cannot parse (newer syntax) is not
+                    # ground truth: say so, the scores would silently shrink
+                    print(f"pygt: skipped {rel}: {e.__class__.__name__}: {e}", file=sys.stderr)
 
     mods = {module_name(r): r for r in files}
     info = {}

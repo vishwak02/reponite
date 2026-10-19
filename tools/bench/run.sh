@@ -5,7 +5,8 @@
 #
 # Clones each repo of tools/bench/repos.txt at its pinned commit (reusing a
 # clone already there), indexes it, computes ground truth with the
-# extractors in tools/bench/gt, and scores. Needs Go, git, python3 and Node
+# extractors in tools/bench/gt, and scores. Needs Go, git, python3 (3.14+, so
+# the ast parses the newest syntax the repos use) and Node
 # (for the TypeScript checker; `npm ci` is run in tools/bench/gt).
 set -euo pipefail
 
