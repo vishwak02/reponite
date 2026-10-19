@@ -318,18 +318,6 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 	return out, notes, problems
 }
 
-// goExternalMark, among a caller's type-checked targets of a name, records a
-// call of that name the checker resolved outside the repo (a library, an
-// interface method) in a package that did not fully build.
-const goExternalMark = "\x00external"
-
-// goCheckedKey, present among a caller's names, says its package type-checked
-// in full: a call the checker did not resolve into the repo is a library's,
-// an interface's or a function value's — never guessed by name. Without it
-// (a package that did not build) the names listed are the checker's verdicts
-// and every other call falls to the name rules.
-const goCheckedKey = "\x00checked"
-
 // calleeFunc resolves a call's function expression to the *types.Func it targets.
 func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {
 	switch e := fun.(type) {
