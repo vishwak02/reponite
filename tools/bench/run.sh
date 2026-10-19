@@ -22,7 +22,19 @@ recall_calls=100
 (cd "$top" && go build -mod=mod -tags "sqlite treesitter" -o "$work/bin/reponite-bench-index" ./cmd/reponite)
 (cd "$top" && go build -mod=mod -tags "bench sqlite treesitter" -o "$work/bin/reponite-bench-score" ./tools/bench/score)
 (cd "$top" && go build -mod=mod -tags bench -o "$work/bin/reponite-bench-gogt" ./tools/bench/gt/gogt)
-(cd "$here/gt" && npm ci --silent)
+for tool in go git python3 node; do
+  if ! command -v "$tool" >/dev/null; then
+    echo "run.sh: $tool is not on PATH (needed for the benchmark)" >&2
+    exit 2
+  fi
+done
+if [ ! -d "$here/gt/node_modules/typescript" ]; then
+  if ! command -v npm >/dev/null; then
+    echo "run.sh: npm is not on PATH (needed once, to install the TypeScript checker)" >&2
+    exit 2
+  fi
+  (cd "$here/gt" && npm ci --silent)
+fi
 export PATH="$work/bin:$PATH"
 
 # one store per reponite build: an index made by other code is never reused
