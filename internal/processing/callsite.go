@@ -75,6 +75,9 @@ func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []Cal
 		if !ok || cs.Name == "" || cs.Kind == CallPlain && r.Builtins[cs.Name] || seen[cs] {
 			continue
 		}
+		if _, local := vars[cs.Name]; local && cs.Kind == CallPlain {
+			continue // a local lambda, std::function or functor: not a function of the repo
+		}
 		seen[cs] = true
 		out = append(out, cs)
 	}

@@ -95,7 +95,17 @@ const (
 	//      source's overload; an invoked lambda's body is not its callee;
 	//      googletest cases are Suite.Case, friend functions are free, and a
 	//      class defined again in another source file is Cls@file.
-	IndexVer = 16
+	//  17: C++ calls reach only what the file can name — its own file, its
+	//      transitive includes (a header: what the files including it see),
+	//      never another file's anonymous-namespace/static helper or source-
+	//      file class, nor a method of an unrelated class for a bare f();
+	//      ns::f() keeps to that namespace; argument counts rule out
+	//      overloads; class-scope aliases, template-parameter bases through
+	//      aliases, specializations and auto getters returning a field type
+	//      receivers; overload parameter counts merge correctly. JS/TS: a
+	//      bare f() is the module's own or a local/global, and a name
+	//      imported from a read module is never another module's.
+	IndexVer = 17
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

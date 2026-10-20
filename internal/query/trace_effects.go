@@ -60,6 +60,11 @@ var effectRules = []effectRule{
 	{"file", "write", regexp.MustCompile(`\b((?:fs|fsp|fs\.promises)\.(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rm|rmSync|mkdir|mkdirSync|rename|renameSync))\s*\(`), "js"},
 	{"file", "write", regexp.MustCompile(`\b(std::ofstream|std::fstream|ofstream|fopen\s*\([^)]*"[wa]|Files\.(?:write|writeString|delete|move|copy)|FileWriter|FileOutputStream)\b`), "c"},
 
+	// --- file reads: a stored file touched per call (a FieldFile's size opens
+	// storage; a missing file raises there) ---------------------------------
+	{"file", "read", regexp.MustCompile(`\b([\w.]*\.(?:file|image|document|attachment)\.(?:size|read|open|path|chunks))\b`), "py"},
+	{"file", "read", regexp.MustCompile(`\b(os\.path\.(?:getsize|getmtime|exists|isfile)|os\.stat|[\w.]*\.(?:read_text|read_bytes|stat))\s*\(`), "py"},
+
 	// --- subprocess ------------------------------------------------------------
 	{"exec", "", regexp.MustCompile(`\b(subprocess\.(?:run|call|Popen|check_output|check_call)|os\.(?:system|popen|exec\w*|spawn\w*))\s*\(`), "py"},
 	{"exec", "", regexp.MustCompile(`\b(exec\.Command(?:Context)?|syscall\.Exec)\s*\(`), "go"},

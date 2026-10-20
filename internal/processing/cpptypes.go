@@ -22,12 +22,36 @@ type TypeFacts struct {
 	Classes map[string]*ClassFact // class/struct name -> facts (definitions with a body only)
 	Aliases map[string]string     // namespace-level typedef/using alias -> target type
 	Returns map[string]string     // "Class.method" -> declared return type (in- or out-of-class)
+	// Includes are the file's #include paths as written ("pkg/x.hpp").
+	Includes []string
+	// Internal are the names this file gives internal linkage: functions and
+	// classes in an anonymous namespace, and static namespace-scope
+	// functions. No other file can call them.
+	Internal map[string]bool
+	// Declared are the free functions this file declares or defines at
+	// namespace scope (an unqualified name) — what an includer may call.
+	Declared map[string]bool
+	// AliasArgs are an alias's template arguments (using P = X<A, B>).
+	AliasArgs map[string][]string
+	// FuncNS are the namespaces ("a::b", "" global) each free function this
+	// file declares or defines is in.
+	FuncNS map[string][]string
+	// Defaults are the function and method names this file declares with a
+	// defaulted parameter (f(int a, int b = 0);): their out-of-line
+	// definitions take fewer arguments than they list.
+	Defaults map[string]bool
 }
 
 // ClassFact is a class's member fields (name -> declared type) and bases.
 type ClassFact struct {
 	Fields map[string]string
 	Bases  []string
+	// TParams are a class template's type parameters, in order; BaseArgs a
+	// base's template arguments as written (Base<A, B> -> [A B]). A base that
+	// is a type parameter (template <class B> class X : public B) is the
+	// argument the instantiation passes.
+	TParams  []string
+	BaseArgs map[string][]string
 }
 
 // A type is a string: a class ("Worker"), a type in an external namespace
@@ -72,30 +96,134 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 	if r.Name != "cpp" || root == nil {
 		return nil
 	}
-	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{}}
+	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{},
+		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]bool{}}
+	var nsStack []string // the named namespaces around the walk
+	inNS := func(name string, extra ...string) {
+		ns := strings.Join(append(append([]string(nil), nsStack...), extra...), "::")
+		if !containsStr(tf.FuncNS[name], ns) {
+			tf.FuncNS[name] = append(tf.FuncNS[name], ns)
+		}
+	}
+	anon := 0                     // depth of anonymous namespaces around the walk
+	var tparams []string          // the template parameters of the declaration being walked
+	external := map[string]bool{} // names this file also declares with external linkage
 	var walk func(n content.AST, class string)
 	walk = func(n content.AST, class string) {
 		for _, c := range n.Children() {
+			switch c.Type() {
+			case "preproc_include":
+				if p := firstChildAny(c, []string{"string_literal", "system_lib_string"}); p != nil {
+					if inc := strings.Trim(p.Text(), "\"<> "); inc != "" {
+						tf.Includes = append(tf.Includes, inc)
+					}
+				}
+				continue
+			case "template_declaration":
+				if pl := firstChildAny(c, []string{"template_parameter_list"}); pl != nil {
+					var ps []string
+					for _, p := range pl.Children() {
+						if p.Type() == "type_parameter_declaration" || p.Type() == "optional_type_parameter_declaration" || p.Type() == "variadic_type_parameter_declaration" {
+							if id := firstChildAny(p, []string{"type_identifier"}); id != nil {
+								ps = append(ps, id.Text())
+							}
+						}
+					}
+					outer := tparams
+					tparams = ps
+					walk(c, class)
+					tparams = outer
+					continue
+				}
+			case "namespace_definition":
+				if firstChildAny(c, []string{"namespace_identifier", "nested_namespace_specifier"}) == nil {
+					anon++
+					walk(c, class)
+					anon--
+					continue
+				}
+				outer := nsStack
+				if id := firstChildAny(c, []string{"namespace_identifier", "nested_namespace_specifier"}); id != nil {
+					nsStack = append(append([]string(nil), nsStack...), strings.Split(strings.ReplaceAll(id.Text(), " ", ""), "::")...)
+				}
+				walk(c, class)
+				nsStack = outer
+				continue
+			case "declaration":
+				if class == "" {
+					if d := firstChildAny(c, []string{"function_declarator", "pointer_declarator", "reference_declarator"}); d != nil {
+						if fd := firstDescAny(d, []string{"function_declarator"}); fd != nil || d.Type() == "function_declarator" {
+							if fd == nil {
+								fd = d
+							}
+							if id := firstChildAny(fd, []string{"identifier", "operator_name"}); id != nil {
+								tf.Declared[id.Text()] = true
+								inNS(id.Text())
+								if anon > 0 || hasStatic(c) {
+									tf.Internal[id.Text()] = true
+								} else {
+									external[id.Text()] = true
+								}
+							}
+						}
+					}
+				}
+			}
 			switch c.Type() {
 			case "class_specifier", "struct_specifier":
 				body := firstChildAny(c, []string{"field_declaration_list"})
 				name := ""
 				if id := firstChildAny(c, []string{"type_identifier"}); id != nil {
 					name = id.Text()
+				} else if q := firstChildAny(c, []string{"qualified_identifier"}); q != nil {
+					name = TypeName(q) // class Outer::Impl { … }: the nested class Impl
+					if i := strings.LastIndex(name, "::"); i >= 0 {
+						name = name[i+2:]
+					}
+				} else if tt := firstChildAny(c, []string{"template_type"}); tt != nil {
+					// struct Trait<ros::Duration> { … }: a specialization of Trait
+					if id := firstChildAny(tt, []string{"type_identifier"}); id != nil {
+						name = id.Text()
+					}
 				}
 				if body == nil || name == "" {
 					walk(c, class)
 					continue
+				}
+				if anon > 0 && class == "" {
+					tf.Internal[name] = true
 				}
 				cf := tf.Classes[name]
 				if cf == nil {
 					cf = &ClassFact{Fields: map[string]string{}}
 					tf.Classes[name] = cf
 				}
+				if n.Type() == "template_declaration" && len(tparams) > 0 && len(cf.TParams) == 0 {
+					cf.TParams = tparams
+				}
 				if bc := firstChildAny(c, []string{"base_class_clause"}); bc != nil {
 					for _, b := range bc.Children() {
 						if t := TypeName(b); t != "" {
 							cf.Bases = append(cf.Bases, t)
+							if args := writtenArgs(b); len(args) > 0 {
+								if cf.BaseArgs == nil {
+									cf.BaseArgs = map[string][]string{}
+								}
+								cf.BaseArgs[t] = args
+							}
+						}
+					}
+				}
+				// using Impl = X<…>; inside the class: its members' Impl is X
+				local := map[string]string{}
+				for _, ad := range body.Children() {
+					if ad.Type() != "alias_declaration" {
+						continue
+					}
+					id := firstChildAny(ad, []string{"type_identifier"})
+					if td := firstChildAny(ad, []string{"type_descriptor"}); id != nil && td != nil {
+						if t := TypeName(td); t != "" && t != id.Text() {
+							local[id.Text()] = t
 						}
 					}
 				}
@@ -104,6 +232,9 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 						continue
 					}
 					t := TypeName(firstChildAny(fd, typeNodeTypes))
+					if a, ok := local[t]; ok {
+						t = a
+					}
 					for _, d := range fd.Children() {
 						if f := declaredName(d, "field_identifier"); f != "" {
 							cf.Fields[f] = t
@@ -117,6 +248,26 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 				// A definition's return type: in-class (class set) or out-of-class
 				// (void Cls::f()). The body holds no class-level facts.
 				t := TypeName(firstChildAny(c, typeNodeTypes))
+				if t == "" && firstChildAny(c, []string{"placeholder_type_specifier"}) != nil {
+					t = returnedField(c) // auto& get() { return _x; }: the field's type
+				}
+				if d := declaratorOf(c, CppRules); d != nil && class == "" {
+					if n := declaratorName(d, CppRules); n == "" {
+					} else if q := firstDescBefore(d, "qualified_identifier", "parameter"); q != nil {
+						external[n] = true // void ns::f() {…}: defines a declared f
+						if sc := strings.TrimSuffix(strings.ReplaceAll(q.Text(), " ", ""), "::"+n); sc != q.Text() {
+							inNS(n, strings.Split(sc, "::")...)
+						}
+					} else {
+						tf.Declared[n] = true
+						inNS(n)
+						if anon > 0 || hasStatic(c) {
+							tf.Internal[n] = true
+						} else {
+							external[n] = true
+						}
+					}
+				}
 				if d := declaratorOf(c, CppRules); d != nil && t != "" {
 					cls, m := class, ""
 					if q := firstDescBefore(d, "qualified_identifier", "parameter"); q != nil {
@@ -135,6 +286,9 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					if td := firstChildAny(c, []string{"type_descriptor"}); id != nil && td != nil {
 						if t := TypeName(td); t != "" {
 							tf.Aliases[id.Text()] = t
+							if args := writtenArgs(td); len(args) > 0 {
+								tf.AliasArgs[id.Text()] = args
+							}
 						}
 					}
 				}
@@ -158,10 +312,110 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 		}
 	}
 	walk(root, "")
-	if len(tf.Classes) == 0 && len(tf.Aliases) == 0 && len(tf.Returns) == 0 {
+	for _, fd := range descendantsAny(root, []string{"function_declarator"}) {
+		pl := firstChildAny(fd, []string{"parameter_list"})
+		if pl == nil || firstChildAny(pl, []string{"optional_parameter_declaration"}) == nil {
+			continue
+		}
+		if id := firstChildAny(fd, []string{"identifier", "field_identifier", "qualified_identifier", "operator_name"}); id != nil {
+			n := id.Text()
+			if i := strings.LastIndex(n, "::"); i >= 0 {
+				n = n[i+2:]
+			}
+			tf.Defaults[n] = true
+		}
+	}
+	for n := range external {
+		delete(tf.Internal, n) // overloads of one name, some internal: the name is not
+	}
+	if len(tf.Classes) == 0 && len(tf.Aliases) == 0 && len(tf.Returns) == 0 && len(tf.Includes) == 0 && len(tf.Declared) == 0 {
 		return nil
 	}
 	return tf
+}
+
+// returnedField is "f:<field>" when a function's body returns a member
+// field (return _x; return this->_x; return *_x;), else "".
+func returnedField(fn content.AST) string {
+	body := firstChildAny(fn, []string{"compound_statement"})
+	if body == nil {
+		return ""
+	}
+	var ret content.AST
+	for _, st := range body.Children() {
+		if st.Type() == "return_statement" {
+			if ret != nil {
+				return "" // several returns: no single answer
+			}
+			ret = st
+		}
+	}
+	if ret == nil {
+		return ""
+	}
+	for _, e := range ret.Children() {
+		if !e.IsNamed() {
+			continue
+		}
+		for e.Type() == "pointer_expression" || e.Type() == "parenthesized_expression" {
+			var inner content.AST
+			for _, k := range e.Children() {
+				if k.IsNamed() {
+					inner = k
+				}
+			}
+			if inner == nil {
+				return ""
+			}
+			e = inner
+		}
+		switch e.Type() {
+		case "identifier":
+			return "f:" + e.Text()
+		case "field_expression":
+			if k := e.Children(); len(k) > 0 && isThis(k[0]) {
+				return "f:" + k[len(k)-1].Text()
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
+// writtenArgs are the template arguments of the class type a node names
+// (X<A, B>, ns::X<A>), or nil.
+func writtenArgs(n content.AST) []string {
+	if n == nil {
+		return nil
+	}
+	if n.Type() == "template_type" {
+		if id := firstChildAny(n, []string{"type_identifier"}); id != nil {
+			if w := id.Text(); smartPointers[w] || seqContainers[w] || mapContainers[w] {
+				return nil
+			}
+		}
+		return templateArgs(n)
+	}
+	switch n.Type() {
+	case "type_descriptor", "qualified_identifier":
+		for _, c := range n.Children() {
+			if c.Type() == "template_type" || c.Type() == "qualified_identifier" {
+				return writtenArgs(c)
+			}
+		}
+	}
+	return nil
+}
+
+// hasStatic: a declaration or definition written with the static storage
+// class (at namespace scope: internal linkage).
+func hasStatic(n content.AST) bool {
+	for _, c := range n.Children() {
+		if c.Type() == "storage_class_specifier" && c.Text() == "static" {
+			return true
+		}
+	}
+	return false
 }
 
 // declaredName is the name a declarator introduces (the leaf of type leaf
@@ -668,10 +922,12 @@ type typeTable struct {
 	aliases map[string]string
 	returns map[string]string   // "Class.method" -> return type
 	derived map[string][]string // class -> classes naming it as a direct base
+	// aliasArgs: an alias's template arguments (using P = X<A>)
+	aliasArgs map[string][]string
 }
 
 func newTypeTable(files []ParsedFile) *typeTable {
-	tt := &typeTable{classes: map[string]*ClassFact{}, aliases: map[string]string{}, returns: map[string]string{}, derived: map[string][]string{}}
+	tt := &typeTable{classes: map[string]*ClassFact{}, aliases: map[string]string{}, returns: map[string]string{}, derived: map[string][]string{}, aliasArgs: map[string][]string{}}
 	for _, f := range files {
 		if f.Types == nil {
 			continue
@@ -691,9 +947,21 @@ func newTypeTable(files []ParsedFile) *typeTable {
 				m.Fields[k] = v
 			}
 			m.Bases = append(m.Bases, cf.Bases...)
+			if len(m.TParams) == 0 {
+				m.TParams = cf.TParams
+			}
+			for b, a := range cf.BaseArgs {
+				if m.BaseArgs == nil {
+					m.BaseArgs = map[string][]string{}
+				}
+				m.BaseArgs[b] = a
+			}
 		}
 		for k, v := range f.Types.Aliases {
 			tt.aliases[k] = v
+		}
+		for k, v := range f.Types.AliasArgs {
+			tt.aliasArgs[k] = v
 		}
 		for k, v := range f.Types.Returns {
 			tt.returns[k] = v
@@ -707,6 +975,9 @@ func newTypeTable(files []ParsedFile) *typeTable {
 	for _, n := range names {
 		seen := map[string]bool{}
 		for _, b := range tt.classes[n].Bases {
+			if containsStr(tt.classes[n].TParams, b) {
+				continue // a type parameter: whatever the instantiation passes
+			}
 			b = tt.canon(b)
 			if b != n && !seen[b] {
 				seen[b] = true
@@ -730,6 +1001,13 @@ func (tt *typeTable) canon(t string) string {
 		t = a
 	}
 	if _, ok := tt.classes[t]; !ok {
+		// ns::Cls written with the repo's own namespace: the class Cls
+		if i := strings.LastIndex(t, "::"); i > 0 {
+			root, _, _ := strings.Cut(t, "::")
+			if leaf := t[i+2:]; !externalScopes[root] && tt.classes[leaf] != nil {
+				return leaf
+			}
+		}
 		for _, suf := range []string{"ConstPtr", "Ptr"} {
 			if base := strings.TrimSuffix(t, suf); base != t {
 				if _, ok := tt.classes[base]; ok {
@@ -741,24 +1019,72 @@ func (tt *typeTable) canon(t string) string {
 	return t
 }
 
-// lineage is cls and its bases, nearest first.
+// lineage is cls and its bases, nearest first. A class template's base that
+// is one of its type parameters is the argument its instantiation passes
+// (using P = X<Real>; X<B> : B — P's base is Real).
 func (tt *typeTable) lineage(cls string) []string {
+	type inst struct {
+		name string
+		args []string
+	}
 	var out []string
 	seen := map[string]bool{}
-	queue := []string{cls}
+	queue := []inst{{name: cls}}
 	for len(queue) > 0 {
-		c := tt.canon(queue[0])
+		n := queue[0]
 		queue = queue[1:]
+		name, args := n.name, n.args
+		for i := 0; i < 8 && tt.classes[name] == nil; i++ {
+			a, ok := tt.aliases[name]
+			if !ok {
+				break
+			}
+			if aa := tt.aliasArgs[name]; len(aa) > 0 {
+				args = aa
+			}
+			name = a
+		}
+		c := tt.canon(name)
 		if c == "" || seen[c] {
 			continue
 		}
 		seen[c] = true
 		out = append(out, c)
-		if cf := tt.classes[c]; cf != nil {
-			queue = append(queue, cf.Bases...)
+		cf := tt.classes[c]
+		if cf == nil {
+			continue
+		}
+		bind := func(t string) string {
+			if i := indexStr(cf.TParams, t); i >= 0 && i < len(args) {
+				return args[i]
+			}
+			return t
+		}
+		for _, b := range cf.Bases {
+			var bargs []string
+			for _, a := range cf.BaseArgs[b] {
+				bargs = append(bargs, bind(a))
+			}
+			if bound := bind(b); bound != b {
+				queue = append(queue, inst{name: bound})
+				continue
+			}
+			if containsStr(cf.TParams, b) {
+				continue // a type parameter the instantiation does not tell
+			}
+			queue = append(queue, inst{name: b, args: bargs})
 		}
 	}
 	return out
+}
+
+func indexStr(xs []string, s string) int {
+	for i, x := range xs {
+		if x == s {
+			return i
+		}
+	}
+	return -1
 }
 
 // descendants is every class deriving (transitively) from cls.
@@ -791,10 +1117,14 @@ func (tt *typeTable) fieldType(cls, field string) (string, bool) {
 	return "", false
 }
 
-// methodReturn is the declared return type of cls.m on cls or a base.
+// methodReturn is the declared return type of cls.m on cls or a base (an
+// auto method returning a field: that field's type).
 func (tt *typeTable) methodReturn(cls, m string) string {
 	for _, c := range tt.lineage(cls) {
 		if t, ok := tt.returns[c+"."+m]; ok {
+			if f, isField := strings.CutPrefix(t, "f:"); isField {
+				t, _ = tt.fieldType(c, f)
+			}
 			return t
 		}
 	}

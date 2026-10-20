@@ -203,6 +203,30 @@ type siteIndex struct {
 	// variadic); nargs: the call being resolved's argument count plus one
 	arity map[string][2]int
 	nargs int
+	// vis: what a C/C++ file can name (cppvis.go; nil: everything);
+	// callerPath is the calling definition's file, defPath and recvOf each
+	// definition's file and class
+	// jsModule: a JS/TS module of the repo whose exports were read (nil: none)
+	jsModule   func(pkg string) bool
+	vis        *cppVisibility
+	inNS       [2]string // C++ ns::f(): the written outermost and innermost namespace
+	callerPath string
+	defPath    map[string]string
+	recvOf     map[string]string
+}
+
+// visibleOnly keeps the definitions the caller's file can name.
+func (x siteIndex) visibleOnly(cands []string) []string {
+	if x.vis == nil || x.callerPath == "" || len(cands) == 0 {
+		return cands
+	}
+	var out []string
+	for _, q := range cands {
+		if x.vis.visible(x.callerPath, x.defPath[q], x.recvOf[q], BaseName(q)) {
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 // MethodTyped: a member call resolved on the receiver's DECLARED type (its
@@ -282,6 +306,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		s := best[key]
 		name := s.Name
 		x.nargs = s.NArgs
+		x.inNS = [2]string{}
 		switch s.Kind {
 		case CallTyped:
 			if strings.HasPrefix(s.Scope, pyClassExact) || strings.HasPrefix(s.Scope, pyClassNew) {
@@ -356,8 +381,8 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 					}
 					continue
 				}
-				if x.types != nil && x.types.classes[callerRecv] != nil {
-					if cs := typedCallees(callerRecv, name, lang, x); len(cs) > 0 && cs[0].ResolutionMethod != MethodExternal {
+				if x.types != nil && x.types.classes[x.types.canon(typeRecv)] != nil {
+					if cs := typedCallees(typeRecv, name, lang, x); len(cs) > 0 && cs[0].ResolutionMethod != MethodExternal {
 						for _, c := range cs {
 							add(c) // inherited from a repo base class
 						}
@@ -375,10 +400,26 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(rustPlainCallee(callerPkg, s, x))
 				continue
 			}
+			if s.Kind == CallPlain && langFamily(lang) == "js" {
+				// An ES module names nothing it does not declare or import: a
+				// bare f() is the module's own f, else a local (a hook's
+				// setter, a prop), a global (Map, fetch) — never another
+				// module's f that happens to share the name
+				if q := qualifyModule(callerPkg, name); x.nodeSet[q] {
+					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				} else {
+					add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+				}
+				continue
+			}
 			if lang == "java" && isTypeName(name) || s.Kind == CallPlain && bareNameSkipsClass[lang] {
 				// new Foo(): the class, not one of its constructors; a bare f()
 				// in Python/JS (all(…), format(…)) is never some class's method
 				add(resolveEdges(callerPkg, []string{name}, x.nodeSet, map[string][]string{name: x.nonMethods(name)}, x.precise)[0])
+				continue
+			}
+			if langFamily(lang) == "c" {
+				add(cPlainCallee(name, x))
 				continue
 			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
@@ -418,6 +459,15 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				}
 				continue
 			}
+			if langFamily(lang) == "c" {
+				// ns::f() with ns not a class of the repo: a free function
+				// the caller's file can see, declared in that namespace
+				if x.vis != nil && x.types != nil && x.types.classes[s.Scope] == nil {
+					x.inNS = [2]string{s.Root, s.Scope}
+				}
+				add(cPlainCallee(name, x))
+				continue
+			}
 			add(resolveEdges(callerPkg, []string{name}, x.nodeSet, x.byBase, x.precise)[0])
 		case CallModule:
 			// a name imported from (or called on) a module of the repo: that
@@ -429,6 +479,13 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			// re-exported (a barrel index, __init__): a definition elsewhere —
 			// never the caller's own module, whose name it would shadow, nor
 			// a method (an import names a module-level thing)
+			if langFamily(lang) == "js" && x.jsModule != nil && x.jsModule(s.Scope) {
+				// the module is read and passes on no such name: it defines
+				// it as something other than a function (a styled component,
+				// a constant) — never another module's same-named function
+				add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+				continue
+			}
 			var elsewhere []string
 			for _, q := range x.nonMethods(name) {
 				if x.pkgOfQID[q] != callerPkg {
@@ -452,6 +509,33 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		}
 	}
 	return out
+}
+
+// cPlainCallee resolves an unqualified C/C++ call that no class of the
+// caller's lineage answers: a free function the caller's file can see. A
+// method of some unrelated class is never in scope for f() — a name inherited
+// from a library base (getTrace() on a framework behaviour) is that base's.
+func cPlainCallee(name string, x siteIndex) query.Callee {
+	var cands []string
+	for _, q := range x.byBase[name] {
+		if !x.nodeSet[q] {
+			continue
+		}
+		if x.isMethod[q] && (x.types == nil || x.types.classes[strings.SplitN(x.recvOf[q], "@", 2)[0]] != nil) {
+			continue // a class's member
+		}
+		if x.inNS[1] != "" && !x.vis.inNamespace(x.defPath[q], name, x.inNS[0], x.inNS[1]) {
+			continue // declared in another namespace (lib::f is not app::f)
+		}
+		cands = append(cands, q)
+	}
+	if q, ok := pickOne(cands, x); ok {
+		return query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved}
+	}
+	if len(x.visibleOnly(cands)) > 1 {
+		return query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous}
+	}
+	return query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
 }
 
 // typeSite turns an untyped member site into a typed one when its receiver's
@@ -479,12 +563,16 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 // namespace, or a repo class whose lineage defines no such method (a library
 // base's member), is an external leaf named cls::name.
 func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
+	written := cls // an alias keeps its template arguments for lineage
+	if x.types != nil {
+		cls = x.types.canon(cls)
+	}
 	if strings.Contains(cls, "::") {
 		return []query.Callee{{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}}
 	}
 	var out []query.Callee
 	several := false
-	for _, c := range x.types.lineage(cls) {
+	for _, c := range x.types.lineage(written) {
 		if q, ok := pickOne(x.byRecv[c+"."+name], x); ok {
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
 			break
@@ -526,6 +614,7 @@ func memberCalleeLang(name, lang string, x siteIndex) query.Callee {
 			cands = append(cands, q)
 		}
 	}
+	cands = x.visibleOnly(cands)
 	switch {
 	case len(cands) == 0:
 		// Only a method can be a member call's target, and no repo class has one:
@@ -581,18 +670,22 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 			}
 		}
 	}
-	if x.nargs > 0 && len(cands) > 1 {
-		// overloads of one name: only those taking the call's argument count
+	cands = x.visibleOnly(cands)
+	if x.nargs > 0 && len(cands) > 0 {
+		// only definitions taking the call's argument count. An
+		// out-of-line definition leaves its defaults to the declaration, so
+		// a name declared with defaults may take fewer than it lists.
 		n := x.nargs - 1
 		var fit []string
 		for _, q := range cands {
 			a, known := x.arity[q]
-			if !known || n >= a[0] && (a[1] < 0 || n <= a[1]) {
+			few := n < a[0] && !(x.vis != nil && x.vis.defaults[BaseName(q)])
+			if !known || !few && (a[1] < 0 || n <= a[1]) {
 				fit = append(fit, q)
 			}
 		}
-		if len(fit) > 0 {
-			cands = fit
+		if len(fit) > 0 || x.vis != nil {
+			cands = fit // C/C++: no definition takes this many arguments — not the repo's
 		}
 	}
 	switch len(cands) {

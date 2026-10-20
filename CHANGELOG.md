@@ -13,6 +13,15 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Added
 
+- **`trace` follows DRF serializers**: a view's `serializer_class` and the serializers
+  nested in it as fields (`document = DocumentSerializer(...)`) are walked for what
+  they run per response — `SerializerMethodField` getters and `to_representation` —
+  also from a view method that builds the serializer itself. A stored file touched per
+  row (`instance.file.size`, `os.path.getsize`) is a file-read effect.
+- **`context` names framework-wired callers**: a `SerializerMethodField` getter is
+  called by its serializer, by the serializers nesting it and by the views using it,
+  each labelled with the wiring (`via`).
+
 - **Python receiver typing**: `x.f()` resolves on the class `x` holds when the code says
   which — annotations (including `Optional[X]`, `X | None`), constructors, a factory whose
   return is annotated or always a constructor, attributes set on `self` — through package
@@ -109,6 +118,27 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   that can match).
 
 #### Fixed
+
+- **C++ calls stay in the translation unit**: a call reaches only definitions its file
+  can name through its includes; another file's anonymous-namespace or `static` helper,
+  a class defined in another source file (each pimpl's `Impl`), a same-named fixture in
+  a header the file does not include, and a library base's inherited member are no
+  longer linked to the repo's same-named definition. `ns::f()` keeps to namespace `ns`.
+- **C++ receiver types**: class-scope `using` aliases, class templates deriving from a
+  type parameter (`using PickTest = ActionTest<CommonTest, …>`), specializations
+  (`struct Trait<X>`), nested classes defined out of line (`class Outer::Impl {}`) and
+  `auto&` getters returning a member field.
+- **C++ overloads**: a call no definition of the name can take (argument count, defaults
+  honoured) is not linked; overloads' parameter counts merge across one file.
+- **JS/TS bare calls**: `f()` is the module's own `f`, else a local (a hook's setter, a
+  prop) or a global (`new Map()`), never another module's `f`; a name imported from a
+  module that does not export it as a function is not linked elsewhere.
+- **`trace`** no longer follows a call on an object of unknown type into the one class
+  of the repo with a method of that name (`self.kwargs.get()` into a view's `get`), and
+  locates Python/JS symbols by their module (bodies, effects and class attributes were
+  unread for module-qualified ids).
+- **Locations**: `TEST_F(Suite, Case)` symbols and C++ friend functions are located at
+  their own definition when several share a name.
 
 - `routes` listed FastAPI routes five times, lost gin group prefixes, missed Spring entirely
   and reported logger calls as routes.

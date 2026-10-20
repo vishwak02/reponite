@@ -40,6 +40,8 @@ class Manager {
 };
 }`,
 		"mgr/src/manager.cpp": `
+#include <mgr/manager.h>
+#include "../../tasks/src/tasks.h"
 namespace mgr {
 std::ostream& operator<<(std::ostream& out, const Manager& m) { return out; }
 void Manager::tick(const Worker& w, Task::Ptr tp, int n) {
@@ -54,6 +56,7 @@ void Manager::tick(const Worker& w, Task::Ptr tp, int n) {
 }
 }`,
 		"tasks/src/tracker.cpp": `
+#include "tasks.h"
 class Tracker {
  public:
   WorkerPtr getWorker() const;
@@ -80,7 +83,9 @@ void Tracker::scan(const std::vector<Worker>& ws) {
   auto& hw = ns::Holder(1).w;                                                     // a temporary's field
   hw.nap();
 }`,
-		"tasks/src/tasks.cpp": `
+		// the classes the other files use live in a header they include
+		"tasks/src/tasks.h": `
+#include <mgr/manager.h>
 class PickTask : public mgr::Task {
  public:
   void step() override {}

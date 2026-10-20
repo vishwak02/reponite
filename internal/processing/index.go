@@ -159,6 +159,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				sh = content.SymbolHash(normVer, id)
 			}
 			imports := withLocalImports(byLocal, s.LocalImports)
+			own := s // this definition's own parameter count, before any merge
 			if prev, dup := byQID[qid]; dup && lang != "python" && prev.path == f.Path {
 				// Overloads (Java, C++, C#, TypeScript signatures) share one id:
 				// the id calls what any of them calls. (Python: a later def
@@ -166,16 +167,16 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				s = mergeOverload(prev.sym, s)
 			}
 			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: imports, path: f.Path}
-			if s.HasParams {
+			if own.HasParams {
 				// overloads sharing the id take any of their parameter counts
 				a, seen := arity[qid]
 				switch {
 				case !seen:
-					a = [2]int{s.ParamMin, s.ParamMax}
+					a = [2]int{own.ParamMin, own.ParamMax}
 				default:
-					a[0] = min(a[0], s.ParamMin)
-					if a[1] >= 0 && (s.ParamMax < 0 || s.ParamMax > a[1]) {
-						a[1] = s.ParamMax
+					a[0] = min(a[0], own.ParamMin)
+					if a[1] >= 0 && (own.ParamMax < 0 || own.ParamMax > a[1]) {
+						a[1] = own.ParamMax
 					}
 				}
 				arity[qid] = a
@@ -205,9 +206,20 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	x := siteIndex{nodeSet: nodeSet, byBase: byBase, byRecv: map[string][]string{},
 		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
 	x.arity = arity
+	x.vis = newCppVisibility(files)
+	x.jsModule = func(pkg string) bool {
+		jm := mods.jsMods[pkg]
+		return jm != nil && langFamily(jm.lang) == "js"
+	}
+	if x.vis != nil {
+		x.defPath, x.recvOf = map[string]string{}, map[string]string{}
+	}
 	for _, qid := range order {
 		nodeSet[qid] = true
 		c := byQID[qid]
+		if x.vis != nil {
+			x.defPath[qid], x.recvOf[qid] = c.path, c.sym.Recv
+		}
 		x.pkgOfQID[qid] = c.pkg
 		x.isTest[qid] = testish(c.isTest, c.pkg, c.sym.Recv)
 		if c.sym.Recv != "" && c.sym.Kind != "type" {
@@ -322,7 +334,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		c := byQID[qid]
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
 		var callees []query.Callee
-		x.callerTest, x.caller = x.isTest[qid], qid
+		x.callerTest, x.caller, x.callerPath = x.isTest[qid], qid, c.path
 		v := viewFor(c.lang)
 		x.nodeSet, x.byBase = v.nodeSet, v.byBase
 		nodeSet, byBase := v.nodeSet, v.byBase

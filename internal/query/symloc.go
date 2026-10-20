@@ -163,6 +163,13 @@ func (x *spanIndex) locate0(qid string) (symLoc, bool) {
 				}
 			}
 		}
+		// A test written TEST_F(Suite, Case): the symbol Suite.Case
+		gtest := regexp.MustCompile(`\b[A-Z_]*TEST[A-Z_]*\(\s*` + regexp.QuoteMeta(class) + `\s*,\s*` + regexp.QuoteMeta(base) + `\s*\)`)
+		for _, c := range cands {
+			if gtest.MatchString(lineAt(x.byPath[c.Path].Content, c.Span.StartLine)) {
+				return c, true
+			}
+		}
 		// An out-of-class definition (C++ Class::method, Go receiver).
 		recv = regexp.MustCompile(`\*?\b` + regexp.QuoteMeta(class) + `(?:\[[^\]]*\])?\)\s*` + regexp.QuoteMeta(base) + `\b`)
 		for _, c := range cands {

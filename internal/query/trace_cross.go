@@ -580,23 +580,87 @@ func (t *tracer) frameworkChildren(n *TraceNode) []*TraceNode {
 		}
 	}
 	if n.fw.serializer != "" {
-		if sq := t.pickDef(v, n.fw.serializer, n.Path); sq != "" {
-			hooks := serializerHooks[n.fw.action]
+		out = append(out, t.serializerNodes(v, n.fw.serializer, n.fw.action, n.Path)...)
+	}
+	return out
+}
+
+var (
+	drfMethodField = regexp.MustCompile(`(?m)^\s+(\w+)\s*=\s*(?:serializers\.)?SerializerMethodField\(([^)]*)\)`)
+	drfMethodName  = regexp.MustCompile(`method_name\s*=\s*['"](\w+)['"]`)
+	drfNestedField = regexp.MustCompile(`(?m)^\s+(\w+)\s*=\s*(?:\w+\.)?([A-Z]\w*Serializer\w*)\(`)
+)
+
+// serializerNodes are what a view's serializer runs for an action, in the
+// order DRF runs them: its validate/create/update hooks when writing, and,
+// for every response it renders, to_representation, each
+// SerializerMethodField's get_<field> method, and the same for each nested
+// serializer field (document = DocumentSerializer(...)) — attributes, not
+// calls, so the call graph has no edge for them.
+func (t *tracer) serializerNodes(v *repoView, serializer, action, near string) []*TraceNode {
+	var out []*TraceNode
+	seen := map[string]bool{}
+	var walk func(name, near, via string, depth int)
+	walk = func(name, near, via string, depth int) {
+		sq := t.pickDef(v, name, near)
+		if sq == "" || seen[sq] || depth > 3 {
+			return
+		}
+		seen[sq] = true
+		note := "serializer_class"
+		if via != "" {
+			note = "nested serializer field " + via
+		}
+		add := func(q, rp string) {
+			k := t.symbolNode(rp, q, EdgeFramework, "drf-convention", confFramework)
+			k.Note = note
+			out = append(out, k)
+		}
+		hooks := serializerHooks[action]
+		if depth > 0 {
+			hooks = []string{"to_representation"} // a nested field only renders
+		}
+		if len(hooks) > 0 && hooks[0] == "validate" {
 			for q := range v.syms {
-				if strings.HasPrefix(q, sq+".validate_") && len(hooks) > 0 && hooks[0] == "validate" {
+				if strings.HasPrefix(q, sq+".validate_") {
 					hooks = append(hooks, baseName(q))
 				}
 			}
-			for _, h := range hooks {
-				if rp, q := t.methodOf(v, sq, h); q != "" {
-					k := t.symbolNode(rp, q, EdgeFramework, "drf-convention", confFramework)
-					k.Note = "serializer_class"
-					out = append(out, k)
-				}
+		}
+		for _, h := range hooks {
+			if rp, q := t.methodOf(v, sq, h); q != "" {
+				add(q, rp)
 			}
 		}
+		body, path := t.classBody(v, sq)
+		if body == "" {
+			return
+		}
+		for _, m := range drfMethodField.FindAllStringSubmatch(body, -1) {
+			getter := "get_" + m[1]
+			if mm := drfMethodName.FindStringSubmatch(m[2]); mm != nil {
+				getter = mm[1]
+			}
+			if rp, q := t.methodOf(v, sq, getter); q != "" {
+				add(q, rp)
+			}
+		}
+		for _, m := range drfNestedField.FindAllStringSubmatch(body, -1) {
+			walk(m[2], path, m[1], depth+1)
+		}
 	}
+	walk(serializer, near, "", 0)
 	return out
+}
+
+// classBody is a class's source text and file path, "" when not located.
+func (t *tracer) classBody(v *repoView, cls string) (string, string) {
+	l, ok := v.where(cls)
+	if !ok || l.span.StartLine <= 0 {
+		return "", ""
+	}
+	lines := v.fileLines(l.file)
+	return strings.Join(lines[l.span.StartLine-1:min(len(lines), l.span.EndLine)], "\n"), v.files[l.file].Path
 }
 
 // routeClients (UP): the client calls reaching a route, at their enclosing
@@ -1202,3 +1266,34 @@ func (t *tracer) cliHandlerAt(v *repoView, fi int, lines []string, i int, name s
 }
 
 func (t *tracer) cliHandlers(n *TraceNode) []*TraceNode { return n.pre }
+
+var drfUsesSerializer = regexp.MustCompile(`\bget_serializer\s*\(|\bserializer_class\s*\(|\bsuper\(\)\s*\.\s*(?:list|retrieve|create|update|partial_update)\s*\(`)
+
+// ownSerializer: a view method the class defines itself (list, retrieve, …)
+// that builds the class's serializer (self.get_serializer(…), super().list(…))
+// runs what that serializer runs.
+func (t *tracer) ownSerializer(n *TraceNode, v *repoView, body string) []*TraceNode {
+	cls, m, ok := classOf(n.Symbol)
+	if !ok || !drfUsesSerializer.MatchString(body) {
+		return nil
+	}
+	action := m
+	switch m {
+	case "get":
+		action = "retrieve"
+	case "post":
+		action = "create"
+	case "put", "patch":
+		action = "update"
+	}
+	if _, known := serializerHooks[action]; !known {
+		action = "retrieve" // any other method renders a response
+	}
+	clsBody, path := t.classBody(v, strings.TrimSuffix(n.Symbol, "."+m))
+	sm := drfSerial.FindStringSubmatch(clsBody)
+	if sm == nil {
+		return nil
+	}
+	_ = cls
+	return t.serializerNodes(v, sm[1], action, path)
+}

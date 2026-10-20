@@ -589,7 +589,9 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 			switch {
 			case owner != "" && ownedBy(f, sp, owner, base):
 				sc++
-			case owner == "" && looksLikeMethod(f, sp, base):
+			case owner == "" && isCLikePath(f.Path) && hasWordAt(declHead(f, sp), "friend"):
+				// a friend defined in its class is a free function
+			case owner == "" && (looksLikeMethod(f, sp, base) || isCLikePath(f.Path) && nestedInClass(f, sp)):
 				sc-- // a free function's id: prefer a span that is not some type's method
 			}
 			// Python: a later definition of the name replaces an earlier one
@@ -651,7 +653,26 @@ func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
 		}
 	}
 	line := declHead(f, sp)
-	return scopedDef(line, owner, base) || hasWordAt(line, owner+") "+base)
+	return scopedDef(line, owner, base) || hasWordAt(line, owner+") "+base) || gtestDef(line, owner, base)
+}
+
+// gtestDef: line is a test written TEST_F(owner, base) (TEST, TEST_P, …),
+// the symbol owner.base.
+func gtestDef(line, owner, base string) bool {
+	i := strings.Index(line, "TEST")
+	if i < 0 {
+		return false
+	}
+	open := strings.Index(line[i:], "(")
+	if open < 0 {
+		return false
+	}
+	args := line[i+open+1:]
+	if j := strings.Index(args, ")"); j >= 0 {
+		args = args[:j]
+	}
+	parts := strings.Split(args, ",")
+	return len(parts) == 2 && strings.TrimSpace(parts[0]) == owner && strings.TrimSpace(parts[1]) == base
 }
 
 // scopedDef: line defines base out of class owner — owner::base, or a class

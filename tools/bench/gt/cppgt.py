@@ -245,8 +245,15 @@ def parse_one(job):
                         # the definition this file sees: two programs of the repo may
                         # each define a function of the same signature (same USR)
                         at = "%s:%d" % (rel(d), d.location.line)
+                qname = None
+                if ref is not None and not external:
+                    # a member of a class template's specialization has no
+                    # definition of its own: named Class.method, it is matched
+                    # to the template's definition below
+                    qname = def_name(ref)
                 calls.append({"from": owner, "name": c.spelling, "usr": target, "external": external,
-                              "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at})
+                              "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at,
+                              "qname": qname})
             # a lambda or a local class: its calls stay with the enclosing definition
             visit(c, owner)
 
@@ -328,11 +335,18 @@ def main():
                 key = (canon[d["id"]], n)
                 written[key] = max(written.get(key, 0), k)
     edges, external, have = [], set(), set()
+    by_qname = {}  # Class.method -> the one definition of that name, if one
+    for d in defs:
+        by_qname.setdefault(d["name"], set()).add(d["id"])
     bound, unmapped = {}, set()
     for _, cs in results:
         for c in cs:
             c["from"] = canon.get(c["from"], c["from"])
             names.setdefault(c["from"], set()).add(c["name"])
+            if c["bound"] and not c["external"] and c["usr"] and c.get("at") not in canon and c["usr"] not in by_usr:
+                ids = by_qname.get(c.get("qname") or "", set())
+                if len(ids) == 1:
+                    c["at"] = next(iter(ids))  # the template's own definition
             known = c["bound"] and (c["usr"] is None or c["external"] or c.get("at") in canon or c["usr"] in by_usr)
             if not known and not c["name"].startswith("operator"):
                 unmapped.add(c["from"] + ">" + c["name"])

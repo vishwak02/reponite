@@ -94,6 +94,18 @@ func Context(s Store, repo, ref, symbol string, includeTests bool) ContextResult
 			}
 		}
 	}
+	have := map[string]bool{}
+	for _, c := range callers {
+		have[c] = true
+	}
+	for _, e := range frameworkCallers(s, repo, ref, sym) {
+		if have[e.Name] || !includeTests && e.IsTest {
+			continue
+		}
+		have[e.Name] = true
+		callers = append(callers, e.Name)
+		callerEdges = append(callerEdges, e)
+	}
 	sort.Strings(callers)
 	sort.Slice(callerEdges, func(i, j int) bool { return callerEdges[i].Name < callerEdges[j].Name })
 	sort.Strings(callees)

@@ -367,6 +367,14 @@ func (v *repoView) locate() {
 			if len(names) > 1 {
 				cands = append(cands, qualifyID(pkg, sp.Name))
 			}
+			if stem := fileModuleStem(f.Path); stem != "" {
+				// Python/JS ids name their module: dir.module.Class.f
+				mod := stem
+				if pkg != "" {
+					mod = pkg + "." + stem
+				}
+				cands = append([]string{mod + "." + strings.Join(names, ".")}, cands...)
+			}
 			if lines := v.fileLines(i); cpp && sp.StartLine-1 < len(lines) && sp.StartLine > 0 && len(lines[sp.StartLine-1]) < 400 && strings.Contains(lines[sp.StartLine-1], "::") {
 				if m := cppScopedDef.FindStringSubmatch(lines[sp.StartLine-1]); m != nil && m[2] == sp.Name {
 					cands = append([]string{qualifyID(pkg, m[1]+"."+sp.Name)}, cands...)
@@ -738,6 +746,9 @@ func (t *tracer) downChildren(n *TraceNode) []*TraceNode {
 		for _, k := range t.implsOf(n) {
 			add(k)
 		}
+		for _, k := range t.ownSerializer(n, v, body) {
+			add(k)
+		}
 		for _, k := range t.extraEdges(n, false) {
 			add(k)
 		}
@@ -869,7 +880,13 @@ func (t *tracer) disambiguate(n *TraceNode, v *repoView, body string, c Callee) 
 		return &TraceNode{Kind: NodeSymbol, Repo: n.Repo, Symbol: c.Name, Edge: EdgeCall, Method: c.ResolutionMethod,
 			Confidence: c.Confidence, Stop: StopUnresolved, key: n.Repo + "\x00?" + c.Name, fi: -1}
 	case 1:
-		return pick(cands[0], "picked: the only definition")
+		// one definition of the name: a free function called bare is it; a
+		// method of some class is only the target when the receiver, the
+		// caller's own class or an import says so (below) — obj.get() on an
+		// object of unknown type is not the one class in the repo with a get
+		if _, _, isMethod := classOf(cands[0]); !isMethod && regexp.MustCompile(`(?:^|[^.\w>])`+regexp.QuoteMeta(name)+`\s*\(`).MatchString(body) {
+			return pick(cands[0], "picked: the only definition")
+		}
 	}
 	// self.m() / this->m(): the caller's own class.
 	if cls, _, ok := classOf(n.Symbol); ok && regexp.MustCompile(`\b(?:self|this|cls)\s*(?:\.|->)\s*`+regexp.QuoteMeta(name)+`\s*\(`).MatchString(body) {
@@ -918,6 +935,9 @@ func (t *tracer) disambiguate(n *TraceNode, v *repoView, body string, c Callee) 
 				}
 			}
 		}
+	}
+	if traceNoise[name] && !regexp.MustCompile(`(?:^|[^.\w>])`+regexp.QuoteMeta(name)+`\s*\(`).MatchString(body) {
+		return nil // kwargs.get(), data.items(): a builtin container's method, not the repo's
 	}
 	k := &TraceNode{Kind: NodeSymbol, Repo: n.Repo, Symbol: name, Edge: EdgeCall, Method: c.ResolutionMethod,
 		Confidence: c.Confidence, Stop: StopAmbiguous, key: n.Repo + "\x00?" + n.Symbol + "\x00" + name, fi: -1}
