@@ -148,12 +148,57 @@ function enclosingDef(n) {
   return null;
 }
 
-function targetDecl(checker, expr) {
+// A JSX tag naming a component wrapped by a higher-order component
+// (export default memo(Item), connect(a, b)(Item), withRouter(Item)): the
+// wrapped component is what renders.
+function unwrapComponent(checker, e, depth) {
+  if (!e || depth > 4) return null;
+  while (ts.isParenthesizedExpression(e)) e = e.expression;
+  if (ts.isIdentifier(e)) {
+    const d = targetDecl(checker, e, depth + 1, true);
+    return d && defAt.has(d) ? d : null;
+  }
+  if (ts.isArrowFunction(e) || ts.isFunctionExpression(e) || ts.isClassExpression(e)) return defAt.has(e) ? e : null;
+  if (ts.isCallExpression(e)) {
+    // the wrapped component is the outermost call's argument; a curried
+    // wrapper's own arguments (connect(mapState, actions)) configure it
+    for (const a of e.arguments) {
+      if (ts.isIdentifier(a) || ts.isCallExpression(a) || ts.isArrowFunction(a) || ts.isFunctionExpression(a)) {
+        const d = unwrapComponent(checker, a, depth + 1);
+        if (d) return d;
+      }
+    }
+  }
+  return null;
+}
+
+// literalMember: the member name of the object literal a const is bound to
+// (const ls: Store = { set() {…} }), or null.
+function literalMember(checker, recv, name) {
+  let sym = checker.getSymbolAtLocation(recv);
+  if (!sym) return null;
+  if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+  const v = (sym.declarations || [])[0];
+  if (!v || !ts.isVariableDeclaration(v) || !v.initializer || !ts.isObjectLiteralExpression(v.initializer)) return null;
+  for (const p of v.initializer.properties) {
+    if (!p.name || !ts.isIdentifier(p.name) || p.name.text !== name) continue;
+    if (ts.isMethodDeclaration(p)) return p;
+    if (ts.isPropertyAssignment(p) && (ts.isArrowFunction(p.initializer) || ts.isFunctionExpression(p.initializer))) return p.initializer;
+  }
+  return null;
+}
+
+function targetDecl(checker, expr, depth = 0, jsx = false) {
   let sym = checker.getSymbolAtLocation(expr);
   if (!sym) return null;
   if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
   const d = (sym.declarations || [])[0];
   if (!d) return null;
+  if (jsx && ts.isExportAssignment(d)) return unwrapComponent(checker, d.expression, depth);
+  if (jsx && ts.isVariableDeclaration(d) && d.initializer && ts.isCallExpression(d.initializer) && !defAt.has(d.initializer)) {
+    const w = unwrapComponent(checker, d.initializer, depth);
+    if (w) return w;
+  }
   // const f = () => ... : the variable's initializer is the definition
   if (ts.isVariableDeclaration(d) && d.initializer) {
     let init = d.initializer;
@@ -182,7 +227,12 @@ for (const program of programs) {
           const nameNode = ts.isPropertyAccessExpression(callee) ? callee.name : callee;
           const called = nameNode.getText ? nameNode.getText(sf) : null;
           if (called && /^[A-Za-z_$][\w$]*$/.test(called)) (names[from] ||= new Set()).add(called);
-          const d = targetDecl(checker, nameNode);
+          let d = targetDecl(checker, nameNode, 0, ts.isJsxOpeningElement(n) || ts.isJsxSelfClosingElement(n));
+          if (d && (ts.isMethodSignature(d) || ts.isPropertySignature(d)) && ts.isPropertyAccessExpression(callee)) {
+            // obj.m() typed by an interface: the object literal obj is bound to
+            // implements m
+            d = literalMember(checker, callee.expression, callee.name.text) || d;
+          }
           const to = d && defAt.get(d);
           if (to && !seenEdge.has(from + ">" + to)) {
             seenEdge.add(from + ">" + to);

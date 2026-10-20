@@ -8,6 +8,7 @@
 package processing
 
 import (
+	"fmt"
 	"path"
 	"regexp"
 	"sort"
@@ -123,7 +124,9 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 				src, _ = f.Load()
 			}
 			pkg := pkgOfFile(f.Path, f.Lang)
-			if m := reExportDefault.FindStringSubmatch(src); m != nil && !jsDefaultNotName[m[1]] {
+			if w := wrappedDefault(src); w != "" {
+				mi.defaults[pkg] = w // export default memo(Item) / connect(…)(Item): the component
+			} else if m := reExportDefault.FindStringSubmatch(src); m != nil && !jsDefaultNotName[m[1]] {
 				mi.defaults[pkg] = m[1]
 				inst := regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:const|let|var)\s+` + regexp.QuoteMeta(m[1]) + `\s*(?::[^=]+)?=\s*new\s+([A-Z][\w$]*)\s*[(<]`)
 				if c := inst.FindStringSubmatch(src); c != nil {
@@ -498,4 +501,67 @@ func jsReturnClasses(src string, instances map[string]string) map[string]string 
 		}
 	}
 	return out
+}
+
+var (
+	reDefaultCall  = regexp.MustCompile(`(?m)^export\s+default\s+([A-Za-z_$][\w$.]*\s*\(.*)$`)
+	reWrappedLast  = regexp.MustCompile(`\(\s*([A-Za-z_$][\w$]*)\s*\)[)\s]*;?\s*$`)
+	reConstWrapped = `(?m)^(?:export\s+)?const\s+%s\s*=\s*([A-Za-z_$][\w$.]*\s*\(.*)$`
+)
+
+// wrappedDefault is the component a module's default export wraps in a
+// higher-order component — export default memo(Item), connect(a, b)(Item),
+// connect(a)(withRouter(Item)), or a const bound to one — else "".
+func wrappedDefault(src string) string {
+	m := reDefaultCall.FindStringSubmatch(src)
+	if m == nil {
+		return ""
+	}
+	stmt := statementFrom(src, m[1])
+	w := reWrappedLast.FindStringSubmatch(stmt)
+	if w == nil {
+		return ""
+	}
+	// const Wrapped = withStore(Item); export default memo(Wrapped)
+	if c := regexp.MustCompile(fmt.Sprintf(reConstWrapped, regexp.QuoteMeta(w[1]))).FindStringSubmatch(src); c != nil {
+		if inner := reWrappedLast.FindStringSubmatch(statementFrom(src, c[1])); inner != nil {
+			return inner[1]
+		}
+	}
+	return w[1]
+}
+
+// statementFrom is the statement starting with head in src: its text up to
+// the parenthesis closing its first call, across lines.
+func statementFrom(src, head string) string {
+	i := strings.Index(src, head)
+	if i < 0 {
+		return head
+	}
+	depth, seen := 0, false
+	for j := i; j < len(src); j++ {
+		switch src[j] {
+		case '(':
+			depth++
+			seen = true
+		case ')':
+			depth--
+			if seen && depth == 0 {
+				// a curried call continues: connect(…)(Item)
+				k := j + 1
+				for k < len(src) && (src[k] == ' ' || src[k] == '\n' || src[k] == '\t') {
+					k++
+				}
+				if k < len(src) && src[k] == '(' {
+					continue
+				}
+				return src[i : j+1]
+			}
+		case ';':
+			if depth == 0 {
+				return src[i:j]
+			}
+		}
+	}
+	return src[i:]
 }

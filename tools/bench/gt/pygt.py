@@ -82,6 +82,16 @@ def call_name(func):
     return None, None
 
 
+def site_key(caller, func):
+    """one call site: caller id, called name and its position (as jedigt
+    reads it)"""
+    if isinstance(func, ast.Attribute):
+        return f"{caller}>{func.attr}@{func.end_lineno}:{func.end_col_offset - len(func.attr)}"
+    if isinstance(func, ast.Name):
+        return f"{caller}>{func.id}@{func.lineno}:{func.col_offset}"
+    return f"{caller}>?"
+
+
 def main():
     root = os.path.abspath(sys.argv[1])
     files = {}
@@ -191,7 +201,11 @@ def main():
                 for a in node.names:
                     local = a.asname or a.name
                     sub = resolve_module(rel, ((node.module + ".") if node.module else "") + a.name, node.level or 0)
-                    if sub:
+                    # the package's own namespace first: an __init__ binding
+                    # the name (from .m import m) shadows the submodule m
+                    if src and src != rel and src.endswith("__init__.py") and (r := reexported(src, a.name)):
+                        b[local] = r
+                    elif sub:
                         b[local] = ("module", sub)
                     elif src and a.name in funcs.get(src, {}):
                         b[local] = ("func", funcs[src][a.name])
@@ -291,10 +305,112 @@ def main():
                 return methods[k][name]
         return None
 
-    edges, names = [], {}
-    seen = set()
+    # pytest fixtures: a test's parameter named like a fixture visible to its
+    # module is that fixture's value. Calling it runs a function the fixture
+    # defines and returns (a factory: code of the fixture's own body); a
+    # method called on it is the method of the class the fixture constructs.
+    def fixture_name(fn):
+        for d in fn.decorator_list:
+            call = d if isinstance(d, ast.Call) else None
+            f = call.func if call else d
+            if (isinstance(f, ast.Attribute) and f.attr == "fixture") or (isinstance(f, ast.Name) and f.id == "fixture"):
+                for kw in (call.keywords if call else []):
+                    if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        return kw.value.value
+                return fn.name
+        return None
+
+    fixtures = {}  # rel -> fixture name -> (def id, value)
     for rel, c in info.items():
         imp = imports_of(rel, files[rel])
+        for q, node, cls in c.defs:
+            if isinstance(node, ast.ClassDef) or cls:
+                continue
+            fname = fixture_name(node)
+            if not fname:
+                continue
+            inner = {n.name for n in ast.walk(node) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n is not node}
+            lambdas = {t.id for n in ast.walk(node) if isinstance(n, ast.Assign) and isinstance(n.value, ast.Lambda)
+                       for t in n.targets if isinstance(t, ast.Name)}
+            value = None
+            def own(n):
+                """the nodes of n's own body, not of a function nested in it"""
+                for ch in ast.iter_child_nodes(n):
+                    if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                        continue
+                    yield ch
+                    yield from own(ch)
+            outs = [n.value for n in own(node) if isinstance(n, (ast.Return, ast.Yield)) and n.value is not None]
+            ctor = {}  # name = Cls(...) in the fixture's own body
+            for n in own(node):
+                if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name):
+                    for t in n.targets:
+                        if isinstance(t, ast.Name):
+                            ctor[t.id] = n.value
+            kinds = set()
+            for v in outs:
+                if isinstance(v, ast.Name) and v.id in ctor and v.id not in inner:
+                    v = ctor[v.id]
+                if isinstance(v, ast.Name) and (v.id in inner or v.id in lambdas):
+                    kinds.add(("factory",))
+                elif isinstance(v, ast.Lambda):
+                    kinds.add(("factory",))
+                elif isinstance(v, ast.Call) and isinstance(v.func, ast.Name):
+                    n = v.func.id
+                    key = (rel, n) if (rel, n) in classes else (imp[n][1] if imp.get(n, (None,))[0] == "class" else None)
+                    kinds.add(("instance", key) if key else ("unknown",))
+                else:
+                    kinds.add(("unknown",))
+            if len(kinds) == 1:
+                value = next(iter(kinds))
+            fixtures.setdefault(rel, {})[fname] = (def_id(rel, node), value)
+
+    def plugin_modules(rel):
+        """modules a conftest/test module makes fixtures visible from:
+        pytest_plugins and star imports"""
+        out = []
+        for n in files[rel].body:
+            if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytest_plugins" for t in n.targets):
+                vals = n.value.elts if isinstance(n.value, (ast.List, ast.Tuple)) else [n.value]
+                for v in vals:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str) and (m := resolve_module(rel, v.value)):
+                        out.append(m)
+            if isinstance(n, ast.ImportFrom) and any(a.name == "*" for a in n.names):
+                if (m := resolve_module(rel, n.module or "", n.level or 0)):
+                    out.append(m)
+        return out
+
+    def visible_fixtures(rel):
+        """fixture name -> (def id, value), nearest definition first"""
+        order = [rel]
+        d = os.path.dirname(rel)
+        while True:
+            cf = (d + "/" if d else "") + "conftest.py"
+            if cf in files and cf != rel:
+                order.append(cf)
+            if not d:
+                break
+            d = os.path.dirname(d)
+        for r in list(order):
+            order += plugin_modules(r)
+        by_id = {v[0]: v for fx in fixtures.values() for v in fx.values()}
+        out = {}
+        for r in order:
+            for k, v in fixtures.get(r, {}).items():
+                out.setdefault(k, v)
+            # a fixture imported by name into the module (a conftest
+            # gathering fixtures from submodules)
+            for local, b in imports_of(r, files[r]).items():
+                if b[0] == "func" and b[1] in by_id:
+                    out.setdefault(local, by_id[b[1]])
+        return out
+
+    edges, names = [], {}
+    seen = set()
+    fixture_judged, fixture_external = set(), set()
+    for rel, c in info.items():
+        imp = imports_of(rel, files[rel])
+        vis_fx = visible_fixtures(rel) if is_test_path(rel) else {}
         for q, node, cls in c.defs:
             if isinstance(node, ast.ClassDef):
                 continue  # a class body's calls belong to its methods
@@ -305,7 +421,11 @@ def main():
             fimp = dict(imp)
             if local_imports:
                 fimp.update(imports_of(rel, files[rel], local_imports))
-            local_names = {a.arg for a in node.args.args + node.args.kwonlyargs}
+            params = {a.arg for a in node.args.args + node.args.kwonlyargs}
+            local_names = set(params)
+            # a test or fixture receives fixtures through its parameters
+            takes_fixtures = vis_fx and (node.name.startswith("test") or fixture_name(node) is not None)
+            fx_params = {p: vis_fx[p] for p in params if takes_fixtures and p in vis_fx and p not in ("self", "cls")}
             # decorators and default values run where the function is
             # defined, not when it is called: only the body's calls count
             body = [n for stmt in node.body for n in ast.walk(stmt)]
@@ -332,6 +452,30 @@ def main():
                     continue
                 called.add(name)
                 to = None
+                if chain == [] and name in fx_params:
+                    fid, value = fx_params[name]
+                    if value == ("factory",):
+                        fixture_judged.add(site_key(frm, sub.func))
+                        if (frm, fid) not in seen:
+                            seen.add((frm, fid))
+                            edges.append({"from": frm, "to": fid, "kind": "fixture", "line": sub.lineno})
+                    elif value is not None:
+                        # the fixture hands over a value it does not define
+                        # (a mock, an instance): calling it runs none of the
+                        # fixture's code
+                        fixture_judged.add(site_key(frm, sub.func))
+                        fixture_external.add(frm + ">" + name)
+                    continue
+                if chain and len(chain) == 1 and chain[0] in fx_params:
+                    fid, value = fx_params[chain[0]]
+                    if value and value[0] == "instance":
+                        to = method_on(value[1], name)
+                        if to:
+                            fixture_judged.add(site_key(frm, sub.func))
+                            if (frm, to) not in seen:
+                                seen.add((frm, to))
+                                edges.append({"from": frm, "to": to, "kind": "fixture", "line": sub.lineno})
+                    continue
                 if chain == [] and (name not in local_names or name in fimp):
                     if name in funcs.get(rel, {}):
                         to = funcs[rel][name]
@@ -350,12 +494,19 @@ def main():
                 elif chain and len(chain) == 1 and fimp.get(chain[0], (None,))[0] == "module":
                     m = fimp[chain[0]][1]
                     to = funcs.get(m, {}).get(name)
+                elif chain and len(chain) == 1 and chain[0] not in local_names and \
+                        ((rel, chain[0]) in classes or fimp.get(chain[0], (None,))[0] == "class"):
+                    # Cls.f(): the class's own (or inherited) f — a classmethod
+                    # or static method, or an unbound call
+                    key = (rel, chain[0]) if (rel, chain[0]) in classes else fimp[chain[0]][1]
+                    to = method_on(key, name)
                 if to and (frm, to) not in seen:
                     seen.add((frm, to))
                     edges.append({"from": frm, "to": to, "kind": "static", "line": sub.lineno})
             names[frm] = sorted(called)
     out_defs.sort(key=lambda d: d["id"])
-    json.dump({"lang": "python", "defs": out_defs, "edges": edges, "names": names}, sys.stdout, indent=1)
+    json.dump({"lang": "python", "defs": out_defs, "edges": edges, "names": names,
+               "fixture_judged": sorted(fixture_judged), "fixture_external": sorted(fixture_external)}, sys.stdout, indent=1)
 
 
 if __name__ == "__main__":

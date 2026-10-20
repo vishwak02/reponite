@@ -147,3 +147,39 @@ export const Map = () => null;
 		t.Errorf("a component imported from its own module is not another module's: %v", edges["src/views.item.Row"])
 	}
 }
+
+// A called parameter is the argument; a fixture parameter called runs the
+// fixture's code only when the fixture returns a function it defines.
+func TestPythonCalledParametersAndFixtures(t *testing.T) {
+	files := map[string]string{
+		"tests/conftest.py": `import pytest
+
+@pytest.fixture
+def make_item():
+    def _make(name):
+        return name
+    return _make
+
+@pytest.fixture
+def mock_call(respx_mock):
+    return respx_mock.post("x").mock
+`,
+		"tests/test_items.py": `def test_make(make_item, mock_call):
+    make_item("a")
+    mock_call(return_value=1)
+`,
+		"tests/helpers.py": `def run(make_item):
+    make_item("b")
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["tests.test_items.test_make"]["tests.conftest.make_item"]; !ok {
+		t.Errorf("a factory fixture's call runs the fixture: %v", edges["tests.test_items.test_make"])
+	}
+	if m := edges["tests.test_items.test_make"]["tests.conftest.mock_call"]; m != "" {
+		t.Errorf("a fixture handing over a mock runs none of its code: %v", edges["tests.test_items.test_make"])
+	}
+	if m := edges["tests.helpers.run"]["tests.conftest.make_item"]; m != "" {
+		t.Errorf("a plain function's parameter is its argument: %v", edges["tests.helpers.run"])
+	}
+}

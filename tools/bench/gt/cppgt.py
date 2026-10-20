@@ -57,7 +57,25 @@ def walk(root):
             yield os.path.join(d, f)
 
 
-def system_dirs():
+def system_dirs(copied=()):
+    """The C and C++ standard library headers. A copied include tree (the
+    target image's /usr/include) holding its own libstdc++ is used instead of
+    the host's: the code is compiled against that one, and a much newer host
+    library is not valid C++17 for this clang."""
+    for r in copied:
+        if os.path.isdir(os.path.join(r, "c++")):
+            vers = sorted((v for v in os.listdir(os.path.join(r, "c++")) if v[:1].isdigit()),
+                          key=lambda s: [int(x) if x.isdigit() else 0 for x in s.split(".")])
+            if vers:
+                v = vers[-1]
+                out = [os.path.join(r, "c++", v), os.path.join(r, "x86_64-linux-gnu", "c++", v),
+                       os.path.join(r, "c++", v, "backward")]
+                gcc = "/usr/lib/gcc/x86_64-linux-gnu"  # compiler builtins (stddef.h, …)
+                if os.path.isdir(gcc):
+                    for g in sorted(os.listdir(gcc))[-1:]:
+                        out.append(os.path.join(gcc, g, "include"))
+                out += [os.path.join(r, "x86_64-linux-gnu"), r]
+                return [d for d in out if os.path.isdir(d)]
     out = []
     for base in ("/usr/include/c++", "/usr/include/x86_64-linux-gnu/c++"):
         if os.path.isdir(base):
@@ -78,14 +96,17 @@ def header_dirs(roots):
     for r in roots:
         if any(f.endswith((".h", ".hpp")) for f in os.listdir(r)) or os.path.isdir(os.path.join(r, "boost")):
             out.append(r)  # the tree is itself an include directory (a copied /usr/include)
-            if os.path.isdir(os.path.join(r, "eigen3")):
-                out.append(os.path.join(r, "eigen3"))
+            for sub in ("eigen3", "opencv4"):
+                if os.path.isdir(os.path.join(r, sub)):
+                    out.append(os.path.join(r, sub))
             continue
         for d, dirs, _ in os.walk(r):
             depth = d[len(r):].count(os.sep)
-            if depth > 6:
+            if depth > 8:
                 dirs[:] = []
                 continue
+            if os.path.basename(d) == "thirdparty":
+                out.append(d)  # vendored libraries included by their own dir (Box2D/Box2D.h)
             if os.path.basename(d) == "include":
                 out.append(d)
                 if os.path.isdir(os.path.join(d, "eigen3")):
@@ -171,6 +192,39 @@ def def_name(c):
     return c.spelling
 
 
+def overload_candidates(call):
+    """The declarations an unbound call's name looks up to (a dependent call
+    in a template: f(t) with t of a parameter type is bound at instantiation,
+    but its candidate set is fixed where it is written)."""
+    import ctypes
+    lib = ci.conf.lib
+    if not hasattr(lib, "_cppgt_ovl"):
+        lib.clang_getNumOverloadedDecls.argtypes = [ci.Cursor]
+        lib.clang_getNumOverloadedDecls.restype = ctypes.c_uint
+        lib.clang_getOverloadedDecl.argtypes = [ci.Cursor, ctypes.c_uint]
+        lib.clang_getOverloadedDecl.restype = ci.Cursor
+        lib._cppgt_ovl = True
+    kids = list(call.get_children())
+    if not kids:
+        return None
+    todo, ovl = [kids[0]], None
+    while todo and ovl is None:
+        k = todo.pop()
+        if k.kind == ci.CursorKind.OVERLOADED_DECL_REF:
+            ovl = k
+            break
+        if k.kind in (ci.CursorKind.UNEXPOSED_EXPR, ci.CursorKind.DECL_REF_EXPR):
+            todo += list(k.get_children())
+    if ovl is None:
+        return None
+    out = []
+    for i in range(lib.clang_getNumOverloadedDecls(ovl)):
+        d = lib.clang_getOverloadedDecl(ovl, i)
+        d._tu = call._tu
+        out.append(d)
+    return out
+
+
 def parse_one(job):
     path, args, root, lib = job
     if not ci.Config.loaded:
@@ -245,6 +299,21 @@ def parse_one(job):
                         # the definition this file sees: two programs of the repo may
                         # each define a function of the same signature (same USR)
                         at = "%s:%d" % (rel(d), d.location.line)
+                cands = None
+                if ref is None:
+                    # a dependent call: bound when every declaration its name
+                    # finds is one function of the repo (overloads of one name in
+                    # one directory are one definition)
+                    found = overload_candidates(c)
+                    if found:
+                        cands = []
+                        for d0 in found:
+                            if d0.kind == ci.CursorKind.FUNCTION_TEMPLATE or d0.kind in DEF_KINDS or d0.kind == ci.CursorKind.USING_DECLARATION:
+                                dd = d0.get_definition() or d0
+                                rd = rel(dd)
+                                cands.append(None if rd is None else "%s:%d" % (rd, dd.location.line))
+                            else:
+                                cands.append(None)
                 qname = None
                 if ref is not None and not external:
                     # a member of a class template's specialization has no
@@ -253,7 +322,7 @@ def parse_one(job):
                     qname = def_name(ref)
                 calls.append({"from": owner, "name": c.spelling, "usr": target, "external": external,
                               "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at,
-                              "qname": qname})
+                              "qname": qname, "cands": cands})
             # a lambda or a local class: its calls stay with the enclosing definition
             visit(c, owner)
 
@@ -295,10 +364,13 @@ def main():
     inc_dirs = sorted(inc)
     # the host's own C and C++ library headers first; the copied tree fills in
     # what the host lacks (ROS, Eigen, Boost, the generated messages)
-    sys_dirs = system_dirs() + header_dirs(extra)
+    sys_dirs = system_dirs(extra)
+    sys_dirs += [d for d in header_dirs(extra) if d not in sys_dirs]
     stub_dir = tempfile.mkdtemp(prefix="cppgt-stubs-")
     stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir)
-    args = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++"]
+    # Eigen's SSE kernels need the compiler's own intrinsics headers, which
+    # a copied tree lacks; its scalar path declares the same API
+    args = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++", "-DEIGEN_DONT_VECTORIZE"]
     for d in inc_dirs + [stub_dir] + sys_dirs:
         args += ["-I", d]
     jobs_list = [(f, (args if not f.endswith(".c") else ["-x", "c", "-std=c11"] + args[3:]), root, lib)
@@ -347,6 +419,12 @@ def main():
                 ids = by_qname.get(c.get("qname") or "", set())
                 if len(ids) == 1:
                     c["at"] = next(iter(ids))  # the template's own definition
+            if not c["bound"] and c.get("cands"):
+                ids = {canon.get(x) if x else None for x in c["cands"]}
+                if None not in ids and len(ids) == 1:
+                    c["bound"], c["at"], c["usr"] = True, next(iter(ids)), None  # one function of the repo
+                elif ids == {None} and not any(c["cands"]):
+                    c["bound"], c["external"] = True, True  # only library functions
             known = c["bound"] and (c["usr"] is None or c["external"] or c.get("at") in canon or c["usr"] in by_usr)
             if not known and not c["name"].startswith("operator"):
                 unmapped.add(c["from"] + ">" + c["name"])

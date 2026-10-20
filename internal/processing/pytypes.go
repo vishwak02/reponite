@@ -25,6 +25,10 @@ const (
 	pyElemTag    = "e:" // e:<dotted class>: a list (set, sequence, iterable) of that class
 	pyIterTag    = "i:" // i:<value>: an element of that value (a for/comprehension variable)
 	pyNewTag     = "n:" // n:<dotted class>: an instance this function constructs (exactly that class)
+	// pyFactoryTag is a fixture's Returns when it hands the test a function it
+	// defines itself (return _factory): calling the parameter runs the
+	// fixture's own code
+	pyFactoryTag = "k:"
 )
 
 // pyContainers are the generic types whose first argument is the type of
@@ -347,6 +351,9 @@ func pyAssignParts(a content.AST) (left, typ, right content.AST) {
 // pyReturnType is the class a function returns: its return annotation, else
 // the class every `return Cls(...)` of its body constructs.
 func pyReturnType(fn content.AST, fixture bool) string {
+	if fixture && pyFixtureFactory(fn) {
+		return pyFactoryTag // -> Callable[...]: the function it defines
+	}
 	afterArrow := false
 	for _, c := range fn.Children() {
 		if c.Type() == "->" {
@@ -374,7 +381,22 @@ func pyReturnType(fn content.AST, fixture bool) string {
 	}
 	cls := ""
 	var locals map[string]string
-	for _, r := range descendantsAny(body, kinds) {
+	var inner map[string]bool // functions and lambdas the fixture defines
+	if fixture {
+		inner = map[string]bool{}
+		for _, d := range descendantsAny(body, []string{"function_definition"}) {
+			if id := firstChildAny(d, []string{"identifier"}); id != nil {
+				inner[id.Text()] = true
+			}
+		}
+		for _, a := range descendantsAny(body, []string{"assignment"}) {
+			if k := namedKids(a); len(k) == 2 && k[0].Type() == "identifier" && k[1].Type() == "lambda" {
+				inner[k[0].Text()] = true
+			}
+		}
+	}
+	factory := false
+	for _, r := range ownDescendants(body, kinds) {
 		var v content.AST
 		for _, c := range r.Children() {
 			if c.IsNamed() {
@@ -383,6 +405,10 @@ func pyReturnType(fn content.AST, fixture bool) string {
 		}
 		if v == nil && r.Type() == "yield" {
 			continue // a bare yield: the fixture only sets up and tears down
+		}
+		if fixture && v != nil && (v.Type() == "lambda" || v.Type() == "identifier" && inner[v.Text()]) {
+			factory = true
+			continue
 		}
 		t := pyValueType(v)
 		if v != nil && v.Type() == "identifier" {
@@ -403,6 +429,12 @@ func pyReturnType(fn content.AST, fixture bool) string {
 			return "" // a return of something else, or of two classes
 		}
 		cls = t[len(pyTypeTag):]
+	}
+	if factory {
+		if cls != "" {
+			return ""
+		}
+		return pyFactoryTag
 	}
 	return cls
 }
@@ -499,6 +531,10 @@ type pyTyper struct {
 	reexport    func(pkg, name string) (string, string, bool)
 	fields      map[string]map[string]string
 	returns     map[string]string
+	// imported is the qid a module (by file path) binds name to with a
+	// from-import of a repo function ("" when none): a conftest gathering
+	// fixtures from other modules
+	imported func(path, name string) string
 }
 
 // dotted turns "a.b.C" into the call shape import resolution reads.
@@ -699,6 +735,15 @@ func (p *pyTyper) elemClass(c pyCtx, v string) string {
 	return ""
 }
 
+// fixtureOf is the fixture the parameter name of function q receives.
+func (p *pyTyper) fixtureOf(q, name string) string {
+	c, ok := p.ctx(q)
+	if !ok {
+		return ""
+	}
+	return p.fixture(c, name)
+}
+
 // fixture is the qid of the pytest fixture a test's parameter name receives:
 // a function of that name in the test's own module, else in the nearest
 // conftest.py above it.
@@ -710,8 +755,14 @@ func (p *pyTyper) fixture(c pyCtx, name string) string {
 		return ""
 	}
 	for dir := path.Dir(c.path); ; dir = path.Dir(dir) {
-		if q := qualifyModule(pkgOfFile(path.Join(dir, "conftest.py"), "python"), name); p.allDefs[q] && !p.isMethod[q] {
+		cf := path.Join(dir, "conftest.py")
+		if q := qualifyModule(pkgOfFile(cf, "python"), name); p.allDefs[q] && !p.isMethod[q] {
 			return q
+		}
+		if p.imported != nil {
+			if q := p.imported(cf, name); q != "" {
+				return q
+			}
 		}
 		if dir == "." || dir == "/" || dir == "" {
 			return ""
@@ -852,4 +903,62 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 		typed = append(typed, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassScope + cls})
 	}
 	return rest, typed
+}
+
+// ownDescendants are the nodes of the given types in n that belong to n's
+// own function: not inside a function or lambda nested in it (a factory's
+// return is not the fixture's).
+func ownDescendants(n content.AST, types []string) []content.AST {
+	var out []content.AST
+	var walk func(n content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			if c.Type() == "function_definition" || c.Type() == "lambda" {
+				continue
+			}
+			if containsStr(types, c.Type()) {
+				out = append(out, c)
+			}
+			walk(c)
+		}
+	}
+	walk(n)
+	return out
+}
+
+// pyFixtureFactory: every value a fixture returns or yields is a function it
+// defines itself (def _make(...): ...; return _make) or a lambda.
+func pyFixtureFactory(fn content.AST) bool {
+	body := firstChildAny(fn, []string{"block"})
+	if body == nil {
+		return false
+	}
+	inner := map[string]bool{}
+	for _, d := range descendantsAny(body, []string{"function_definition"}) {
+		if id := firstChildAny(d, []string{"identifier"}); id != nil {
+			inner[id.Text()] = true
+		}
+	}
+	for _, a := range descendantsAny(body, []string{"assignment"}) {
+		if k := namedKids(a); len(k) == 2 && k[0].Type() == "identifier" && k[1].Type() == "lambda" {
+			inner[k[0].Text()] = true
+		}
+	}
+	seen := false
+	for _, r := range ownDescendants(body, []string{"return_statement", "yield"}) {
+		var v content.AST
+		for _, c := range r.Children() {
+			if c.IsNamed() {
+				v = c
+			}
+		}
+		if v == nil {
+			continue
+		}
+		if !(v.Type() == "lambda" || v.Type() == "identifier" && inner[v.Text()]) {
+			return false
+		}
+		seen = true
+	}
+	return seen
 }

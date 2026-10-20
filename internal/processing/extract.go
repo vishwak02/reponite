@@ -235,6 +235,9 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		vars = javaVarTypes(fn)
 	case "python":
 		vars, returns = pyVarTypes(fn, fixture || strings.HasPrefix(nameOf(fn, r), "test")), pyReturnType(fn, fixture)
+		vars = withPyParams(fn, vars, fixture || strings.HasPrefix(nameOf(fn, r), "test"))
+	case "javascript", "typescript":
+		vars = jsLocals(fn)
 	}
 	pmin, pmax, hasParams := 0, 0, false
 	if r.CallSiteKinds {
@@ -813,6 +816,9 @@ func extractVarFunc(decl content.AST, r LangRules, normVer int, doc []byte, encl
 		s.Callees = calleesWithRules(fn, r)
 		s.QualifiedCalls = qualifiedCallsWithRules(fn, r)
 	}
+	if langFamily(r.Name) == "js" {
+		s.Vars = jsLocals(fn)
+	}
 	s.Signature = name + "\x1f" + string(content.Canon(filteredNode{AST: fn, drop: drop}, normVer))
 	return s, true
 }
@@ -924,4 +930,103 @@ func firstDescendant(n content.AST, t string) content.AST {
 		}
 	}
 	return nil
+}
+
+// jsLocalTag marks a JS/TS function's own bindings in Symbol.Vars: its
+// parameters (destructured props included) and the names it declares. A bare
+// call of one (a hook's setter, a prop, a local arrow) is that value, never
+// a module-level definition or import of the same name.
+const jsLocalTag = "local"
+
+func jsLocals(fn content.AST) map[string]string {
+	out := map[string]string{}
+	var pattern func(n content.AST)
+	pattern = func(n content.AST) {
+		switch n.Type() {
+		case "identifier", "shorthand_property_identifier_pattern":
+			out[n.Text()] = jsLocalTag
+		case "assignment_pattern", "object_assignment_pattern":
+			if k := namedKids(n); len(k) > 0 {
+				pattern(k[0]) // the default value is not a binding
+			}
+		case "pair_pattern":
+			if k := namedKids(n); len(k) > 1 {
+				pattern(k[len(k)-1])
+			}
+		case "object_pattern", "array_pattern", "rest_pattern", "required_parameter", "optional_parameter", "formal_parameters":
+			for _, k := range namedKids(n) {
+				if k.Type() == "type_annotation" || k.Type() == "accessibility_modifier" {
+					continue
+				}
+				pattern(k)
+			}
+		}
+	}
+	var walk func(n content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			switch c.Type() {
+			case "formal_parameters":
+				pattern(c)
+			case "variable_declarator":
+				if k := namedKids(c); len(k) > 0 {
+					pattern(k[0])
+				}
+			case "catch_clause":
+				if k := namedKids(c); len(k) > 0 && k[0].Type() != "statement_block" {
+					pattern(k[0])
+				}
+			}
+			walk(c)
+		}
+	}
+	walk(fn)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func namedKids(n content.AST) []content.AST {
+	var out []content.AST
+	for _, c := range n.Children() {
+		if c.IsNamed() && !isCommentType(c.Type()) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// pyParamTag marks a Python function's parameter of unknown type in
+// Symbol.Vars: a bare call of it calls the argument, never a module-level
+// function of the same name.
+const pyParamTag = "p:"
+
+// A test's or fixture's parameter the annotation does not type (x:
+// Callable[...]) is still the fixture of its name.
+func withPyParams(fn content.AST, vars map[string]string, test bool) map[string]string {
+	ps := firstChildAny(fn, []string{"parameters", "lambda_parameters"})
+	if ps == nil {
+		return vars
+	}
+	for _, p := range namedKids(ps) {
+		id := p
+		if p.Type() != "identifier" {
+			id = firstChildAny(p, []string{"identifier"})
+		}
+		if id == nil {
+			continue
+		}
+		if vars == nil {
+			vars = map[string]string{}
+		}
+		if _, ok := vars[id.Text()]; !ok {
+			if test && id.Text() != "self" && id.Text() != "cls" {
+				vars[id.Text()] = pyFixtureTag + id.Text()
+			} else {
+				vars[id.Text()] = pyParamTag
+			}
+		}
+	}
+	return vars
 }

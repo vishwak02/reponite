@@ -46,7 +46,8 @@ def main():
         return best
 
     added = 0
-    external, unresolved = set(), set()
+    external, unresolved = set(truth.pop("fixture_external", [])), set()
+    judged = set(truth.pop("fixture_judged", []))  # pygt read these as pytest fixtures
     for rel in sorted(defs_by_path):
         full = os.path.join(root, rel)
         try:
@@ -70,6 +71,8 @@ def main():
             caller = enclosing(rel, node.lineno)
             if caller is None:
                 continue
+            if f"{caller['id']}>{f.attr if isinstance(f, ast.Attribute) else f.id}@{line}:{col}" in judged:
+                continue  # pygt read this call as a pytest fixture's
             try:
                 targets = script.goto(line, col, follow_imports=True)
                 if not targets:

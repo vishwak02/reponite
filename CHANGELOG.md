@@ -133,6 +133,14 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 - **JS/TS bare calls**: `f()` is the module's own `f`, else a local (a hook's setter, a
   prop) or a global (`new Map()`), never another module's `f`; a name imported from a
   module that does not export it as a function is not linked elsewhere.
+- **JS/TS locals and wrapped components**: a bare call of the function's own binding (a
+  parameter, a destructured prop, `const { f } = this.props`) is that value; a default
+  export wrapped in a higher-order component (`memo(Item)`, `connect(a, b)(Item)`) is the
+  component, so JSX `<Item/>` reaches it.
+- **Python parameters and fixtures**: a called parameter is whatever the caller passed,
+  never a module function of the same name; a test calling a fixture parameter runs the
+  fixture's code only when the fixture returns a function it defines (a factory), found
+  also when a conftest imports the fixture from another module.
 - **`trace`** no longer follows a call on an object of unknown type into the one class
   of the repo with a method of that name (`self.kwargs.get()` into a view's `get`), and
   locates Python/JS symbols by their module (bodies, effects and class attributes were

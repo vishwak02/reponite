@@ -103,8 +103,12 @@ const (
 	//      overloads; class-scope aliases, template-parameter bases through
 	//      aliases, specializations and auto getters returning a field type
 	//      receivers; overload parameter counts merge correctly. JS/TS: a
-	//      bare f() is the module's own or a local/global, and a name
-	//      imported from a read module is never another module's.
+	//      bare f() is the module's own or a local/global (the function's
+	//      own bindings, destructured props included), a name imported from
+	//      a read module is never another module's, and a default export
+	//      wrapped in a HOC (memo(X), connect(…)(X)) is X. Python: a called
+	//      parameter is the argument; a fixture parameter called runs the
+	//      fixture only when it returns a function it defines.
 	IndexVer = 17
 
 	// GoTarget documents the intended production Go toolchain. The build

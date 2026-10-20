@@ -316,6 +316,25 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}}, true
 	}
 	py.reexport = func(pkg, name string) (string, string, bool) { return mods.resolveExport(pkg, name, defined) }
+	pyImports := map[string][]ImportBinding{}
+	for _, f := range files {
+		if f.Lang == "python" && path.Base(f.Path) == "conftest.py" {
+			pyImports[f.Path] = f.Imports
+		}
+	}
+	py.imported = func(p, name string) string {
+		for _, b := range pyImports[p] {
+			if b.Local != name || b.Symbol == "" {
+				continue
+			}
+			if mp, ok := mods.resolve("python", p, b.Module); ok {
+				if q := qualifyModule(mp, b.Symbol); allDefs[q] {
+					return q
+				}
+			}
+		}
+		return ""
+	}
 	py.classByName = map[string][]string{}
 	for k, n := range classes.name {
 		py.classByName[n] = append(py.classByName[n], k)
@@ -351,7 +370,45 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			if c.lang == "python" {
 				qcalls, typed = py.typedCalls(qid, qcalls)
 			}
+			var localSites []CallSite
+			if c.lang == "python" && len(c.sym.Vars) > 0 {
+				// a test's parameter named like a fixture is the fixture's
+				// value: calling it runs the fixture's code only when the
+				// fixture returns a function it defines (a factory)
+				kept := qcalls[:0:0]
+				for _, qc := range qcalls {
+					v, local := c.sym.Vars[qc.Name]
+					if qc.Qualifier == "" && v == pyParamTag {
+						// a parameter called: whatever the caller passed
+						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "local"})
+						continue
+					}
+					if qc.Qualifier != "" || !local || !strings.HasPrefix(v, pyFixtureTag) {
+						kept = append(kept, qc)
+						continue
+					}
+					if fq := py.fixtureOf(qid, qc.Name); fq != "" && byQID[fq].sym.Returns == pyFactoryTag {
+						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallModule, Scope: strings.TrimSuffix(fq, "."+qc.Name)})
+					} else {
+						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "fixture"})
+					}
+				}
+				qcalls = kept
+			}
+			if langFamily(c.lang) == "js" && len(c.sym.Vars) > 0 {
+				// a bare call of the function's own binding is that value
+				kept := qcalls[:0:0]
+				for _, qc := range qcalls {
+					if qc.Qualifier == "" && c.sym.Vars[qc.Name] == jsLocalTag {
+						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "local"})
+						continue
+					}
+					kept = append(kept, qc)
+				}
+				qcalls = kept
+			}
 			sites := sitesFromQualified(selfAsPlain(qcalls), c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
+			sites = append(sites, localSites...)
 			sites = append(sites, typed...)
 			if c.lang == "python" {
 				// a name a package __init__ re-exports: the module defining it
