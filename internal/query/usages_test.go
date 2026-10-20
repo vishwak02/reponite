@@ -127,3 +127,31 @@ func TestUsagesShellTopLevelCommand(t *testing.T) {
 		t.Fatalf("usages: %+v", res.Usages)
 	}
 }
+
+// A caller that imports the target under another name (a default import
+// renamed, a barrel's `export { a as b }`) calls it by that name: the call
+// site is found from the call graph, not from the target's own name.
+func TestUsagesRenamedImport(t *testing.T) {
+	m := storage.NewMem()
+	m.PutFile("r", "HEAD", query.File{
+		Path:    "src/list/header.tsx",
+		Content: "export default function OrderListHeader() {\n  return null;\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "OrderListHeader", StartLine: 1, EndLine: 3}},
+	})
+	m.PutFile("r", "HEAD", query.File{
+		Path: "src/list/index.tsx",
+		Content: "import Header from '@app/list/header';\nimport { Table } from '@app/table';\n" +
+			"export function OrderList() {\n  return (\n    <div>\n      <Header />\n      <Table />\n    </div>\n  );\n}\n",
+		Symbols: []query.SymbolSpan{{Name: "OrderList", StartLine: 3, EndLine: 10}},
+	})
+	m.Put("r", "HEAD", "src/list.header.OrderListHeader", storage.SymbolRecord{})
+	m.Put("r", "HEAD", "src/table.Table", storage.SymbolRecord{})
+	m.Put("r", "HEAD", "src/list.OrderList", storage.SymbolRecord{Callees: []query.Callee{
+		{Name: "src/list.header.OrderListHeader", ResolutionMethod: "name-resolved", Confidence: 0.9},
+		{Name: "src/table.Table", ResolutionMethod: "name-resolved", Confidence: 0.9}}})
+
+	res := query.Usages(m, "r", "HEAD", "src/list.header.OrderListHeader")
+	if res.Total != 1 || res.Usages[0].Line != 6 || !res.Usages[0].Confirmed {
+		t.Errorf("renamed import: %+v", res.Usages)
+	}
+}

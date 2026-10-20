@@ -33,6 +33,9 @@ type CallSite struct {
 	// Recv is a CallMember receiver's expression (cpptypes.go recvExpr),
 	// typed at index time once every file's class facts are known.
 	Recv string
+	// NArgs is a C/C++ call's argument count plus one (0: not counted), to
+	// tell overloads of one name apart.
+	NArgs int
 }
 
 // CallTyped: a member call whose receiver's declared type is known (a
@@ -51,6 +54,19 @@ func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []Cal
 			continue
 		}
 		cs, ok := classifyCallee(kids[0], r)
+		if ok {
+			for _, k := range kids {
+				if k.Type() == "argument_list" {
+					n := 0
+					for _, a := range k.Children() {
+						if a.IsNamed() && !isCommentType(a.Type()) {
+							n++
+						}
+					}
+					cs.NArgs = n + 1
+				}
+			}
+		}
 		if ok && cs.Kind == CallMember && r.Name == "cpp" {
 			if k := kids[0].Children(); len(k) > 0 {
 				cs.Recv = recvExpr(k[0], vars)
@@ -116,8 +132,24 @@ func classifyCallee(fn content.AST, r LangRules) (CallSite, bool) {
 		}
 		return CallSite{Name: name, Kind: CallScoped, Scope: scopes[len(scopes)-1], Root: scopes[0]}, true
 	}
-	// Anything else — a call through a function pointer, a subscript, a
-	// lambda call — keeps the old identifier rule as a plain call.
+	inner := fn
+	for inner.Type() == "parenthesized_expression" {
+		var next content.AST
+		for _, c := range inner.Children() {
+			if c.IsNamed() {
+				next = c
+			}
+		}
+		if next == nil {
+			break
+		}
+		inner = next
+	}
+	if isFunctionLiteral(inner.Type()) {
+		return CallSite{}, false // [&]{ … }(): the body's names are not the callee
+	}
+	// Anything else — a call through a function pointer, a subscript — keeps
+	// the old identifier rule as a plain call.
 	ids := identLeaves(fn, callNameTypes(r))
 	if len(ids) == 0 {
 		return CallSite{}, false

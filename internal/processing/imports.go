@@ -282,7 +282,79 @@ func jsImports(root content.AST) []ImportBinding {
 	for _, stmt := range descendantsAny(root, []string{"import_statement"}) {
 		out = append(out, jsImportStatement(stmt)...)
 	}
+	for _, d := range descendantsAny(root, []string{"variable_declarator"}) {
+		out = append(out, jsLoadedModule(d)...)
+	}
 	return out
+}
+
+// jsLoadedModule binds a module loaded into a variable: `const m = await
+// import('./m')` or `const m = require('./m')` (m's namespace), and
+// `const { a, b: c } = require('./m')` (its names).
+func jsLoadedModule(decl content.AST) []ImportBinding {
+	var target, value content.AST
+	for _, c := range decl.Children() {
+		switch {
+		case !c.IsNamed():
+		case target == nil:
+			target = c
+		case value == nil:
+			value = c
+		}
+	}
+	if target == nil || value == nil {
+		return nil
+	}
+	if value.Type() == "await_expression" {
+		for _, c := range value.Children() {
+			if c.IsNamed() {
+				value = c
+			}
+		}
+	}
+	if value.Type() != "call_expression" {
+		return nil
+	}
+	var fn, args content.AST
+	for _, c := range value.Children() {
+		switch {
+		case c.Type() == "arguments":
+			args = c
+		case fn == nil && (c.Type() == "import" || c.Type() == "identifier"):
+			fn = c
+		}
+	}
+	if fn == nil || args == nil || fn.Type() == "identifier" && fn.Text() != "require" {
+		return nil
+	}
+	mod := ""
+	for _, a := range args.Children() {
+		if a.Type() == "string" {
+			mod = strings.Trim(a.Text(), "'\"`")
+		}
+	}
+	if mod == "" {
+		return nil
+	}
+	switch target.Type() {
+	case "identifier":
+		return []ImportBinding{{Local: target.Text(), Module: mod}}
+	case "object_pattern":
+		var out []ImportBinding
+		for _, p := range target.Children() {
+			switch p.Type() {
+			case "shorthand_property_identifier_pattern":
+				out = append(out, ImportBinding{Local: p.Text(), Module: mod, Symbol: p.Text()})
+			case "pair_pattern":
+				ids := identLeaves(p, []string{"identifier", "property_identifier"})
+				if len(ids) == 2 {
+					out = append(out, ImportBinding{Local: ids[1], Module: mod, Symbol: ids[0]})
+				}
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func jsImportStatement(stmt content.AST) []ImportBinding {

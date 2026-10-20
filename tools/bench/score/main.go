@@ -337,6 +337,8 @@ func ext(lang string) string {
 		return ".py"
 	case "typescript":
 		return ".ts"
+	case "cpp":
+		return ".cpp"
 	}
 	return ""
 }

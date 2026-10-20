@@ -152,7 +152,7 @@ func (x *spanIndex) locate0(qid string) (symLoc, bool) {
 		for _, c := range cands {
 			f := x.byPath[c.Path]
 			line := lineAt(f.Content, c.Span.StartLine)
-			if hasWordAt(line, class+"::"+base) || recv.MatchString(line) {
+			if scopedDef(line, class, base) || recv.MatchString(line) {
 				return c, true
 			}
 		}

@@ -71,6 +71,23 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   pinned on a repo method. Python `Cls.f()` reaches a classmethod a base defines (never a
   subclass override); `u = User(...).set_password(...)` with `-> Self` is a `User`, and
   `User(...).save()` calls `User.save`. Reindex to pick it up.
+- **Call edges (IndexVer 16)**: Python `for x in xs` / comprehension variables are typed
+  by what `xs` holds (`list[X]` annotations, a function annotated to return one); pytest
+  fixtures that receive another fixture or yield what they built type their tests;
+  `User.lookup(x).validate()` resolves through `lookup`'s return; an instance the function
+  constructs is exactly its class (no subclass override is a target). JS/TS: `const m =
+  await import('./m')` and `require('./m')` bind the module. C++: `Cls::instance().f()`
+  resolves through the static method's return; a header's inline overload calling the
+  source file's overload of the same name calls that one; the names inside an invoked
+  lambda (`[&]{ … }()`) are no longer read as the call's target. Reindex to pick it up.
+- **`usages`** finds a call made under a renamed import (`import Header from './x'`, a
+  barrel's `export { a as b }`): the call graph says the caller calls the target, and the
+  one imported name the caller calls that no other callee explains is that call.
+- **`semsearch`** ranks a class below its method when the method matches the query, and
+  content-file sections lower against code.
+- **Benchmark**: `tools/bench/gt/cppgt.py` computes C/C++ call-graph truth with clang
+  (libclang bindings matching the system library); headers the repository does not hold
+  are stubbed, so a call whose types come from them is undetermined, not scored.
 - **`ximpact`** takes a qualified library target (`requests.get`, `std::move`) and counts
   only that module's calls; a bare name also finds calls stored as `module::name`, which it
   missed. `--format text` added.
@@ -106,6 +123,8 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   pointer is skipped and reported by `coverage`.
 - `explain` and `trace` placed `dir.f` on a sibling module's `f` (`card.tsx`) instead of the
   directory's own module (`index.tsx`).
+- Benchmark truth: the Go extractor no longer links a call into a package whose import
+  failed to a same-named function of the module (the checker can borrow its position).
 - `usages` missed calls through a Python alias imported in a parenthesized list
   (`from m import (f as _f)`).
 - `explain` and `trace` placed `T.M` on a method of another type whose name ends in `T`

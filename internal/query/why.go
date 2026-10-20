@@ -617,8 +617,8 @@ func looksLikeMethod(f File, sp SymbolSpan, base string) bool {
 	if strings.HasSuffix(f.Path, ".rs") {
 		return rustImplOwner(f, sp) != "" // a fn in an impl block
 	}
-	if fileModuleStem(f.Path) != "" && nestedInClass(f, sp) {
-		return true // a def/method inside a class body
+	if (fileModuleStem(f.Path) != "" || isCLikePath(f.Path)) && nestedInClass(f, sp) {
+		return true // a def/method inside a class body (C++: an inline member; namespaces have no span)
 	}
 	line := declHead(f, sp)
 	return strings.Contains(line, "::"+base+"(") || strings.Contains(line, ") "+base+"(") && strings.HasPrefix(strings.TrimSpace(line), "func (")
@@ -642,7 +642,43 @@ func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
 		}
 	}
 	line := declHead(f, sp)
-	return hasWordAt(line, owner+"::"+base) || hasWordAt(line, owner+") "+base)
+	return scopedDef(line, owner, base) || hasWordAt(line, owner+") "+base)
+}
+
+// scopedDef: line defines base out of class owner — owner::base, or a class
+// template's owner<T, U>::base.
+func scopedDef(line, owner, base string) bool {
+	if hasWordAt(line, owner+"::"+base) {
+		return true
+	}
+	for from := 0; ; {
+		i := strings.Index(line[from:], owner+"<")
+		if i < 0 {
+			return false
+		}
+		at := from + i
+		from = at + 1
+		if at > 0 && isIdentByte(line[at-1]) {
+			continue
+		}
+		depth, j := 0, at+len(owner)
+		for ; j < len(line); j++ {
+			if line[j] == '<' {
+				depth++
+			} else if line[j] == '>' {
+				depth--
+				if depth == 0 {
+					break
+				}
+			}
+		}
+		if rest := strings.TrimLeft(line[min(j+1, len(line)):], " "); strings.HasPrefix(rest, "::"+base) {
+			r := rest[len("::"+base):]
+			if r == "" || !isIdentByte(r[0]) {
+				return true
+			}
+		}
+	}
 }
 
 // hasWordAt: s holds w not preceded by an identifier character (Client)
@@ -750,4 +786,13 @@ func declHead(f File, sp SymbolSpan) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// isCLikePath: a C or C++ source or header.
+func isCLikePath(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx":
+		return true
+	}
+	return false
 }

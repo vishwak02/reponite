@@ -143,6 +143,7 @@ func callerSiteUsages(s Store, ref, symbol, base string, callers map[string]map[
 			continue
 		}
 		files := s.Files(rp, ref)
+		snap := s.Snapshot(rp, ref)
 		byPath := map[string]File{}
 		byDir := map[string][]File{} // a caller's package directory -> its files
 		for _, f := range files {
@@ -183,22 +184,98 @@ func callerSiteUsages(s Store, ref, symbol, base string, callers map[string]map[
 				re = regexp.MustCompile(`\b(?:` + strings.Join(names, "|") + `)\b`)
 			}
 			lines := strings.Split(f.Content, "\n")
-			for ln := span.StartLine + 1; ln <= span.EndLine && ln <= len(lines); ln++ {
-				text := lines[ln-1]
-				if !re.MatchString(text) {
-					continue
-				}
+			found := false
+			add := func(ln int) {
+				found = true
 				k := rp + "\x00" + path + "\x00" + strconv.Itoa(ln)
 				if seen[k] {
-					continue
+					return
 				}
 				seen[k] = true
-				out = append(out, Usage{Repo: rp, Path: path, Line: ln, Text: strings.TrimSpace(text),
+				out = append(out, Usage{Repo: rp, Path: path, Line: ln, Text: strings.TrimSpace(lines[ln-1]),
 					In: caller, Confirmed: true})
+			}
+			for ln := span.StartLine + 1; ln <= span.EndLine && ln <= len(lines); ln++ {
+				if re.MatchString(lines[ln-1]) {
+					add(ln)
+				}
+			}
+			if !found {
+				// The call graph says this caller calls the target, yet its body
+				// never names it: it calls it under a name its imports give it (a
+				// renamed default import, a barrel's `export { a as b }`). That
+				// name is the one imported name the caller calls which none of its
+				// other callees explains.
+				if n := renamedImport(f, span, lines, base, snap.Callees[caller]); n != nil {
+					for ln := span.StartLine + 1; ln <= span.EndLine && ln <= len(lines); ln++ {
+						if n.MatchString(lines[ln-1]) {
+							add(ln)
+						}
+					}
+				}
 			}
 		}
 	}
 	return out
+}
+
+var (
+	reImportedNames = regexp.MustCompile(`(?m)^\s*import\s+(?:type\s+)?([^'";]*?)\s+from\s+['"]`)
+	rePyImportedAs  = regexp.MustCompile(`\bimport\s+(?:\(([^)]*)\)|([^\n]*))`)
+)
+
+// renamedImport is a pattern for the one name the caller's file imports, and
+// the caller calls (f(…), <F …>), that none of the caller's other resolved
+// callees is named — the local name the target goes by there; nil when there
+// is not exactly one.
+func renamedImport(f File, span SymbolSpan, lines []string, base string, callees []Callee) *regexp.Regexp {
+	var names []string
+	switch strings.ToLower(filepath.Ext(f.Path)) {
+	case ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".vue", ".svelte":
+		for _, m := range reImportedNames.FindAllStringSubmatch(f.Content, -1) {
+			clause := strings.NewReplacer("{", ",", "}", ",", "* as ", "").Replace(m[1])
+			for _, spec := range strings.Split(clause, ",") {
+				fs := strings.Fields(strings.TrimPrefix(strings.TrimSpace(spec), "type "))
+				if len(fs) > 0 {
+					names = append(names, fs[len(fs)-1])
+				}
+			}
+		}
+	case ".py":
+		for _, m := range rePyImportedAs.FindAllStringSubmatch(f.Content, -1) {
+			for _, spec := range strings.Split(m[1]+m[2], ",") {
+				if fs := strings.Fields(spec); len(fs) == 3 && fs[1] == "as" {
+					names = append(names, fs[2])
+				}
+			}
+		}
+	default:
+		return nil
+	}
+	explained := map[string]bool{base: true}
+	for _, c := range callees {
+		n := c.Name
+		if i := strings.LastIndexAny(n, ".:"); i >= 0 {
+			n = n[i+1:]
+		}
+		explained[n] = true
+	}
+	body := strings.Join(lines[min(span.StartLine, len(lines)):min(span.EndLine, len(lines))], "\n")
+	var cand []string
+	seen := map[string]bool{}
+	for _, n := range names {
+		if seen[n] || explained[n] || !isIdent(n) {
+			continue
+		}
+		seen[n] = true
+		if regexp.MustCompile(`(?:<` + regexp.QuoteMeta(n) + `\b|\b` + regexp.QuoteMeta(n) + `\s*\()`).MatchString(body) {
+			cand = append(cand, n)
+		}
+	}
+	if len(cand) != 1 {
+		return nil
+	}
+	return regexp.MustCompile(`(?:<` + regexp.QuoteMeta(cand[0]) + `\b|\b` + regexp.QuoteMeta(cand[0]) + `\s*\()`)
 }
 
 func sortedKeysBool(m map[string]map[string]bool) []string {

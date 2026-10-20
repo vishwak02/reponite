@@ -6,6 +6,7 @@ package processing
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/query"
@@ -198,6 +199,10 @@ type siteIndex struct {
 	callerPkg  string
 	callerTest bool
 	caller     string // the calling definition's qid
+	// arity: a C/C++ definition's parameter range (min, max; max -1:
+	// variadic); nargs: the call being resolved's argument count plus one
+	arity map[string][2]int
+	nargs int
 }
 
 // MethodTyped: a member call resolved on the receiver's DECLARED type (its
@@ -247,6 +252,9 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		if s.Kind == CallTyped || s.Kind == CallModule || s.Kind == CallScoped || s.Kind == CallExternal || s.Scope == superScope {
 			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
 		}
+		if s.NArgs > 0 {
+			key += "\x00" + strconv.Itoa(s.NArgs) // f(a) and f(a, b): two overloads
+		}
 		cur, ok := best[key]
 		if !ok {
 			order = append(order, key)
@@ -272,12 +280,16 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	for _, key := range order {
 		s := best[key]
 		name := s.Name
+		x.nargs = s.NArgs
 		switch s.Kind {
 		case CallTyped:
-			if strings.HasPrefix(s.Scope, pyClassExact) {
-				cls := strings.TrimPrefix(s.Scope, pyClassExact)
-				if q, found := x.classes.method(cls, name, false, x.nodeSet); found {
+			if strings.HasPrefix(s.Scope, pyClassExact) || strings.HasPrefix(s.Scope, pyClassNew) {
+				exactCls := strings.HasPrefix(s.Scope, pyClassExact)
+				cls := strings.TrimPrefix(strings.TrimPrefix(s.Scope, pyClassExact), pyClassNew)
+				if q, found := x.classes.method(cls, name, false, x.nodeSet); found && exactCls {
 					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				} else if found {
+					add(query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
 				} else {
 					add(query.Callee{Name: x.classes.name[cls] + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 				}
@@ -456,7 +468,7 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		t = "std::container" // a container's own member: size, insert, push_back, …
 	}
 	if strings.Contains(t, "::") || x.types.classes[t] != nil {
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
 	}
 	return s // a type the ref does not define (template parameter, using-imported library type)
 }
@@ -470,14 +482,21 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 		return []query.Callee{{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}}
 	}
 	var out []query.Callee
+	several := false
 	for _, c := range x.types.lineage(cls) {
 		if q, ok := pickOne(x.byRecv[c+"."+name], x); ok {
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
 			break
 		}
+		if len(x.byRecv[c+"."+name]) > 1 {
+			several = true // overloads in several files, which one not told
+			break
+		}
 	}
 	out = append(out, overrides(cls, name, x)...)
-	if len(out) == 0 {
+	if len(out) == 0 && several {
+		out = append(out, query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous})
+	} else if len(out) == 0 {
 		out = append(out, query.Callee{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 	}
 	return out
@@ -561,11 +580,35 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 			}
 		}
 	}
+	if x.nargs > 0 && len(cands) > 1 {
+		// overloads of one name: only those taking the call's argument count
+		n := x.nargs - 1
+		var fit []string
+		for _, q := range cands {
+			a, known := x.arity[q]
+			if !known || n >= a[0] && (a[1] < 0 || n <= a[1]) {
+				fit = append(fit, q)
+			}
+		}
+		if len(fit) > 0 {
+			cands = fit
+		}
+	}
 	switch len(cands) {
 	case 0:
 		return "", false
 	case 1:
 		return cands[0], true
+	case 2:
+		// A::f() defined twice — inline in the header and out of line in the
+		// source (two overloads) — and one of them is the caller: it calls
+		// the other (a wrapper taking the lock), not itself
+		if cands[0] == x.caller {
+			return cands[1], true
+		}
+		if cands[1] == x.caller {
+			return cands[0], true
+		}
 	}
 	var local []string
 	for _, q := range cands {
@@ -646,9 +689,9 @@ func declaredTypeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		if t == "" {
 			t = "extern"
 		}
-		return CallSite{Name: s.Name, Kind: CallExternal, Scope: t}
+		return CallSite{Name: s.Name, Kind: CallExternal, Scope: t, NArgs: s.NArgs}
 	case t != "":
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
 	}
 	return s
 }

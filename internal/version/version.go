@@ -86,7 +86,14 @@ const (
 	//      Go init per file (init@file), git revisions type-checked with
 	//      every tracked Go file, partly built packages resolved by scope;
 	//      Python Cls.f() through the class's MRO.
-	IndexVer = 15
+	//  16: Python loop and comprehension variables typed by their
+	//      container (list[X], a function returning one), pytest fixtures
+	//      that receive or yield other fixtures, Cls.make().f() chains, and
+	//      instances a function constructs are exactly their class; JS/TS
+	//      `await import()` / require() bind a module; C++ Cls::f().m()
+	//      receivers through f's return, a header overload calling the
+	//      source's overload; an invoked lambda's body is not its callee.
+	IndexVer = 16
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

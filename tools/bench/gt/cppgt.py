@@ -1,0 +1,264 @@
+"""Call-graph ground truth for C/C++, from clang (needs the libclang Python
+bindings matching the system libclang: `pip install clang==<version>`).
+
+Every source file is parsed by clang with the repository's include
+directories. A header the repository includes but does not hold (a system or
+third-party library) is replaced by an empty stub, so each file parses
+without its dependencies: a call clang binds to a definition is an edge, a
+call it binds outside the repository is resolved there, and a call it cannot
+bind (its receiver's type came from a stubbed header) is left undetermined —
+listed among the names the definition calls, never guessed.
+
+Calls to constructors and destructors are not recorded (reponite links a
+construction to the class), nor is virtual dispatch: an edge goes to the
+method the call names statically.
+
+usage: python3 -I cppgt.py <dir> [--libclang PATH] [--jobs N] > truth.json
+"""
+
+import json
+import multiprocessing
+import os
+import re
+import sys
+import tempfile
+
+import clang.cindex as ci
+
+SOURCES = (".c", ".cc", ".cpp", ".cxx")
+HEADERS = (".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp")
+SKIP_DIRS = {".git", "build", "devel", "install", "node_modules", "__pycache__", ".venv"}
+DEF_KINDS = {
+    ci.CursorKind.FUNCTION_DECL, ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_TEMPLATE,
+    ci.CursorKind.CONVERSION_FUNCTION,
+}
+CLASS_KINDS = {ci.CursorKind.CLASS_DECL, ci.CursorKind.STRUCT_DECL, ci.CursorKind.CLASS_TEMPLATE,
+               ci.CursorKind.CLASS_TEMPLATE_PARTIAL_SPECIALIZATION}
+INCLUDE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.M)
+
+
+def is_test_path(rel):
+    parts = rel.split("/")
+    base = parts[-1].lower()
+    return any(p in ("test", "tests") for p in parts[:-1]) or base.startswith("test_") or \
+        re.search(r"[_-]test\.", base) is not None
+
+
+def walk(root):
+    for d, dirs, files in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and not x.startswith("."))
+        for f in sorted(files):
+            yield os.path.join(d, f)
+
+
+def system_dirs():
+    out = []
+    for base in ("/usr/include/c++", "/usr/include/x86_64-linux-gnu/c++"):
+        if os.path.isdir(base):
+            for v in sorted(os.listdir(base), key=lambda s: [int(x) if x.isdigit() else 0 for x in s.split(".")])[-1:]:
+                out.append(os.path.join(base, v))
+    gcc = "/usr/lib/gcc/x86_64-linux-gnu"
+    if os.path.isdir(gcc):
+        for v in sorted(os.listdir(gcc))[-1:]:
+            out.append(os.path.join(gcc, v, "include"))
+    out += ["/usr/include/x86_64-linux-gnu", "/usr/include"]
+    return [d for d in out if os.path.isdir(d)]
+
+
+def stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir):
+    """Write an empty header for every include no directory provides."""
+    have = set()
+    for f in sources + headers:
+        try:
+            text = open(f, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for _, name in INCLUDE.findall(text):
+            if name in have:
+                continue
+            here = os.path.join(os.path.dirname(f), name)
+            if os.path.exists(here) or any(os.path.exists(os.path.join(d, name)) for d in inc_dirs + sys_dirs):
+                continue
+            have.add(name)
+            dst = os.path.join(stub_dir, name)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            open(dst, "a").close()
+
+
+def def_name(c):
+    p = c.semantic_parent
+    if p is not None and p.kind in CLASS_KINDS and p.spelling:
+        return p.spelling + "." + c.spelling
+    return c.spelling
+
+
+def parse_one(job):
+    path, args, root, lib = job
+    if not ci.Config.loaded:
+        ci.Config.set_library_file(lib)
+    index = ci.Index.create()
+    try:
+        tu = index.parse(path, args=args, options=ci.TranslationUnit.PARSE_INCOMPLETE)
+    except ci.TranslationUnitLoadError:
+        return [], []
+    prefix = root + os.sep
+    defs, calls = [], []
+
+    def rel(cur):
+        f = cur.location.file
+        if f is None:
+            return None
+        n = os.path.realpath(f.name)
+        return n[len(prefix):] if n.startswith(prefix) else None
+
+    def visit(node, owner):
+        for c in node.get_children():
+            r = rel(c)
+            if c.kind in DEF_KINDS and c.is_definition() and r is not None:
+                did = "%s:%d" % (r, c.location.line)
+                # every name the body calls, bound or not: a call clang could not
+                # bind (its types came from a stubbed header) is not even a
+                # CALL_EXPR, and must read as undetermined, not as absent
+                toks = [t.spelling for t in c.get_tokens()]
+                called = {}
+                for a, b in zip(toks, toks[1:]):
+                    if b in ("(", "<") and re.match(r"^[A-Za-z_]\w*$", a):  # f(…) or f<T>(…)
+                        called[a] = called.get(a, 0) + 1
+                if c.spelling in called:
+                    called[c.spelling] -= 1  # the definition's own name
+                defs.append({"usr": c.get_usr(), "id": did, "path": r, "line": c.location.line,
+                             "end": c.extent.end.line, "name": def_name(c), "called": called})
+                visit(c, did)
+                continue
+            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and c.spelling.startswith("operator"):
+                # a == b: reponite records no call site for it, so it is named
+                # (undetermined) but never an edge
+                calls.append({"from": owner, "name": c.spelling, "usr": None, "external": False,
+                              "line": c.location.line, "bound": False})
+                visit(c, owner)
+                continue
+            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and c.spelling:
+                ref = c.referenced
+                if ref is not None and ref.kind in (ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR):
+                    calls.append({"from": owner, "name": c.spelling, "usr": None, "external": False,
+                                  "line": c.location.line, "bound": True})
+                    visit(c, owner)
+                    continue
+                target, external, at = None, False, None
+                if ref is not None:
+                    d = ref.get_definition() or ref
+                    if rel(d) is None and d.location.file is not None:
+                        external = True
+                    target = ref.get_usr()
+                    if ref.get_definition() is not None and rel(d) is not None:
+                        # the definition this file sees: two programs of the repo may
+                        # each define a function of the same signature (same USR)
+                        at = "%s:%d" % (rel(d), d.location.line)
+                calls.append({"from": owner, "name": c.spelling, "usr": target, "external": external,
+                              "line": c.location.line, "bound": ref is not None, "at": at})
+            # a lambda or a local class: its calls stay with the enclosing definition
+            visit(c, owner)
+
+    visit(tu.cursor, None)
+    return defs, calls
+
+
+def main():
+    argv = sys.argv[1:]
+    lib = "/usr/lib/x86_64-linux-gnu/libclang-21.so.1"
+    jobs = os.cpu_count() or 2
+    if "--libclang" in argv:
+        i = argv.index("--libclang")
+        lib = argv[i + 1]
+        del argv[i:i + 2]
+    if "--jobs" in argv:
+        i = argv.index("--jobs")
+        jobs = int(argv[i + 1])
+        del argv[i:i + 2]
+    root = os.path.realpath(argv[0])
+    files = list(walk(root))
+    sources = [f for f in files if f.endswith(SOURCES)]
+    headers = [f for f in files if f.endswith(HEADERS)]
+    # every directory holding headers, and every include/ directory's parent
+    # chain, is an include root: `#include "pkg/x.h"` and `#include "x.h"`
+    inc = set()
+    for h in headers:
+        d = os.path.dirname(h)
+        inc.add(d)
+        parts = os.path.relpath(d, root).split(os.sep)
+        for i, p in enumerate(parts):
+            if p == "include":
+                inc.add(os.path.join(root, *parts[:i + 1]))
+    inc_dirs = sorted(inc)
+    sys_dirs = system_dirs()
+    stub_dir = tempfile.mkdtemp(prefix="cppgt-stubs-")
+    stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir)
+    args = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++"]
+    for d in inc_dirs + [stub_dir] + sys_dirs:
+        args += ["-I", d]
+    jobs_list = [(f, (args if not f.endswith(".c") else ["-x", "c", "-std=c11"] + args[3:]), root, lib)
+                 for f in sources]
+    with multiprocessing.Pool(jobs) as pool:
+        results = pool.map(parse_one, jobs_list, chunksize=4)
+
+    # Overloads (and const/non-const twins) of one name in one directory are
+    # one definition, as reponite stores them: the first of them stands for
+    # all, and a call to any of them is a call to it.
+    groups = {}
+    for ds, _ in results:
+        for d in ds:
+            k = (os.path.dirname(d["path"]), d["name"])
+            g = groups.setdefault(k, {})
+            g[d["id"]] = d
+    canon = {}
+    defs = []
+    for k, g in groups.items():
+        first = min(g.values(), key=lambda d: (d["path"], d["line"]))
+        for i in g:
+            canon[i] = first["id"]
+        defs.append({"id": first["id"], "path": first["path"], "line": first["line"], "end": first["end"],
+                     "name": first["name"], "test": is_test_path(first["path"])})
+    by_usr = {}
+    names, written, own_usrs = {}, {}, {}
+    for ds, _ in results:
+        for d in ds:
+            by_usr.setdefault(d["usr"], canon[d["id"]])
+            if d["id"] == canon[d["id"]]:
+                own_usrs.setdefault(d["id"], set()).add(d["usr"])
+            names.setdefault(canon[d["id"]], set()).update(n for n, k in d["called"].items() if k > 0)
+            for n, k in d["called"].items():
+                key = (canon[d["id"]], n)
+                written[key] = max(written.get(key, 0), k)
+    edges, external, have = [], set(), set()
+    bound = {}
+    for _, cs in results:
+        for c in cs:
+            c["from"] = canon.get(c["from"], c["from"])
+            names.setdefault(c["from"], set()).add(c["name"])
+            if c["bound"]:
+                key = (c["from"], c["name"])
+                bound[key] = bound.get(key, 0) + 1
+            to = canon.get(c["at"]) if c.get("at") else None
+            if to is None:
+                to = by_usr.get(c["usr"]) if c["usr"] else None
+            if to == c["from"] and c["usr"] not in own_usrs.get(c["from"], ()):
+                continue  # one overload calling another: one definition once collapsed
+            if to:
+                if (c["from"], to) not in have:
+                    have.add((c["from"], to))
+                    edges.append({"from": c["from"], "to": to, "kind": "static", "line": c["line"]})
+            elif c["external"]:
+                external.add(c["from"] + ">" + c["name"])
+    out = {"lang": "cpp", "defs": sorted(defs, key=lambda d: d["id"]),
+           "edges": sorted(edges, key=lambda e: (e["from"], e["to"])),
+           "names": {k: sorted(v) for k, v in sorted(names.items())},
+           "resolved_external": sorted(external),
+           # a name called more often than clang bound it: some call of it is
+           # undetermined, whatever the others resolved to
+           "unresolved": sorted(f + ">" + n for (f, n), k in written.items() if k > bound.get((f, n), 0))}
+    print(f"cppgt: {len(sources)} sources, {len(defs)} definitions, {len(edges)} edges", file=sys.stderr)
+    json.dump(out, sys.stdout, indent=1)
+
+
+if __name__ == "__main__":
+    main()

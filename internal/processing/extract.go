@@ -42,6 +42,10 @@ type Symbol struct {
 	// Returns is the class a Python function returns (annotation or
 	// constructor), dotted as written.
 	Returns string
+	// Params: a C/C++ function's parameter count, from ParamMin (without
+	// defaulted ones) to ParamMax (-1: variadic); HasParams when counted.
+	ParamMin, ParamMax int
+	HasParams          bool
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -78,6 +82,9 @@ type QualifiedCall struct {
 	// pkg.Do(), 3 or more for a.b.Do() or pkg.New().Run() — where the
 	// qualifier is not the thing Do is looked up on.
 	Chain int
+	// Result: the callee is looked up on what a call returned — f().Do()
+	// (Qualifier f) or Cls.make().Do() (Qualifier Cls, Attr make).
+	Result bool
 }
 
 func isCommentType(t string) bool { return strings.Contains(t, "comment") }
@@ -106,9 +113,9 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 			}
 			switch {
 			case containsStr(r.FuncDecl, t):
-				appendNamed(&out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing))
+				appendNamed(&out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n)))
 			case containsStr(r.MethodDecl, t):
-				appendNamed(&out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing))
+				appendNamed(&out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n)))
 			case containsStr(r.VarFuncDecl, t):
 				if s, ok := extractVarFunc(child, r, normVer, joinDoc(doc), enclosing); ok {
 					out = append(out, s)
@@ -162,7 +169,7 @@ func appendNamed(out *[]Symbol, s Symbol) {
 	}
 }
 
-func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte, enclosing string) Symbol {
+func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc []byte, enclosing string, fixture bool) Symbol {
 	var canonBody []byte
 	var callees []string
 	var qcalls []QualifiedCall
@@ -223,9 +230,16 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	case "java":
 		vars = javaVarTypes(fn)
 	case "python":
-		vars, returns = pyVarTypes(fn, strings.HasPrefix(nameOf(fn, r), "test")), pyReturnType(fn)
+		vars, returns = pyVarTypes(fn, fixture || strings.HasPrefix(nameOf(fn, r), "test")), pyReturnType(fn, fixture)
+	}
+	pmin, pmax, hasParams := 0, 0, false
+	if r.CallSiteKinds {
+		pmin, pmax, hasParams = cParamCount(fn)
 	}
 	return Symbol{
+		ParamMin:       pmin,
+		ParamMax:       pmax,
+		HasParams:      hasParams,
 		Vars:           vars,
 		Returns:        returns,
 		Name:           nameOf(fn, r),
@@ -239,6 +253,34 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		LocalImports:   localImports,
 		CallSites:      sites,
 	}
+}
+
+// cParamCount is a C/C++ definition's parameter count: required ones, and
+// the most it takes (-1 when variadic); (void) takes none.
+func cParamCount(fn content.AST) (min, max int, ok bool) {
+	decl := firstDescendant(fn, "function_declarator")
+	if decl == nil {
+		return 0, 0, false
+	}
+	ps := firstChildAny(decl, []string{"parameter_list"})
+	if ps == nil {
+		return 0, 0, false
+	}
+	for _, c := range ps.Children() {
+		switch c.Type() {
+		case "parameter_declaration":
+			if strings.TrimSpace(c.Text()) == "void" {
+				continue
+			}
+			min++
+			max++
+		case "optional_parameter_declaration":
+			max++
+		case "variadic_parameter_declaration", "...":
+			return min, -1, true
+		}
+	}
+	return min, max, true
 }
 
 // receiverType returns a method's receiver type name (pointer/spaces stripped),
@@ -343,6 +385,12 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		if len(ids) == 3 && ids[1] != callResult {
 			qc.Attr = ids[1]
 		}
+		if len(ids) >= 3 && ids[len(ids)-2] == callResult {
+			qc.Result = true
+			if len(ids) == 4 && ids[1] != callResult {
+				qc.Attr = ids[1] // Cls.make().Do()
+			}
+		}
 		if qc.Qualifier == "" && r.Builtins[qc.Name] || seen[qc] { // db.set(), qs.filter(): a method, not the builtin
 			continue
 		}
@@ -413,7 +461,10 @@ func calleeLeaves(n content.AST, nameTypes, callTypes []string) []string {
 	if containsStr(nameTypes, n.Type()) {
 		return []string{n.Text()}
 	}
-	if isArgNode(n.Type()) {
+	if isArgNode(n.Type()) || isFunctionLiteral(n.Type()) {
+		// [&]{ … }() / (() => …)(): the function called is the literal itself,
+		// whose own calls are collected as calls of their own — the names in
+		// its body are not what this call calls
 		return nil
 	}
 	var out []string
@@ -754,6 +805,20 @@ func (f deepFiltered) Children() []content.AST {
 }
 
 // decoratesFunction: a Python decorated_definition wrapping a function.
+// isPytestFixture: n is a decorated definition whose decorators include a
+// pytest fixture (@pytest.fixture, @fixture(scope=...)).
+func isPytestFixture(n content.AST) bool {
+	if n == nil || n.Type() != "decorated_definition" {
+		return false
+	}
+	for _, c := range n.Children() {
+		if c.Type() == "decorator" && strings.Contains(c.Text(), "fixture") {
+			return true
+		}
+	}
+	return false
+}
+
 func decoratesFunction(n content.AST) bool {
 	for _, c := range n.Children() {
 		if c.Type() == "function_definition" {
@@ -783,4 +848,31 @@ func objectIsExpression(callee content.AST, nameTypes []string) bool {
 		return len(identLeaves(c, nameTypes)) == 0
 	}
 	return false
+}
+
+// isFunctionLiteral: an anonymous function written in place (a C++ lambda,
+// a JS arrow or function expression, a Python lambda).
+func isFunctionLiteral(t string) bool {
+	switch t {
+	case "lambda_expression", "lambda", "arrow_function", "function_expression", "function", "closure_expression", "func_literal":
+		return true
+	}
+	return false
+}
+
+// firstDescendant is the first node of type t under n, outside any function
+// body (compound_statement) — a definition's own declarator, not a lambda's.
+func firstDescendant(n content.AST, t string) content.AST {
+	for _, c := range n.Children() {
+		if c.Type() == t {
+			return c
+		}
+		if c.Type() == "compound_statement" {
+			continue
+		}
+		if d := firstDescendant(c, t); d != nil {
+			return d
+		}
+	}
+	return nil
 }

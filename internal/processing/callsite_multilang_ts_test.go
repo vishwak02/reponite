@@ -105,6 +105,10 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 			ext = ".java"
 		case strings.HasSuffix(path, ".go"):
 			ext = ".go"
+		case strings.HasSuffix(path, ".cpp"):
+			ext = ".cpp"
+		case strings.HasSuffix(path, ".hpp"):
+			ext = ".hpp"
 		}
 		rules, _ := RulesForExt(ext)
 		root, spans, err := parseFileRules([]byte(src), ext, rules)
@@ -454,8 +458,8 @@ func TestTSConfigPathAliases(t *testing.T) {
   },
 }`,
 		"web/src/components/empty/index.tsx": `export const EmptyPlaceholder = () => null;`,
-		"web/src/types/index.ts": `export function isAgent(x: unknown) { return !!x; }`,
-		"web/src/utils/fmt.ts": `export function fmt(s: string) { return s; }`,
+		"web/src/types/index.ts":             `export function isAgent(x: unknown) { return !!x; }`,
+		"web/src/utils/fmt.ts":               `export function fmt(s: string) { return s; }`,
 		"web/src/components/popConfirm/index.tsx": `const PopconfirmCustom = () => null;
 export default PopconfirmCustom;`,
 		"web/src/dash/Header/Header.tsx": `const GrafanaHeader = () => null;
@@ -889,6 +893,9 @@ func TestPythonChainedConstructorSelfReturn(t *testing.T) {
 	files := map[string]string{
 		"auth/data.py": `from typing import Self
 class User:
+    @classmethod
+    def lookup(cls, name) -> "User":
+        return cls(name)
     def set_password(self, p) -> Self:
         return self
     def validate(self, p) -> Self:
@@ -903,6 +910,8 @@ def test_passwords():
     u.validate("pass")
 def test_save():
     User("v").set_password("x")
+def test_lookup():
+    User.lookup("u").validate("x")
 `,
 	}
 	edges := indexAndEdges(t, files)
@@ -912,4 +921,238 @@ def test_save():
 		t.Errorf("validate pinned on Token: %v", tp)
 	}
 	wantMethod(t, edges["tests.test_data.test_save"], "auth.data.User.set_password", MethodTyped)
+	wantMethod(t, edges["tests.test_data.test_lookup"], "auth.data.User.validate", MethodTyped)
+	if _, bad := edges["tests.test_data.test_lookup"]["auth.data.Token.validate"]; bad {
+		t.Errorf("validate pinned on Token")
+	}
+}
+
+// for x in xs / {x.key(): x for x in xs}: x is an element of what xs holds
+// (list[X] annotations, a function annotated to return one).
+func TestPythonLoopElementTyping(t *testing.T) {
+	files := map[string]string{
+		"app/models.py": `from typing import List
+class Error:
+    def key(self):
+        pass
+class Other:
+    def key(self):
+        pass
+def load() -> List[Error]:
+    return []
+`,
+		"app/use.py": `from app.models import Error, load
+def index(errors: list[Error]):
+    return {e.key(): e for e in errors}
+def walk():
+    for e in load():
+        e.key()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	for _, fn := range []string{"app.use.index", "app.use.walk"} {
+		wantMethod(t, edges[fn], "app.models.Error.key", MethodTyped)
+		if _, bad := edges[fn]["app.models.Other.key"]; bad {
+			t.Errorf("%s: key pinned on Other", fn)
+		}
+	}
+}
+
+// A fixture that receives another fixture and hands it on, or yields what it
+// built, types the tests that ask for it.
+func TestPythonFixtureChain(t *testing.T) {
+	files := map[string]string{
+		"store/db.py": `class Db:
+    def scan(self):
+        pass
+class Cache:
+    def scan(self):
+        pass
+`,
+		"tests/conftest.py": `import pytest
+from store.db import Db
+@pytest.fixture
+def empty_db():
+    d = Db()
+    yield d
+@pytest.fixture
+def db(empty_db):
+    return empty_db
+`,
+		"tests/test_db.py": `def test_scan(db):
+    db.scan()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	ts := edges["tests.test_db.test_scan"]
+	wantMethod(t, ts, "store.db.Db.scan", MethodTyped)
+	if _, bad := ts["store.db.Cache.scan"]; bad {
+		t.Errorf("scan pinned on Cache")
+	}
+}
+
+// An instance the function constructs is exactly that class: a subclass's
+// override is not a possible target (an annotated parameter may be one).
+func TestPythonConstructedInstanceExact(t *testing.T) {
+	files := map[string]string{
+		"auth/data.py": `class User:
+    def save(self):
+        pass
+class AdminUser(User):
+    def save(self):
+        pass
+`,
+		"auth/views.py": `from auth.data import User
+def create():
+    u = User()
+    u.save()
+def update(u: User):
+    u.save()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	cr := edges["auth.views.create"]
+	wantMethod(t, cr, "auth.data.User.save", MethodTyped)
+	if _, bad := cr["auth.data.AdminUser.save"]; bad {
+		t.Errorf("constructed User reaches AdminUser.save: %v", cr)
+	}
+	wantMethod(t, edges["auth.views.update"], "auth.data.AdminUser.save", MethodOverride)
+}
+
+// A module loaded into a variable (await import(), require) is that module's
+// namespace: m.f() is its f.
+func TestTSDynamicImport(t *testing.T) {
+	files := map[string]string{
+		"src/store/index.ts": `export const createStore = () => 1;`,
+		"src/other.ts":       `export const createStore = () => 2;`,
+		"src/app.ts": `export async function boot() {
+  const storeModule = await import('./store');
+  storeModule.createStore();
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	b := edges["src.app.boot"]
+	wantMethod(t, b, "src/store.createStore", MethodResolved)
+	if _, bad := b["src.other.createStore"]; bad {
+		t.Errorf("pinned on src.other: %v", b)
+	}
+}
+
+// Cls::instance().config(): the method on what Cls's static method returns
+// (a singleton), never another class's config.
+func TestCppStaticReturnReceiver(t *testing.T) {
+	files := map[string]string{
+		"lbc/include/lbc/Lbc.hpp": `class Config {};
+class Lbc {
+public:
+    static Lbc& instance();
+    const Config& config();
+};
+class Other {
+public:
+    const Config& config();
+};
+`,
+		"lbc/src/Lbc.cpp": `#include "lbc/Lbc.hpp"
+Lbc& Lbc::instance() { static Lbc l; return l; }
+const Config& Lbc::config() { static Config c; return c; }
+const Config& Other::config() { static Config c; return c; }
+`,
+		"lbc/src/Run.cpp": `#include "lbc/Lbc.hpp"
+void run() {
+    const auto& c = Lbc::instance().config();
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	r := edges["lbc/src.run"]
+	if r == nil {
+		t.Fatalf("run not indexed; have %v", symKeys(edges))
+	}
+	if _, ok := r["lbc/src.Lbc.config"]; !ok {
+		t.Errorf("Lbc::instance().config() not resolved to Lbc.config: %v", r)
+	}
+	if _, bad := r["lbc/src.Other.config"]; bad {
+		t.Errorf("pinned on Other.config: %v", r)
+	}
+}
+
+// An immediately invoked lambda calls the lambda: the names in its body are
+// not callees of the call (its own calls are recorded as calls).
+func TestCppImmediatelyInvokedLambda(t *testing.T) {
+	files := map[string]string{
+		"app/src/relay.cpp": `struct Notification { int level; };
+int result() { return 1; }
+Notification prepare() {
+    return [&]() {
+        Notification result;
+        result.level = 2;
+        return result;
+    }();
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, bad := edges["app/src.prepare"]["app/src.result"]; bad {
+		t.Errorf("a variable inside an invoked lambda read as a call: %v", edges["app/src.prepare"])
+	}
+}
+
+// A header's inline overload calling the source file's overload of the same
+// name calls that one, not itself.
+func TestCppOverloadAcrossFiles(t *testing.T) {
+	files := map[string]string{
+		"hw/include/hw/handler.hpp": `class Handler {
+public:
+    bool available() const {
+        return available(1);
+    }
+    bool available(int lock) const;
+};
+`,
+		"hw/src/handler.cpp": `#include "hw/handler.hpp"
+bool Handler::available(int lock) const { return lock > 0; }
+`,
+	}
+	edges := indexAndEdges(t, files)
+	h := edges["hw/include/hw.Handler.available"]
+	if _, self := h["hw/include/hw.Handler.available"]; self {
+		t.Errorf("the inline overload calls itself: %v", h)
+	}
+	if _, ok := h["hw/src.Handler.available"]; !ok {
+		t.Errorf("the source overload is not called: %v", h)
+	}
+}
+
+// Overloads of one name in two files are told apart by the call's argument
+// count: h.available() is the inline overload, h.available(1) the other.
+func TestCppOverloadByArity(t *testing.T) {
+	files := map[string]string{
+		"hw/include/hw/handler.hpp": `class Handler {
+public:
+    bool available() const {
+        return available(1);
+    }
+    bool available(int lock) const;
+};
+`,
+		"hw/src/handler.cpp": `#include "hw/handler.hpp"
+bool Handler::available(int lock) const { return lock > 0; }
+`,
+		"ui/src/controller.cpp": `#include "hw/handler.hpp"
+class Controller {
+    Handler _hw;
+    bool check();
+};
+bool Controller::check() { return _hw.available(); }
+`,
+	}
+	edges := indexAndEdges(t, files)
+	c := edges["ui/src.Controller.check"]
+	if _, ok := c["hw/include/hw.Handler.available"]; !ok {
+		t.Errorf("h.available() not on the no-argument overload: %v", c)
+	}
+	if _, bad := c["hw/src.Handler.available"]; bad {
+		t.Errorf("h.available() on the one-argument overload: %v", c)
+	}
 }

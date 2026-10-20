@@ -90,6 +90,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		path       string                   // the defining file
 	}
 	var order []string              // qualified ids, first-seen order
+	arity := map[string][2]int{}    // C/C++ qid -> parameter count range
 	byQID := map[string]computed{}  // qid -> facts
 	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
 	var extRefs []query.ExternalRef // cross-repo dependency edges (§8B)
@@ -157,6 +158,20 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				s = mergeOverload(prev.sym, s)
 			}
 			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: imports, path: f.Path}
+			if s.HasParams {
+				// overloads sharing the id take any of their parameter counts
+				a, seen := arity[qid]
+				switch {
+				case !seen:
+					a = [2]int{s.ParamMin, s.ParamMax}
+				default:
+					a[0] = min(a[0], s.ParamMin)
+					if a[1] >= 0 && (s.ParamMax < 0 || s.ParamMax > a[1]) {
+						a[1] = s.ParamMax
+					}
+				}
+				arity[qid] = a
+			}
 			if len(imports) > 0 {
 				extRefs = append(extRefs, resolveExternalRefs(qid, s.QualifiedCalls, imports)...)
 			}
@@ -181,6 +196,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	nodeSet := make(map[string]bool, len(order))
 	x := siteIndex{nodeSet: nodeSet, byBase: byBase, byRecv: map[string][]string{},
 		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
+	x.arity = arity
 	for _, qid := range order {
 		nodeSet[qid] = true
 		c := byQID[qid]

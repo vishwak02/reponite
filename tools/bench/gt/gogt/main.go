@@ -76,6 +76,10 @@ func main() {
 	seenEdge := map[string]bool{}
 	// a declaration position for every function object defined in the module
 	declOf := map[types.Object]string{}
+	modulePkg := map[string]bool{} // import paths of the module's own packages
+	for _, p := range pkgs {
+		modulePkg[p.PkgPath] = true
+	}
 	for _, p := range pkgs {
 		loadErrs += len(p.Errors)
 		for _, f := range p.Syntax {
@@ -160,7 +164,12 @@ func main() {
 					fn = fn.Origin()
 					to := declOf[fn]
 					if to == "" {
-						// declared in another package of the module (loaded separately)
+						// declared in another package of the module (loaded separately);
+						// a package outside it whose import failed can carry a
+						// position borrowed from the module's own code
+						if fn.Pkg() == nil || !modulePkg[fn.Pkg().Path()] {
+							return true
+						}
 						tp, tl := rel(p.Fset, fn.Pos())
 						if tp == "" {
 							return true // outside the module

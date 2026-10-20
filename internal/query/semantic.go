@@ -233,7 +233,7 @@ func spanText(lines []string, start, end int) string {
 
 // TermIndexVersion changes whenever tokenization or the index layout does,
 // so a cached index from another version is rebuilt, never misread.
-const TermIndexVersion = 1
+const TermIndexVersion = 2
 
 // TermIndex is the term ranker's corpus for one repo at one ref: each symbol's
 // identity and its term-frequency vector over a local vocabulary.
@@ -250,6 +250,7 @@ type TermDoc struct {
 	Path   int32
 	Symbol string
 	Line   int32
+	End    int32
 	IDs    []uint32
 	TFs    []uint16
 }
@@ -293,7 +294,7 @@ func BuildTermIndex(files []File) *TermIndex {
 			}
 			add(sp.Name)
 			add(spanText(lines, sp.StartLine, sp.EndLine))
-			d := TermDoc{Path: pi, Symbol: sp.Name, Line: int32(sp.StartLine)}
+			d := TermDoc{Path: pi, Symbol: sp.Name, Line: int32(sp.StartLine), End: int32(sp.EndLine)}
 			if len(counts) > 0 {
 				d.IDs = make([]uint32, 0, len(counts))
 				for id := range counts {
@@ -379,6 +380,7 @@ func termSearch(s Store, repo, ref, q string, limit int, cache TermIndexCache) S
 	}
 	qnorm := norm(qw)
 	var hits []SemanticHit
+	var ends []int // each hit's last line
 	for _, r := range ixs {
 		// Query weight by local term id; idf by local id, computed lazily.
 		qloc := map[uint32]float64{}
@@ -425,14 +427,40 @@ func termSearch(s Store, repo, ref, q string, limit int, cache TermIndexCache) S
 			p := r.ix.Paths[d.Path]
 			hits = append(hits, SemanticHit{Repo: r.repo, Path: p, Symbol: d.Symbol, Line: int(d.Line),
 				Score: adjustScore(dot/(qnorm*dn), p, d.Symbol, qw, matched)})
+			ends = append(ends, int(d.End))
 		}
 	}
+	demoteContainers(hits, ends)
 	SortSemanticHits(hits)
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
 	res.Hits = hits
 	return res
+}
+
+// demoteContainers lowers a class (or any span) that holds another hit
+// scoring at least half as well: the method that matches is the answer, not
+// the class that only contains its text.
+func demoteContainers(hits []SemanticHit, ends []int) {
+	byPath := map[string][]int{}
+	for i, h := range hits {
+		byPath[h.Repo+"\x00"+h.Path] = append(byPath[h.Repo+"\x00"+h.Path], i)
+	}
+	for _, idx := range byPath {
+		if len(idx) < 2 {
+			continue
+		}
+		for _, i := range idx {
+			for _, j := range idx {
+				if i != j && hits[i].Line <= hits[j].Line && ends[j] <= ends[i] && (hits[i].Line < hits[j].Line || ends[j] < ends[i]) &&
+					hits[j].Score >= 0.5*hits[i].Score {
+					hits[i].Score *= 0.6
+					break
+				}
+			}
+		}
+	}
 }
 
 // adjustScore turns a cosine into a ranking score. Cosine alone favors the
@@ -469,7 +497,7 @@ func adjustScore(cos float64, path, symbol string, qw map[string]float64, matche
 		score *= 0.5
 	}
 	if contentLangOf(path) {
-		score *= 0.7
+		score *= 0.5
 	}
 	if IsGeneratedPath(path) {
 		score *= 0.6

@@ -22,7 +22,97 @@ const (
 	pyReturnTag  = "r:"
 	pyFixtureTag = "x:"
 	pyMethodTag  = "m:" // m:<dotted class>#<method>: what Cls(...).method(...) returns
+	pyElemTag    = "e:" // e:<dotted class>: a list (set, sequence, iterable) of that class
+	pyIterTag    = "i:" // i:<value>: an element of that value (a for/comprehension variable)
+	pyNewTag     = "n:" // n:<dotted class>: an instance this function constructs (exactly that class)
 )
+
+// pyContainers are the generic types whose first argument is the type of
+// what iterating them yields.
+var pyContainers = map[string]bool{
+	"list": true, "List": true, "set": true, "Set": true, "frozenset": true, "FrozenSet": true,
+	"Sequence": true, "MutableSequence": true, "Iterable": true, "Iterator": true, "Collection": true,
+	"tuple": true, "Tuple": true, "Generator": true, "AbstractSet": true,
+}
+
+// pyElemRef is the dotted class a container annotation holds: list[Order],
+// List["Order"], Optional[Sequence[Order]], tuple[Order, ...]; "" otherwise.
+func pyElemRef(t content.AST) string {
+	if t == nil {
+		return ""
+	}
+	switch t.Type() {
+	case "type":
+		for _, c := range t.Children() {
+			if c.IsNamed() {
+				return pyElemRef(c)
+			}
+		}
+	case "subscript", "generic_type":
+		var head content.AST
+		var args []content.AST
+		for _, c := range t.Children() {
+			switch {
+			case !c.IsNamed():
+			case head == nil:
+				head = c
+			case c.Type() == "type_parameter":
+				for _, a := range c.Children() {
+					if a.IsNamed() {
+						args = append(args, a)
+					}
+				}
+			default:
+				args = append(args, c)
+			}
+		}
+		h := dottedRef(head)
+		if len(h) == 0 || len(args) == 0 {
+			return ""
+		}
+		switch last := h[len(h)-1]; {
+		case last == "Optional" && len(args) == 1:
+			return pyElemRef(args[0])
+		case pyContainers[last]:
+			if last == "tuple" || last == "Tuple" {
+				// tuple[X, ...] is a sequence of X; tuple[X, Y] is not
+				if len(args) != 2 || strings.TrimSpace(args[1].Text()) != "..." && args[1].Type() != "ellipsis" {
+					return ""
+				}
+			}
+			return pyTypeRef(args[0])
+		}
+	case "binary_operator": // list[X] | None
+		var named []content.AST
+		for _, c := range t.Children() {
+			if c.IsNamed() {
+				named = append(named, c)
+			}
+		}
+		if len(named) == 2 && named[1].Type() == "none" {
+			return pyElemRef(named[0])
+		}
+	}
+	return ""
+}
+
+// pyLoopParts is a for statement's or comprehension clause's variable and
+// what it iterates.
+func pyLoopParts(n content.AST) (left, right content.AST) {
+	seenIn := false
+	for _, c := range n.Children() {
+		switch {
+		case c.Type() == "in":
+			seenIn = true
+		case !c.IsNamed():
+		case !seenIn && left == nil:
+			left = c
+		case seenIn && right == nil:
+			right = c
+		}
+	}
+	return left, right
+}
 
 // pyTypeRef is the dotted class a type annotation names: Order, models.Order,
 // Optional[Order] / Order | None (the Order), "Order" (a forward reference).
@@ -186,6 +276,8 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 			}
 			if t := pyTypeRef(typ); name != "" && t != "" {
 				vars[name] = pyTypeTag + t
+			} else if e := pyElemRef(typ); name != "" && e != "" {
+				vars[name] = pyElemTag + e
 			}
 		}
 	}
@@ -201,9 +293,32 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 		name := left.Text()
 		if t := pyTypeRef(typ); t != "" {
 			vars[name] = pyTypeTag + t
+		} else if e := pyElemRef(typ); e != "" {
+			vars[name] = pyElemTag + e
 		} else if v := pyValueType(right); v != "" {
 			if _, annotated := vars[name]; !annotated || !strings.HasPrefix(vars[name], pyTypeTag) {
+				if strings.HasPrefix(v, pyTypeTag) {
+					v = pyNewTag + v[len(pyTypeTag):] // x = Cls(...): exactly Cls
+				}
 				vars[name] = v
+			}
+		}
+	}
+	// for x in xs / [f(x) for x in xs]: x is an element of what xs holds
+	for _, l := range descendantsAny(body, []string{"for_statement", "for_in_clause"}) {
+		left, right := pyLoopParts(l)
+		if left == nil || left.Type() != "identifier" || right == nil {
+			continue
+		}
+		if _, typed := vars[left.Text()]; typed {
+			continue
+		}
+		switch {
+		case right.Type() == "identifier":
+			vars[left.Text()] = pyIterTag + "v:" + right.Text()
+		case right.Type() == "call":
+			if v := pyValueType(right); strings.HasPrefix(v, pyReturnTag) {
+				vars[left.Text()] = pyIterTag + v
 			}
 		}
 	}
@@ -231,7 +346,7 @@ func pyAssignParts(a content.AST) (left, typ, right content.AST) {
 
 // pyReturnType is the class a function returns: its return annotation, else
 // the class every `return Cls(...)` of its body constructs.
-func pyReturnType(fn content.AST) string {
+func pyReturnType(fn content.AST, fixture bool) string {
 	afterArrow := false
 	for _, c := range fn.Children() {
 		if c.Type() == "->" {
@@ -239,29 +354,50 @@ func pyReturnType(fn content.AST) string {
 			continue
 		}
 		if afterArrow && c.Type() == "type" {
-			return pyTypeRef(c)
+			if t := pyTypeRef(c); t != "" {
+				return t
+			}
+			if e := pyElemRef(c); e != "" {
+				return pyElemTag + e // -> list[Order]
+			}
+			return ""
 		}
 	}
 	body := firstChildAny(fn, []string{"block"})
 	if body == nil {
 		return ""
 	}
+	// a pytest fixture hands the test what it yields, too
+	kinds := []string{"return_statement"}
+	if fixture {
+		kinds = append(kinds, "yield")
+	}
 	cls := ""
 	var locals map[string]string
-	for _, r := range descendantsAny(body, []string{"return_statement"}) {
+	for _, r := range descendantsAny(body, kinds) {
 		var v content.AST
 		for _, c := range r.Children() {
 			if c.IsNamed() {
 				v = c
 			}
 		}
+		if v == nil && r.Type() == "yield" {
+			continue // a bare yield: the fixture only sets up and tears down
+		}
 		t := pyValueType(v)
 		if v != nil && v.Type() == "identifier" {
 			// app = Flask(...); ...; return app
 			if locals == nil {
-				locals = pyVarTypes(fn, false)
+				locals = pyVarTypes(fn, fixture)
 			}
 			t = locals[v.Text()]
+			if strings.HasPrefix(t, pyNewTag) {
+				t = pyTypeTag + t[len(pyNewTag):]
+			}
+		}
+		if strings.HasPrefix(t, pyFixtureTag) && fixture && (cls == "" || cls == t) {
+			cls = t // a fixture handing on another fixture it receives
+			continue
 		}
 		if !strings.HasPrefix(t, pyTypeTag) || cls != "" && cls != t[len(pyTypeTag):] {
 			return "" // a return of something else, or of two classes
@@ -337,6 +473,10 @@ const pyClassScope = "\x00pycls:"
 // pyClassExact prefixes a CallTyped scope for a call on the class itself
 // (Cls.f()): the method its MRO reaches, without subclass overrides.
 const pyClassExact = "\x00pyclsx:"
+
+// pyClassNew prefixes a CallTyped scope for a call on an instance of exactly
+// that class (x = Cls(...); x.f()): the method its MRO reaches, typed.
+const pyClassNew = "\x00pyclsn:"
 
 // pyCtx is what typing needs from one definition: where it is, its typed
 // names, and how its file's imports read a dotted name.
@@ -440,6 +580,8 @@ func (p *pyTyper) externalValue(c pyCtx, v string) string {
 	switch {
 	case strings.HasPrefix(v, pyTypeTag):
 		return p.externalClass(c, v[len(pyTypeTag):])
+	case strings.HasPrefix(v, pyNewTag):
+		return p.externalClass(c, v[len(pyNewTag):])
 	case strings.HasPrefix(v, pyReturnTag), strings.HasPrefix(v, pyFixtureTag):
 		var q string
 		if strings.HasPrefix(v, pyFixtureTag) {
@@ -450,7 +592,7 @@ func (p *pyTyper) externalValue(c pyCtx, v string) string {
 		if q == "" {
 			return ""
 		}
-		if fc, ok := p.ctx(q); ok && fc.returns != "" {
+		if fc, ok := p.ctx(q); ok && fc.returns != "" && !strings.HasPrefix(fc.returns, pyElemTag) {
 			return p.externalClass(fc, fc.returns)
 		}
 	}
@@ -487,7 +629,9 @@ func (p *pyTyper) returnClass(q string) string {
 	}
 	p.returns[q] = "" // a cycle reads as unknown
 	k := ""
-	if c, ok := p.ctx(q); ok && c.returns != "" {
+	if c, ok := p.ctx(q); ok && strings.HasPrefix(c.returns, pyFixtureTag) {
+		k = p.valueClass(c, c.returns)
+	} else if ok && c.returns != "" && !strings.HasPrefix(c.returns, pyElemTag) {
 		if c.returns == "Self" && c.recv != "" {
 			// -> Self (typing.Self): the class the method is called on; its own
 			// class stands for it
@@ -505,6 +649,8 @@ func (p *pyTyper) valueClass(c pyCtx, v string) string {
 	switch {
 	case strings.HasPrefix(v, pyTypeTag):
 		return p.class(c, v[len(pyTypeTag):])
+	case strings.HasPrefix(v, pyNewTag):
+		return p.class(c, v[len(pyNewTag):])
 	case strings.HasPrefix(v, pyReturnTag):
 		if q := p.function(c, v[len(pyReturnTag):]); q != "" {
 			return p.returnClass(q)
@@ -513,6 +659,8 @@ func (p *pyTyper) valueClass(c pyCtx, v string) string {
 		if q := p.fixture(c, v[len(pyFixtureTag):]); q != "" {
 			return p.returnClass(q)
 		}
+	case strings.HasPrefix(v, pyIterTag):
+		return p.elemClass(c, v[len(pyIterTag):])
 	case strings.HasPrefix(v, pyMethodTag):
 		cls, m, _ := strings.Cut(v[len(pyMethodTag):], "#")
 		if k := p.class(c, cls); k != "" {
@@ -520,6 +668,33 @@ func (p *pyTyper) valueClass(c pyCtx, v string) string {
 				return p.returnClass(q)
 			}
 		}
+	}
+	return ""
+}
+
+// elemClass is the class key of what iterating an encoded value yields: a
+// variable annotated list[X], or what a function or fixture annotated to
+// return one returns.
+func (p *pyTyper) elemClass(c pyCtx, v string) string {
+	if name, ok := strings.CutPrefix(v, "v:"); ok {
+		if v = c.vars[name]; strings.HasPrefix(v, pyIterTag) {
+			return "" // an element of an element: not followed
+		}
+	}
+	var q string
+	switch {
+	case strings.HasPrefix(v, pyElemTag):
+		return p.class(c, v[len(pyElemTag):])
+	case strings.HasPrefix(v, pyReturnTag):
+		q = p.function(c, v[len(pyReturnTag):])
+	case strings.HasPrefix(v, pyFixtureTag):
+		q = p.fixture(c, v[len(pyFixtureTag):])
+	}
+	if q == "" {
+		return ""
+	}
+	if fc, ok := p.ctx(q); ok && strings.HasPrefix(fc.returns, pyElemTag) {
+		return p.class(fc, fc.returns[len(pyElemTag):])
 	}
 	return ""
 }
@@ -601,10 +776,26 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 	var rest []QualifiedCall
 	var typed []CallSite
 	for _, qc := range qcs {
-		cls, chain := "", qc.Chain
+		cls, chain, exact := "", qc.Chain, false
 		switch {
 		case qc.Chain >= 2 && qc.Qualifier != "self" && qc.Qualifier != "cls":
 			v, ok := c.vars[qc.Qualifier]
+			if qc.Result && qc.Chain == 4 && qc.Attr != "" {
+				// User.lookup(x).validate(): the method lookup returns, on the
+				// class (Cls.make()) or on a typed value (repo.find())
+				owner := ""
+				if ok {
+					owner = p.valueClass(c, v)
+				} else if isTypeName(qc.Qualifier) {
+					owner = p.class(c, qc.Qualifier)
+				}
+				if owner != "" {
+					if q, found := p.classes.method(owner, qc.Attr, false, p.allDefs); found {
+						cls = p.returnClass(q)
+					}
+				}
+				break
+			}
 			if !ok && qc.Chain == 2 && isTypeName(qc.Qualifier) {
 				if k := p.class(c, qc.Qualifier); k != "" {
 					// Cls.f(): the method Cls's MRO reaches — a classmethod or
@@ -618,7 +809,7 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 				// the instance the class constructs
 				v, ok, chain = pyReturnTag+qc.Qualifier, true, 2
 				if isTypeName(qc.Qualifier) {
-					v = pyTypeTag + qc.Qualifier
+					v = pyNewTag + qc.Qualifier
 				}
 			}
 			if !ok {
@@ -630,6 +821,7 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 				typed = append(typed, CallSite{Name: qc.Name, Kind: CallExternal, Scope: ext})
 				continue
 			}
+			exact = strings.HasPrefix(v, pyNewTag)
 			switch cls = p.valueClass(c, v); {
 			case cls == "" || chain == 2:
 			case chain == 3 && qc.Attr != "":
@@ -649,6 +841,12 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 		}
 		if cls == "" {
 			rest = append(rest, qc)
+			continue
+		}
+		if exact && chain == 2 {
+			// an instance the function constructs is that class, never a
+			// subclass: no override can run in its place
+			typed = append(typed, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassNew + cls})
 			continue
 		}
 		typed = append(typed, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassScope + cls})

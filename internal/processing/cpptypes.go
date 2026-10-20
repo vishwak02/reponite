@@ -358,6 +358,13 @@ func recvExpr(n content.AST, vars map[string]string) string {
 		}
 	case "call_expression":
 		k := n.Children()
+		if len(k) > 0 && k[0].Type() == "qualified_identifier" {
+			// Cls::instance().m(): what Cls's static method returns — or, when
+			// Cls::instance names no method (ns::make()), as below
+			if scope, name := scopeAndLeaf(k[0]); scope != "" && name != "" {
+				return "q:" + scope + "::" + name
+			}
+		}
 		if len(k) > 0 && (k[0].Type() == "identifier" || k[0].Type() == "qualified_identifier") {
 			// X(…).m(): a temporary of class X, or getX()->… on the implicit
 			// this — "t:" decides at index time (a free function is neither).
@@ -394,6 +401,27 @@ func recvExpr(n content.AST, vars map[string]string) string {
 		return then(base, "()"+m)
 	}
 	return ""
+}
+
+// scopeAndLeaf splits a qualified callee Cls::f (ns::Cls::f) into its last
+// scope and its name; "" when the scope is not a plain name.
+func scopeAndLeaf(n content.AST) (string, string) {
+	k := n.Children()
+	if len(k) == 0 {
+		return "", ""
+	}
+	var scope string
+	switch k[0].Type() {
+	case "namespace_identifier", "type_identifier", "identifier":
+		scope = k[0].Text()
+	default:
+		return "", ""
+	}
+	rest := k[len(k)-1]
+	if rest.Type() == "qualified_identifier" {
+		return scopeAndLeaf(rest)
+	}
+	return scope, calleeLeaf(rest)
 }
 
 // calleeLeaf is the last name of an identifier or qualified callee.
@@ -797,6 +825,14 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 		t, _ = tt.fieldType(callerRecv, head[2:])
 	case head == "c:":
 		t = callerRecv
+	case strings.HasPrefix(head, "q:"):
+		// Cls::f(): Cls's static method's return; ns::X(): a temporary of X
+		scope, name, _ := strings.Cut(head[2:], "::")
+		if c := tt.canon(scope); tt.classes[c] != nil {
+			t = tt.methodReturn(c, name)
+		} else if c := tt.canon(name); tt.classes[c] != nil {
+			t = c
+		}
 	case strings.HasPrefix(head, "t:"):
 		name := head[2:]
 		if c := tt.canon(name); tt.classes[c] != nil {
