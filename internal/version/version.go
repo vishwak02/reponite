@@ -92,7 +92,9 @@ const (
 	//      instances a function constructs are exactly their class; JS/TS
 	//      `await import()` / require() bind a module; C++ Cls::f().m()
 	//      receivers through f's return, a header overload calling the
-	//      source's overload; an invoked lambda's body is not its callee.
+	//      source's overload; an invoked lambda's body is not its callee;
+	//      googletest cases are Suite.Case, friend functions are free, and a
+	//      class defined again in another source file is Cls@file.
 	IndexVer = 16
 
 	// GoTarget documents the intended production Go toolchain. The build

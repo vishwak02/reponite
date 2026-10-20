@@ -73,6 +73,22 @@ func (x *spanIndex) splitQID(qid string) (dir, local string) {
 // locate finds the span defining qid. ok is false when the source of qid is
 // not indexed (an external callee, or a symbol from a stored-only file).
 func (x *spanIndex) locate(qid string) (symLoc, bool) {
+	if q, stem, ok := splitFileQualified(qid); ok {
+		// Cls@file.f: class Cls of that source file (a second class of the
+		// name in the directory)
+		c, ok := x.locate0(q)
+		if ok && fileStemOf(c.Path) == stem {
+			return c, true
+		}
+		dir, local := x.splitQID(q)
+		parts := strings.Split(local, ".")
+		for _, o := range x.byName[dir+"\x00"+parts[len(parts)-1]] {
+			if fileStemOf(o.Path) == stem {
+				return o, true
+			}
+		}
+		return symLoc{}, false
+	}
 	c, ok := x.locate0(qid)
 	if !ok || !strings.HasSuffix(c.Path, ".py") {
 		return c, ok
@@ -654,4 +670,29 @@ func rustImplTypeText(h string) string {
 		h = h[i+2:]
 	}
 	return h
+}
+
+// splitFileQualified reads dir.Cls@file.f, the id of a class whose name a
+// class in another source file of the directory already has: dir.Cls.f and
+// the file's stem.
+func splitFileQualified(qid string) (string, string, bool) {
+	i := strings.LastIndex(qid, "@")
+	if i < 0 || strings.Contains(qid[i:], "/") {
+		return "", "", false
+	}
+	j := strings.Index(qid[i:], ".")
+	if j < 0 {
+		return "", "", false
+	}
+	stem := qid[i+1 : i+j]
+	if stem == "" {
+		return "", "", false
+	}
+	return qid[:i] + qid[i+j:], stem, true
+}
+
+// fileStemOf is a path's base name without its extension.
+func fileStemOf(p string) string {
+	b := filepath.Base(p)
+	return strings.TrimSuffix(b, filepath.Ext(b))
 }

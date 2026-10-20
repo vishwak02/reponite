@@ -1156,3 +1156,112 @@ bool Controller::check() { return _hw.available(); }
 		t.Errorf("h.available() on the one-argument overload: %v", c)
 	}
 }
+
+// A field typed as another class's nested class (Outer::Handle) calls that
+// nested class's method.
+func TestCppNestedClassField(t *testing.T) {
+	files := map[string]string{
+		"ui/include/ui/ptl.hpp": `class PtlController {
+public:
+    class Handle {
+    public:
+        void showBase();
+    };
+};
+`,
+		"ui/include/ui/controller.hpp": `#include "ui/ptl.hpp"
+class Controller {
+public:
+    class Handle {
+    public:
+        void showGuide();
+    private:
+        PtlController::Handle _ptl;
+    };
+};
+`,
+		"ui/src/ptl.cpp": `#include "ui/ptl.hpp"
+void PtlController::Handle::showBase() {}
+`,
+		"ui/src/controller.cpp": `#include "ui/controller.hpp"
+void Controller::Handle::showGuide() { _ptl.showBase(); }
+`,
+	}
+	edges := indexAndEdges(t, files)
+	g := edges["ui/src.Handle.showGuide"]
+	if g == nil {
+		t.Fatalf("showGuide not indexed; have %v", symKeys(edges))
+	}
+	if _, ok := g["ui/src.Handle.showBase"]; !ok {
+		t.Errorf("_ptl.showBase() not resolved: %v", g)
+	}
+}
+
+// A friend function defined in a class body is a free function, not a
+// method of the class.
+func TestCppFriendIsFreeFunction(t *testing.T) {
+	files := map[string]string{
+		"nav/include/nav/state.hpp": `struct NavState {
+    int status;
+    friend bool same(const NavState& a, const NavState& b) { return a.status == b.status; }
+    bool done() const { return status == 1; }
+};
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["nav/include/nav.same"]; !ok {
+		t.Errorf("friend not a free function; have %v", symKeys(edges))
+	}
+	if _, ok := edges["nav/include/nav.NavState.done"]; !ok {
+		t.Errorf("member lost; have %v", symKeys(edges))
+	}
+}
+
+// Each googletest case is its own definition, Suite.Case, and its calls stay
+// its own.
+func TestCppGTestNames(t *testing.T) {
+	files := map[string]string{
+		"lbc/test/agent_test.cpp": `int addError() { return 1; }
+int clearError() { return 0; }
+TEST_F(AgentTest, AddsError) {
+    addError();
+}
+TEST_F(AgentTest, ClearsError) {
+    clearError();
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["lbc/test.AgentTest.AddsError"]["lbc/test.addError"]; !ok {
+		t.Errorf("AddsError: %v (have %v)", edges["lbc/test.AgentTest.AddsError"], symKeys(edges))
+	}
+	if _, ok := edges["lbc/test.AgentTest.ClearsError"]["lbc/test.clearError"]; !ok {
+		t.Errorf("ClearsError: %v", edges["lbc/test.AgentTest.ClearsError"])
+	}
+}
+
+// Two test files of one directory each defining a fixture of the same name
+// are two classes: each file's calls stay its own.
+func TestCppSameClassInTwoSources(t *testing.T) {
+	files := map[string]string{
+		"tests/a_test.cpp": `int setupA() { return 1; }
+class Fixture { void init(); };
+void Fixture::init() { setupA(); }
+`,
+		"tests/b_test.cpp": `int setupB() { return 2; }
+class Fixture { void init(); };
+void Fixture::init() { setupB(); }
+`,
+	}
+	edges := indexAndEdges(t, files)
+	a, b := edges["tests.Fixture.init"], edges["tests.Fixture@b_test.init"]
+	if _, ok := a["tests.setupA"]; !ok {
+		t.Errorf("a_test's init: %v (have %v)", a, symKeys(edges))
+	}
+	if _, ok := b["tests.setupB"]; !ok {
+		t.Errorf("b_test's init: %v", b)
+	}
+	if _, bad := a["tests.setupB"]; bad {
+		t.Errorf("a_test's init took b_test's calls")
+	}
+}

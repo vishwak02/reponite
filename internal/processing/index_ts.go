@@ -284,6 +284,11 @@ func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 			switch {
 			case containsStr(r.FuncDecl, t), containsStr(r.MethodDecl, t):
 				if name := nameOf(w, r); name != "" {
+					if r.CallSiteKinds {
+						if _, tc, ok := gtestName(w, name); ok {
+							name = tc // TEST_F(Suite, Case): named like its symbol
+						}
+					}
 					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})
 				}
 			case containsStr(r.VarFuncDecl, t):

@@ -242,11 +242,12 @@ func resolveSiteEdges(callerPkg, callerRecv string, sites []CallSite, x siteInde
 func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, x siteIndex) []query.Callee {
 	best := map[string]CallSite{}
 	var order []string
+	typeRecv, _, _ := strings.Cut(callerRecv, "@") // Cls@file is class Cls for its fields and bases
 	for _, s := range sites {
 		if lang == "rust" || lang == "java" {
-			s = declaredTypeSite(s, callerRecv, x)
+			s = declaredTypeSite(s, typeRecv, x)
 		} else {
-			s = typeSite(s, callerRecv, x)
+			s = typeSite(s, typeRecv, x)
 		}
 		key := s.Name
 		if s.Kind == CallTyped || s.Kind == CallModule || s.Kind == CallScoped || s.Kind == CallExternal || s.Scope == superScope {

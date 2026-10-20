@@ -8,6 +8,7 @@ package processing
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -135,6 +136,9 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 					nested = nameOf(child, r)
 				}
 				walk(child, nested)
+			case t == "friend_declaration":
+				// a friend function defined in a class body is a free function
+				walk(child, "")
 			case containsStr(r.ScopeDecl, t):
 				// A scope block (e.g. Rust `impl T`) qualifies its nested methods by
 				// its own name, but is not itself a symbol.
@@ -236,13 +240,21 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	if r.CallSiteKinds {
 		pmin, pmax, hasParams = cParamCount(fn)
 	}
+	name := nameOf(fn, r)
+	if r.CallSiteKinds {
+		// TEST_F(Suite, Case) { … }: a test named Suite.Case, not one more
+		// "TEST_F" sharing an id with every other test of the directory
+		if suite, tc, ok := gtestName(fn, name); ok {
+			name, recv, kind = tc, suite, "function"
+		}
+	}
 	return Symbol{
 		ParamMin:       pmin,
 		ParamMax:       pmax,
 		HasParams:      hasParams,
 		Vars:           vars,
 		Returns:        returns,
-		Name:           nameOf(fn, r),
+		Name:           name,
 		Recv:           recv,
 		Kind:           kind,
 		Signature:      string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
@@ -253,6 +265,43 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		LocalImports:   localImports,
 		CallSites:      sites,
 	}
+}
+
+var reGTestMacro = regexp.MustCompile(`^(TYPED_)?TEST(_F|_P)?$`)
+
+// gtestName reads a googletest definition, TEST(Suite, Case) and its _F/_P
+// forms, as written: the macro's two arguments.
+func gtestName(fn content.AST, name string) (suite, tc string, ok bool) {
+	if !reGTestMacro.MatchString(name) {
+		return "", "", false
+	}
+	decl := firstDescendant(fn, "function_declarator")
+	if decl == nil {
+		return "", "", false
+	}
+	ps := firstChildAny(decl, []string{"parameter_list"})
+	if ps == nil {
+		return "", "", false
+	}
+	var args []string
+	for _, c := range ps.Children() {
+		if c.IsNamed() && !isCommentType(c.Type()) {
+			args = append(args, strings.TrimSpace(c.Text()))
+		}
+	}
+	if len(args) != 2 || !isPlainIdent(args[0]) || !isPlainIdent(args[1]) {
+		return "", "", false
+	}
+	return args[0], args[1], true
+}
+
+func isPlainIdent(s string) bool {
+	for i, c := range s {
+		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 // cParamCount is a C/C++ definition's parameter count: required ones, and

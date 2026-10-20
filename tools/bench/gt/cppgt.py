@@ -13,7 +13,13 @@ Calls to constructors and destructors are not recorded (reponite links a
 construction to the class), nor is virtual dispatch: an edge goes to the
 method the call names statically.
 
-usage: python3 -I cppgt.py <dir> [--libclang PATH] [--jobs N] > truth.json
+usage: python3 -I cppgt.py <dir> [--libclang PATH] [--jobs N] [--headers DIR]... > truth.json
+
+--headers DIR adds a tree of real headers (a copy of a build image's
+/opt/ros/<distro>/include, /usr/include and the workspace's generated
+devel/include): every directory named include under it, and eigen3, become
+include paths, so far fewer headers are stubbed and far fewer calls stay
+undetermined.
 """
 
 import json
@@ -63,6 +69,24 @@ def system_dirs():
             out.append(os.path.join(gcc, v, "include"))
     out += ["/usr/include/x86_64-linux-gnu", "/usr/include"]
     return [d for d in out if os.path.isdir(d)]
+
+
+def header_dirs(roots):
+    """Include paths a copied header tree provides: each directory named
+    include (or include/eigen3) under it, shallowest first."""
+    out = []
+    for r in roots:
+        for d, dirs, _ in os.walk(r):
+            depth = d[len(r):].count(os.sep)
+            if depth > 6:
+                dirs[:] = []
+                continue
+            if os.path.basename(d) == "include":
+                out.append(d)
+                if os.path.isdir(os.path.join(d, "eigen3")):
+                    out.append(os.path.join(d, "eigen3"))
+                dirs[:] = []  # an include tree's own subdirectories are reached through it
+    return out
 
 
 def stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir):
@@ -126,8 +150,14 @@ def parse_one(job):
                         called[a] = called.get(a, 0) + 1
                 if c.spelling in called:
                     called[c.spelling] -= 1  # the definition's own name
+                name = def_name(c)
+                # with googletest present the body is a TestBody method of a
+                # generated class; stubbed, TEST_F(…) parses as a function
+                if c.spelling in ("TestBody", toks[0] if toks else "") and len(toks) > 4 and \
+                        re.match(r"^(TYPED_)?TEST(_F|_P)?$", toks[0]):
+                    name = toks[2] + "." + toks[4]  # TEST_F(Suite, Case) { … }: Suite.Case
                 defs.append({"usr": c.get_usr(), "id": did, "path": r, "line": c.location.line,
-                             "end": c.extent.end.line, "name": def_name(c), "called": called})
+                             "end": c.extent.end.line, "name": name, "called": called})
                 visit(c, did)
                 continue
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and c.spelling.startswith("operator"):
@@ -171,6 +201,11 @@ def main():
         i = argv.index("--libclang")
         lib = argv[i + 1]
         del argv[i:i + 2]
+    extra = []
+    while "--headers" in argv:
+        i = argv.index("--headers")
+        extra.append(os.path.realpath(argv[i + 1]))
+        del argv[i:i + 2]
     if "--jobs" in argv:
         i = argv.index("--jobs")
         jobs = int(argv[i + 1])
@@ -190,7 +225,9 @@ def main():
             if p == "include":
                 inc.add(os.path.join(root, *parts[:i + 1]))
     inc_dirs = sorted(inc)
-    sys_dirs = system_dirs()
+    # the host's own C and C++ library headers first; the copied tree fills in
+    # what the host lacks (ROS, Eigen, Boost, the generated messages)
+    sys_dirs = system_dirs() + header_dirs(extra)
     stub_dir = tempfile.mkdtemp(prefix="cppgt-stubs-")
     stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir)
     args = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++"]

@@ -426,7 +426,7 @@ func explainSymbol(s Store, repo, ref, qid string, files []File, idx *spanIndex,
 			sym.Lang = langOfPath(loc.Path)
 		}
 		_, local := idx.splitQID(qid)
-		facts := sourceFacts(content, normLang(sym.Lang), loc.Span.StartLine, loc.Span.EndLine, inClassLocal(local, loc.Path))
+		facts := sourceFacts(content, normLang(sym.Lang), loc.Span.StartLine, loc.Span.EndLine, inClassLocal(local, loc.Path) || inOwnerSpan(*f, loc.Span, local))
 		sym.Kind, sym.Signature, sym.Decorators, sym.Doc, sym.DocLine = facts.Kind, facts.Signature, facts.Decorators, facts.Doc, facts.DocLine
 	} else {
 		res.Omitted = append(res.Omitted, "body(source not indexed)")
@@ -935,7 +935,7 @@ func explainFile(s Store, repo, ref, path string, files []File, idx *spanIndex, 
 		}
 		l, _ := idx.locate(q)
 		_, local := idx.splitQID(q)
-		facts := sourceFacts(f.Content, lang, l.Span.StartLine, l.Span.EndLine, inClassLocal(local, f.Path))
+		facts := sourceFacts(f.Content, lang, l.Span.StartLine, l.Span.EndLine, inClassLocal(local, f.Path) || inOwnerSpan(*f, l.Span, local))
 		fsyms = append(fsyms, FileSymbol{Symbol: q, Kind: facts.Kind, Line: l.Span.StartLine, EndLine: l.Span.EndLine, Signature: facts.Signature, In: inDeg[q], Out: len(snap.Callees[q])})
 	}
 	sort.Slice(fsyms, func(i, j int) bool {
@@ -1226,6 +1226,26 @@ func testWordIndex(s Store, repo, ref string) map[string][]TestRef {
 // directory) names a member of a type: Class.method. In languages whose
 // module is the file, the first segment is that module (views.token_login
 // is a function of views.py), not a class.
+// inOwnerSpan: the span sits inside a span named like its id's owner — a
+// method of class Foo in Foo.ts, whose id's module segment collapsed into
+// the class name (dir.Foo.f), is still Foo's method.
+func inOwnerSpan(f File, sp SymbolSpan, local string) bool {
+	i := strings.LastIndex(local, ".")
+	if i <= 0 {
+		return false
+	}
+	owner := local[:i]
+	if j := strings.LastIndex(owner, "."); j >= 0 {
+		owner = owner[j+1:]
+	}
+	for _, o := range f.Symbols {
+		if o.Name == owner && o != sp && o.StartLine <= sp.StartLine && sp.EndLine <= o.EndLine {
+			return true
+		}
+	}
+	return false
+}
+
 func inClassLocal(local, path string) bool {
 	if stem := fileModuleStem(path); stem != "" {
 		local = strings.TrimPrefix(local, stem+".")

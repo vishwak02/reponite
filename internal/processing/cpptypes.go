@@ -683,6 +683,11 @@ func newTypeTable(files []ParsedFile) *typeTable {
 				tt.classes[name] = m
 			}
 			for k, v := range cf.Fields {
+				if old, seen := m.Fields[k]; seen && old != v {
+					// two classes of one name (nested in different outer
+					// classes) giving the field different types: unknown
+					v = ""
+				}
 				m.Fields[k] = v
 			}
 			m.Bases = append(m.Bases, cf.Bases...)

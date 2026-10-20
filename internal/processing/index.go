@@ -141,6 +141,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				local = s.Recv + "." + s.Name
 			}
 			qid := qualifyModule(pkg, local)
+			if prev, dup := byQID[qid]; dup && s.Recv != "" && prev.path != f.Path && isCSource(f.Path) && isCSource(prev.path) {
+				// Cls::f defined in two source files of one directory: two classes
+				// of one name (each test file its own fixture), not one class —
+				// the later one is Cls@file
+				s.Recv += "@" + strings.TrimSuffix(path.Base(f.Path), path.Ext(f.Path))
+				local = s.Recv + "." + s.Name
+				qid = qualifyModule(pkg, local)
+			}
 			id := content.SymbolIdentity{Repo: repo, Lang: lang, Kind: s.Kind, Signature: s.Signature, CanonBody: s.CanonBody}
 			if _, dup := byQID[qid]; !dup {
 				order = append(order, qid)
@@ -659,4 +667,13 @@ func nameGoInits(files []ParsedFile) {
 // goInitName is the id name of a Go file's init function.
 func goInitName(p string) string {
 	return "init@" + strings.TrimSuffix(path.Base(p), ".go")
+}
+
+// isCSource: a C/C++ translation unit (not a header).
+func isCSource(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".c", ".cc", ".cpp", ".cxx":
+		return true
+	}
+	return false
 }

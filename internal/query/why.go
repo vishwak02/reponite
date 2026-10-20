@@ -541,6 +541,15 @@ func appendUnique(xs []string, x string) []string {
 // `Class::name` (C++) or on a `Class` receiver (Go), wins — `pkg.Cart.add` is
 // Cart's add, not the first `add` in the directory.
 func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
+	if q, stem, ok := splitFileQualified(qid); ok {
+		var own []File
+		for _, f := range files {
+			if fileStemOf(f.Path) == stem {
+				own = append(own, f)
+			}
+		}
+		return locateSymbol(own, q)
+	}
 	base, owner := baseName(qid), qidOwner(qid)
 	bestPath, bestSpan, bestScore := "", SymbolSpan{}, -1
 	for _, f := range files {

@@ -96,11 +96,11 @@ Updated as phases land; the scorecard output is the source of truth.
 
 | Phase | State |
 |---|---|
-| 1. Benchmark and scorecard | Ground truth: Go (`go/types`), Python (`ast` + Jedi's inferred targets, so calls on untyped values are judged too), TypeScript (the checker). Golden route lists for five apps; golden call lists for Java, Rust and C++. The scorer checks call edges, routes, and what `context`, `usages`, `tests` and `explain` answer (`-commands`). |
+| 1. Benchmark and scorecard | Ground truth: Go (`go/types`), Python (`ast` + Jedi's inferred targets, so calls on untyped values are judged too), TypeScript (the checker), C/C++ (clang via libclang, `gt/cppgt.py`; headers the repo does not hold are stubbed and calls typed through them are undetermined — not in CI, which has no libclang bindings). Golden route lists for five apps; golden call lists for Java, Rust and C++. The scorer checks call edges, routes, and what `context`, `usages`, `tests` and `explain` answer (`-commands`). |
 | 2. Scope | Inside a repo the default registry is that repo's workspace; an indexed branch is the default ref ahead of tags; an unindexed working directory never joins the fleet. Test-only routes hidden by default. |
 | 3. Accuracy fixes | Go type-checked; Python typed from annotations, constructors, factory returns and self fields, resolved in the MRO; JS/TS through tsconfig paths, default imports and barrels; Java typed from fields/params/locals; Rust from impl blocks, module paths and receiver types; class bodies' calls and fields counted. |
 | 4. Packs | Not started. |
-| 5. Private regression | Run by hand on five private repos (Django, Django REST, React, C++/ROS with submodules): every command checked; the fixes it found are in the changelog. Not automated (the repos are private). |
+| 5. Private regression | 21 private repos (Python incl. Django and Flask, TypeScript/React, Go, C++/ROS) scored like the public benchmark by a script kept outside this repo, with the same gates; the fixes it found are in the changelog. |
 | 6. Gate and docs | CI runs `tools/bench/run.sh` on every push: resolved answers must stay 100% precise. |
 
 ### Scorecard
@@ -113,7 +113,7 @@ not counted either way.
 |---|---|---|---|---|
 | golang-gin-realworld-example-app | Go | 100% (404) | 100% (404) | 0 |
 | sealed-secrets | Go | 100% (505) | 100% (505) | 0 |
-| flask | Python | 100% (703) | 100% (260) | 8 |
+| flask | Python | 100% (1009) | 100% (317) | 10 |
 | django-realworld-example-app | Python | 100% (13) | 100% (6) | 0 |
 | full-stack-fastapi-template | Python | 100% (208) | 100% (208) | 0 |
 | full-stack-fastapi-template | TypeScript | 100% (476) | 100% (476) | 0 |
