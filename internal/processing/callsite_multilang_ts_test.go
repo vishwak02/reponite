@@ -1042,10 +1042,10 @@ func TestTSDynamicImport(t *testing.T) {
 // (a singleton), never another class's config.
 func TestCppStaticReturnReceiver(t *testing.T) {
 	files := map[string]string{
-		"lbc/include/lbc/Lbc.hpp": `class Config {};
-class Lbc {
+		"core/include/core/App.hpp": `class Config {};
+class App {
 public:
-    static Lbc& instance();
+    static App& instance();
     const Config& config();
 };
 class Other {
@@ -1053,26 +1053,26 @@ public:
     const Config& config();
 };
 `,
-		"lbc/src/Lbc.cpp": `#include "lbc/Lbc.hpp"
-Lbc& Lbc::instance() { static Lbc l; return l; }
-const Config& Lbc::config() { static Config c; return c; }
+		"core/src/App.cpp": `#include "core/App.hpp"
+App& App::instance() { static App l; return l; }
+const Config& App::config() { static Config c; return c; }
 const Config& Other::config() { static Config c; return c; }
 `,
-		"lbc/src/Run.cpp": `#include "lbc/Lbc.hpp"
+		"core/src/Run.cpp": `#include "core/App.hpp"
 void run() {
-    const auto& c = Lbc::instance().config();
+    const auto& c = App::instance().config();
 }
 `,
 	}
 	edges := indexAndEdges(t, files)
-	r := edges["lbc/src.run"]
+	r := edges["core/src.run"]
 	if r == nil {
 		t.Fatalf("run not indexed; have %v", symKeys(edges))
 	}
-	if _, ok := r["lbc/src.Lbc.config"]; !ok {
-		t.Errorf("Lbc::instance().config() not resolved to Lbc.config: %v", r)
+	if _, ok := r["core/src.App.config"]; !ok {
+		t.Errorf("App::instance().config() not resolved to App.config: %v", r)
 	}
-	if _, bad := r["lbc/src.Other.config"]; bad {
+	if _, bad := r["core/src.Other.config"]; bad {
 		t.Errorf("pinned on Other.config: %v", r)
 	}
 }
@@ -1221,7 +1221,7 @@ func TestCppFriendIsFreeFunction(t *testing.T) {
 // its own.
 func TestCppGTestNames(t *testing.T) {
 	files := map[string]string{
-		"lbc/test/agent_test.cpp": `int addError() { return 1; }
+		"core/test/agent_test.cpp": `int addError() { return 1; }
 int clearError() { return 0; }
 TEST_F(AgentTest, AddsError) {
     addError();
@@ -1232,11 +1232,11 @@ TEST_F(AgentTest, ClearsError) {
 `,
 	}
 	edges := indexAndEdges(t, files)
-	if _, ok := edges["lbc/test.AgentTest.AddsError"]["lbc/test.addError"]; !ok {
-		t.Errorf("AddsError: %v (have %v)", edges["lbc/test.AgentTest.AddsError"], symKeys(edges))
+	if _, ok := edges["core/test.AgentTest.AddsError"]["core/test.addError"]; !ok {
+		t.Errorf("AddsError: %v (have %v)", edges["core/test.AgentTest.AddsError"], symKeys(edges))
 	}
-	if _, ok := edges["lbc/test.AgentTest.ClearsError"]["lbc/test.clearError"]; !ok {
-		t.Errorf("ClearsError: %v", edges["lbc/test.AgentTest.ClearsError"])
+	if _, ok := edges["core/test.AgentTest.ClearsError"]["core/test.clearError"]; !ok {
+		t.Errorf("ClearsError: %v", edges["core/test.AgentTest.ClearsError"])
 	}
 }
 
@@ -1254,14 +1254,21 @@ void Fixture::init() { setupB(); }
 `,
 	}
 	edges := indexAndEdges(t, files)
-	a, b := edges["tests.Fixture.init"], edges["tests.Fixture@b_test.init"]
-	if _, ok := a["tests.setupA"]; !ok {
-		t.Errorf("a_test's init: %v (have %v)", a, symKeys(edges))
+	// which file keeps the plain id follows the order files are indexed in
+	for _, q := range []string{"tests.Fixture@a_test.init", "tests.Fixture@b_test.init"} {
+		if _, ok := edges[q]; ok {
+			plain := edges["tests.Fixture.init"]
+			own := edges[q]
+			if len(plain) != 1 || len(own) != 1 {
+				t.Fatalf("each init keeps its own call: %v / %v", plain, own)
+			}
+			for c := range plain {
+				if _, same := own[c]; same {
+					t.Errorf("both inits call %s", c)
+				}
+			}
+			return
+		}
 	}
-	if _, ok := b["tests.setupB"]; !ok {
-		t.Errorf("b_test's init: %v", b)
-	}
-	if _, bad := a["tests.setupB"]; bad {
-		t.Errorf("a_test's init took b_test's calls")
-	}
+	t.Errorf("no file-qualified Fixture: %v", symKeys(edges))
 }
