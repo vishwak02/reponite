@@ -93,7 +93,11 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   (libclang bindings matching the system library); headers the repository does not hold
   are stubbed, so a call whose types come from them is undetermined, not scored;
   `--headers DIR` adds a copied header tree (a build image's ROS, Boost, Eigen and generated
-  message headers) so far fewer calls are.
+  message headers) so far fewer calls are. On a ROS/C++ codebase with real headers the share
+  of reponite's resolved C++ edges the truth can judge rose from about a quarter to about
+  four fifths; library declarations are skipped (parsing cost), test bodies written after a
+  googletest macro are read by their braces, and a call clang binds to a definition the run
+  did not record (an uninstantiated template member) is undetermined, not counted.
 - **`ximpact`** takes a qualified library target (`requests.get`, `std::move`) and counts
   only that module's calls; a bare name also finds calls stored as `module::name`, which it
   missed. `--format text` added.

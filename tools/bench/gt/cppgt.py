@@ -76,6 +76,11 @@ def header_dirs(roots):
     include (or include/eigen3) under it, shallowest first."""
     out = []
     for r in roots:
+        if any(f.endswith((".h", ".hpp")) for f in os.listdir(r)) or os.path.isdir(os.path.join(r, "boost")):
+            out.append(r)  # the tree is itself an include directory (a copied /usr/include)
+            if os.path.isdir(os.path.join(r, "eigen3")):
+                out.append(os.path.join(r, "eigen3"))
+            continue
         for d, dirs, _ in os.walk(r):
             depth = d[len(r):].count(os.sep)
             if depth > 6:
@@ -87,6 +92,9 @@ def header_dirs(roots):
                     out.append(os.path.join(d, "eigen3"))
                 dirs[:] = []  # an include tree's own subdirectories are reached through it
     return out
+
+
+stubbed = []
 
 
 def stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir):
@@ -104,9 +112,56 @@ def stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir):
             if os.path.exists(here) or any(os.path.exists(os.path.join(d, name)) for d in inc_dirs + sys_dirs):
                 continue
             have.add(name)
+            stubbed.append(name)
             dst = os.path.join(stub_dir, name)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             open(dst, "a").close()
+
+
+GTEST = re.compile(r"^\s*(?:TYPED_)?TEST(?:_F|_P)?\s*\(\s*(\w+)\s*,\s*(\w+)\s*\)")
+_lines = {}
+
+
+def source_line(c):
+    """The source line a cursor sits on (a macro's expansion point)."""
+    f = c.location.file
+    if f is None:
+        return ""
+    if f.name not in _lines:
+        try:
+            _lines[f.name] = open(f.name, encoding="utf-8", errors="replace").read().split("\n")
+        except OSError:
+            _lines[f.name] = []
+    ls = _lines[f.name]
+    n = c.location.line
+    return ls[n - 1] if 0 < n <= len(ls) else ""
+
+
+CALLED = re.compile(r"\b([A-Za-z_]\w*)\s*(?=\(|<[^;{}()]*>\s*\()")
+
+
+def source_text(c):
+    """The source lines from a definition's name to the end of its body."""
+    f, end = c.location.file, c.extent.end
+    if f is None:
+        return " ".join(t.spelling for t in c.get_tokens())
+    source_line(c)  # loads the file
+    ls = _lines.get(f.name, [])
+    if end.file is not None and end.file.name == f.name:
+        return "\n".join(ls[c.location.line - 1:end.line])
+    # a body written after a macro (TEST_F(…) { … }) whose extent clang puts in
+    # the macro's header: the braces that follow the name, matched
+    text = "\n".join(ls[c.location.line - 1:])
+    i = text.find("{")
+    depth = 0
+    for j in range(i, len(text)) if i >= 0 else ():
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[:j + 1]
+    return text[:2000]
 
 
 def def_name(c):
@@ -138,6 +193,10 @@ def parse_one(job):
     def visit(node, owner):
         for c in node.get_children():
             r = rel(c)
+            if r is None and owner is None:
+                # a library header's declarations (ROS, Boost, the standard
+                # library): nothing of the repository's own is inside
+                continue
             if c.kind in DEF_KINDS and c.is_definition() and r is not None:
                 did = "%s:%d" % (r, c.location.line)
                 # every name the body calls, bound or not: a call clang could not
@@ -145,17 +204,19 @@ def parse_one(job):
                 # CALL_EXPR, and must read as undetermined, not as absent
                 toks = [t.spelling for t in c.get_tokens()]
                 called = {}
-                for a, b in zip(toks, toks[1:]):
-                    if b in ("(", "<") and re.match(r"^[A-Za-z_]\w*$", a):  # f(…) or f<T>(…)
-                        called[a] = called.get(a, 0) + 1
+                # read from the source lines, not the cursor's tokens: a body
+                # written after a macro (TEST_F(…) { … }) is outside them
+                for a in CALLED.findall(source_text(c)):
+                    called[a] = called.get(a, 0) + 1
                 if c.spelling in called:
                     called[c.spelling] -= 1  # the definition's own name
                 name = def_name(c)
                 # with googletest present the body is a TestBody method of a
                 # generated class; stubbed, TEST_F(…) parses as a function
-                if c.spelling in ("TestBody", toks[0] if toks else "") and len(toks) > 4 and \
-                        re.match(r"^(TYPED_)?TEST(_F|_P)?$", toks[0]):
-                    name = toks[2] + "." + toks[4]  # TEST_F(Suite, Case) { … }: Suite.Case
+                if c.spelling in ("TestBody", toks[0] if toks else ""):
+                    m = GTEST.match(source_line(c))
+                    if m:
+                        name = m.group(1) + "." + m.group(2)  # TEST_F(Suite, Case) { … }: Suite.Case
                 defs.append({"usr": c.get_usr(), "id": did, "path": r, "line": c.location.line,
                              "end": c.extent.end.line, "name": name, "called": called})
                 visit(c, did)
@@ -171,7 +232,7 @@ def parse_one(job):
                 ref = c.referenced
                 if ref is not None and ref.kind in (ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR):
                     calls.append({"from": owner, "name": c.spelling, "usr": None, "external": False,
-                                  "line": c.location.line, "bound": True})
+                                  "line": c.location.line, "col": c.location.column, "bound": True})
                     visit(c, owner)
                     continue
                 target, external, at = None, False, None
@@ -185,7 +246,7 @@ def parse_one(job):
                         # each define a function of the same signature (same USR)
                         at = "%s:%d" % (rel(d), d.location.line)
                 calls.append({"from": owner, "name": c.spelling, "usr": target, "external": external,
-                              "line": c.location.line, "bound": ref is not None, "at": at})
+                              "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at})
             # a lambda or a local class: its calls stay with the enclosing definition
             visit(c, owner)
 
@@ -267,19 +328,23 @@ def main():
                 key = (canon[d["id"]], n)
                 written[key] = max(written.get(key, 0), k)
     edges, external, have = [], set(), set()
-    bound = {}
+    bound, unmapped = {}, set()
     for _, cs in results:
         for c in cs:
             c["from"] = canon.get(c["from"], c["from"])
             names.setdefault(c["from"], set()).add(c["name"])
-            if c["bound"]:
-                key = (c["from"], c["name"])
-                bound[key] = bound.get(key, 0) + 1
+            known = c["bound"] and (c["usr"] is None or c["external"] or c.get("at") in canon or c["usr"] in by_usr)
+            if not known and not c["name"].startswith("operator"):
+                unmapped.add(c["from"] + ">" + c["name"])
+            if known:
+                # one call site once, however often the AST shows it (a lambda's
+                # body under its expression and its call operator); a call clang
+                # bound to a repository definition this run did not record (a
+                # template member it did not instantiate) is not known
+                bound.setdefault((c["from"], c["name"]), set()).add((c["line"], c.get("col", 0)))
             to = canon.get(c["at"]) if c.get("at") else None
             if to is None:
                 to = by_usr.get(c["usr"]) if c["usr"] else None
-            if to == c["from"] and c["usr"] not in own_usrs.get(c["from"], ()):
-                continue  # one overload calling another: one definition once collapsed
             if to:
                 if (c["from"], to) not in have:
                     have.add((c["from"], to))
@@ -292,8 +357,9 @@ def main():
            "resolved_external": sorted(external),
            # a name called more often than clang bound it: some call of it is
            # undetermined, whatever the others resolved to
-           "unresolved": sorted(f + ">" + n for (f, n), k in written.items() if k > bound.get((f, n), 0))}
-    print(f"cppgt: {len(sources)} sources, {len(defs)} definitions, {len(edges)} edges", file=sys.stderr)
+           "unresolved": sorted(unmapped | {f + ">" + n for (f, n), k in written.items() if k > len(bound.get((f, n), ()))})}
+    print(f"cppgt: {len(sources)} sources, {len(defs)} definitions, {len(edges)} edges, "
+          f"{len(stubbed)} headers stubbed: {' '.join(sorted(stubbed)[:40])}", file=sys.stderr)
     json.dump(out, sys.stdout, indent=1)
 
 
