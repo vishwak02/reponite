@@ -47,6 +47,9 @@ type Symbol struct {
 	// defaulted ones) to ParamMax (-1: variadic); HasParams when counted.
 	ParamMin, ParamMax int
 	HasParams          bool
+	// ParamTypes: each overload's parameter types as written, by their
+	// last name (const geometry_msgs::Pose& -> Pose); "" where unknown
+	ParamTypes [][]string
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -240,8 +243,12 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		vars = jsLocals(fn)
 	}
 	pmin, pmax, hasParams := 0, 0, false
+	var paramTypes [][]string
 	if r.CallSiteKinds {
 		pmin, pmax, hasParams = cParamCount(fn)
+		if pt := cParamTypes(fn); len(pt) > 0 {
+			paramTypes = [][]string{pt}
+		}
 	}
 	name := nameOf(fn, r)
 	if r.CallSiteKinds {
@@ -255,6 +262,7 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		ParamMin:       pmin,
 		ParamMax:       pmax,
 		HasParams:      hasParams,
+		ParamTypes:     paramTypes,
 		Vars:           vars,
 		Returns:        returns,
 		Name:           name,
@@ -309,6 +317,37 @@ func isPlainIdent(s string) bool {
 
 // cParamCount is a C/C++ definition's parameter count: required ones, and
 // the most it takes (-1 when variadic); (void) takes none.
+// cParamTypes are a C/C++ definition's parameter types, by last name.
+func cParamTypes(fn content.AST) []string {
+	decl := firstDescendant(fn, "function_declarator")
+	if decl == nil {
+		return nil
+	}
+	ps := firstChildAny(decl, []string{"parameter_list"})
+	if ps == nil {
+		return nil
+	}
+	var out []string
+	for _, c := range ps.Children() {
+		if c.Type() != "parameter_declaration" && c.Type() != "optional_parameter_declaration" {
+			continue
+		}
+		out = append(out, typeLeaf(TypeName(firstChildAny(c, typeNodeTypes))))
+	}
+	return out
+}
+
+// typeLeaf is a type's last name (ns::Cls -> Cls); containers stay as they are.
+func typeLeaf(t string) string {
+	if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "pair[") {
+		return t
+	}
+	if i := strings.LastIndex(t, "::"); i >= 0 {
+		return t[i+2:]
+	}
+	return t
+}
+
 func cParamCount(fn content.AST) (min, max int, ok bool) {
 	decl := firstDescendant(fn, "function_declarator")
 	if decl == nil {

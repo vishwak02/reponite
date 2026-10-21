@@ -56,7 +56,10 @@ func moduleStem(p string) string {
 type moduleIndex struct {
 	files map[string]string // path -> language
 	dirs  map[string]bool
-	ts    []tsPaths // tsconfig/jsconfig path aliases, deepest config first
+	// pyDirs are the directories holding Python files (below them, too): a
+	// directory of ROS .msg files is no Python package, its module generated
+	pyDirs map[string]bool
+	ts     []tsPaths // tsconfig/jsconfig path aliases, deepest config first
 	// defaults is the name a JS/TS module exports as default (export
 	// default Name), by the module's package id
 	defaults map[string]string
@@ -108,15 +111,23 @@ var (
 
 // reExportDefault reads `export default Name` (a declared function or
 // class, or a name declared elsewhere in the module).
+// reDefaultCallOnly: export default f(…) — a call's result, not f itself
+var reDefaultCallOnly = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?[A-Za-z_$][\w$]*\s*\($`)
+
 var reExportDefault = regexp.MustCompile(`(?m)^export\s+default\s+(?:async\s+)?(?:function\*?\s+|class\s+)?([A-Za-z_$][\w$]*)\s*(?:;|$|\(|\{|<|extends\b)`)
 
 func newModuleIndex(files []ParsedFile) moduleIndex {
-	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}, defaultClass: map[string]string{},
+	mi := moduleIndex{files: map[string]string{}, dirs: map[string]bool{"": true}, pyDirs: map[string]bool{"": true}, defaults: map[string]string{}, jsMods: map[string]*jsModule{}, defaultClass: map[string]string{},
 		instances: map[string]map[string]string{}, objects: map[string]map[string]bool{}, returns: map[string]map[string]string{}}
 	for _, f := range files {
 		mi.files[f.Path] = f.Lang
 		for d := path.Dir(f.Path); d != "." && d != "/" && !mi.dirs[d]; d = path.Dir(d) {
 			mi.dirs[d] = true
+		}
+		if f.Lang == "python" {
+			for d := path.Dir(f.Path); d != "." && d != "/" && !mi.pyDirs[d]; d = path.Dir(d) {
+				mi.pyDirs[d] = true
+			}
 		}
 		if langFamily(f.Lang) == "js" {
 			src := f.Content
@@ -126,7 +137,7 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			pkg := pkgOfFile(f.Path, f.Lang)
 			if w := wrappedDefault(src); w != "" {
 				mi.defaults[pkg] = w // export default memo(Item) / connect(…)(Item): the component
-			} else if m := reExportDefault.FindStringSubmatch(src); m != nil && !jsDefaultNotName[m[1]] {
+			} else if m := reExportDefault.FindStringSubmatch(src); m != nil && !jsDefaultNotName[m[1]] && !reDefaultCallOnly.MatchString(m[0]) {
 				mi.defaults[pkg] = m[1]
 				inst := regexp.MustCompile(`(?m)^\s*(?:export\s+)?(?:const|let|var)\s+` + regexp.QuoteMeta(m[1]) + `\s*(?::[^=]+)?=\s*new\s+([A-Z][\w$]*)\s*[(<]`)
 				if c := inst.FindStringSubmatch(src); c != nil {
@@ -233,7 +244,7 @@ func (mi moduleIndex) resolvePython(callerPath, module string) (string, bool) {
 	first := strings.SplitN(rest, ".", 2)[0]
 	var ancestors, others []string
 	for d := range mi.dirs {
-		if !mi.dirs[path.Join(d, first)] && mi.files[path.Join(d, first+".py")] == "" {
+		if !mi.pyDirs[path.Join(d, first)] && mi.files[path.Join(d, first+".py")] == "" {
 			continue
 		}
 		if d != "" && mi.files[path.Join(d, "__init__.py")] != "" {
@@ -280,7 +291,7 @@ func (mi moduleIndex) pyTarget(p string) (string, bool) {
 	if mi.files[p+".py"] != "" {
 		return pkgOfFile(p+".py", "python"), true
 	}
-	if mi.files[path.Join(p, "__init__.py")] != "" || mi.dirs[p] {
+	if mi.files[path.Join(p, "__init__.py")] != "" || mi.pyDirs[p] {
 		return pkgOf(path.Join(p, "__init__.py")), true
 	}
 	return "", false
@@ -372,6 +383,17 @@ func qualifyModule(pkg, local string) string {
 	return qualify(pkg, local)
 }
 
+// memberQID is the id of method name on class cls of module pkg: a class
+// named like its file shares the module's id (TraceManager.ts's class
+// TraceManager is dir.TraceManager) unless a function of the module has the
+// method's name, when the class keeps the module in its methods' ids.
+func memberQID(pkg, cls, name string, nodeSet map[string]bool) string {
+	if q := qualify(pkg, cls+"."+name); nodeSet[q] {
+		return q
+	}
+	return qualifyModule(pkg, cls+"."+name)
+}
+
 // resolveJava is the directory of a Java package (io.spring.core ->
 // .../io/spring/core). The same package can sit in several source sets
 // (src/main/java, src/test/java): the one nearest the importing file wins.
@@ -412,6 +434,14 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 		if name == "default" {
 			if d := mi.defaults[pkg]; d != "" {
 				return walk(pkg, d, depth+1)
+			}
+			// export { default } from './m' (an index passing on m's default)
+			if jm := mi.jsMods[pkg]; jm != nil {
+				if b, ok := jm.reexp["default"]; ok {
+					if p, ok := mi.resolve(jm.lang, jm.path, b.Module); ok {
+						return walk(p, "default", depth+1)
+					}
+				}
 			}
 			return "", "", false
 		}
@@ -520,7 +550,12 @@ func wrappedDefault(src string) string {
 	stmt := statementFrom(src, m[1])
 	w := reWrappedLast.FindStringSubmatch(stmt)
 	if w == nil {
-		return ""
+		// hoc(Item, { options }): the first argument of the last call
+		if a := wrappedArg(stmt); a != "" {
+			w = []string{"", a}
+		} else {
+			return ""
+		}
 	}
 	// const Wrapped = withStore(Item); export default memo(Wrapped)
 	if c := regexp.MustCompile(fmt.Sprintf(reConstWrapped, regexp.QuoteMeta(w[1]))).FindStringSubmatch(src); c != nil {
@@ -530,6 +565,41 @@ func wrappedDefault(src string) string {
 	}
 	return w[1]
 }
+
+// wrappedArg is the first argument of a wrapper call's outermost call when
+// it names a value (an identifier, or itself a wrapper call: withRouter(X)).
+func wrappedArg(stmt string) string {
+	last := -1
+	depth := 0
+	for i := 0; i < len(stmt); i++ {
+		switch stmt[i] {
+		case '(':
+			if depth == 0 {
+				last = i
+			}
+			depth++
+		case ')':
+			depth--
+		}
+	}
+	if last < 0 {
+		return ""
+	}
+	args, end := macroArgs(stmt, last)
+	if end < 0 || len(args) == 0 {
+		return ""
+	}
+	a := strings.TrimSpace(args[0])
+	if reJSIdent.MatchString(a) {
+		return a
+	}
+	if i := strings.IndexByte(a, '('); i > 0 && reJSIdent.MatchString(strings.TrimSpace(a[:i])) {
+		return wrappedArg(a)
+	}
+	return ""
+}
+
+var reJSIdent = regexp.MustCompile(`^[A-Za-z_$][\w$]*$`)
 
 // statementFrom is the statement starting with head in src: its text up to
 // the parenthesis closing its first call, across lines.

@@ -204,11 +204,18 @@ type siteIndex struct {
 	// variadic); nargs: the call being resolved's argument count plus one
 	arity map[string][2]int
 	nargs int
+	// paramTypes: a C/C++ definition's overloads' parameter types; argTypes:
+	// the call being resolved's argument hints (CallSite.ArgTypes)
+	paramTypes map[string][][]string
+	argTypes   string
 	// vis: what a C/C++ file can name (cppvis.go; nil: everything);
 	// callerPath is the calling definition's file, defPath and recvOf each
 	// definition's file and class
 	// jsModule: a JS/TS module of the repo whose exports were read (nil: none)
 	jsModule   func(pkg string) bool
+	// pyStar is the repo modules a Python file star-imports (from m import
+	// *), and whether it star-imports a module outside the repo
+	pyStar func(path string) (pkgs []string, external bool)
 	vis        *cppVisibility
 	inNS       [2]string // C++ ns::f(): the written outermost and innermost namespace
 	callerPath string
@@ -306,6 +313,9 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		if s.NArgs > 0 {
 			key += "\x00" + strconv.Itoa(s.NArgs) // f(a) and f(a, b): two overloads
 		}
+		if s.ArgTypes != "" {
+			key += "\x00" + s.ArgTypes // f(Reason::X) and f(action): two overloads
+		}
 		cur, ok := best[key]
 		if !ok {
 			order = append(order, key)
@@ -332,6 +342,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		s := best[key]
 		name := s.Name
 		x.nargs = s.NArgs
+		x.argTypes = s.ArgTypes
 		x.inNS = [2]string{}
 		switch s.Kind {
 		case CallTyped:
@@ -434,6 +445,36 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				if q := qualifyModule(callerPkg, name); x.nodeSet[q] {
 					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 				} else {
+					add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
+				}
+				continue
+			}
+			if s.Kind == CallPlain && lang == "python" && x.pyStar != nil {
+				// a module's globals are its own definitions, its imports and
+				// its assignments: a bare f() not defined here nor imported
+				// (imports are module sites by now) is a local, a builtin or
+				// an assigned alias — never another module's f, unless a
+				// star import brings it
+				if q := qualifyModule(callerPkg, name); x.nodeSet[q] && !x.isMethod[q] {
+					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+					continue
+				}
+				pkgs, external := x.pyStar(x.callerPath)
+				var found []string
+				for _, pkg := range pkgs {
+					if q := qualifyModule(pkg, name); x.nodeSet[q] && !x.isMethod[q] {
+						found = append(found, q)
+					}
+				}
+				switch {
+				case len(found) == 1:
+					add(query.Callee{Name: found[0], ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+				case len(found) > 1:
+					add(query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous})
+				case len(pkgs) > 0 || external:
+					// a star-imported module re-exporting it: the name rules
+					add(resolveEdges(callerPkg, []string{name}, x.nodeSet, map[string][]string{name: x.nonMethods(name)}, x.precise)[0])
+				default:
 					add(query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 				}
 				continue
@@ -592,13 +633,13 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		t = "std::container" // a container's own member: size, insert, push_back, …
 	}
 	if x.types.nested[t] {
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes}
 	}
 	if root, _, scoped := strings.Cut(t, "::"); scoped && !externalScopes[root] && x.types.classes[t] == nil {
 		return s // Cls::Alias the table cannot follow: the type is not known
 	}
 	if strings.Contains(t, "::") || x.types.classes[t] != nil {
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes}
 	}
 	return s // a type the ref does not define (template parameter, using-imported library type)
 }
@@ -745,7 +786,12 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 		var fit []string
 		for _, q := range cands {
 			a, known := x.arity[q]
-			few := n < a[0] && !(x.vis != nil && x.vis.defaults[BaseName(q)])
+			few := n < a[0]
+			if x.vis != nil {
+				if need, ok := x.vis.defaults[BaseName(q)]; ok && n >= need {
+					few = false // the declaration's defaults fill the rest
+				}
+			}
 			if !known || !few && (a[1] < 0 || n <= a[1]) {
 				fit = append(fit, q)
 			}
@@ -753,6 +799,9 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 		if len(fit) > 0 || x.vis != nil {
 			cands = fit // C/C++: no definition takes this many arguments — not the repo's
 		}
+	}
+	if len(cands) > 1 && x.argTypes != "" && x.paramTypes != nil {
+		cands = x.byArgTypes(cands)
 	}
 	switch len(cands) {
 	case 0:
@@ -763,12 +812,24 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 		// A::f() defined twice — inline in the header and out of line in the
 		// source (two overloads) — and one of them is the caller: it calls
 		// the other (a wrapper taking the lock), not itself
-		if cands[0] == x.caller {
-			return cands[1], true
+		for i, q := range cands {
+			if q != x.caller {
+				continue
+			}
+			other := cands[1-i]
+			if x.vis != nil && x.defPath != nil && !x.vis.linked(x.defPath[q], x.defPath[other]) {
+				// two programs' functions of one name (a package and its
+				// successor): the other is not this one's overload
+				return "", false
+			}
+			return other, true
 		}
-		if cands[1] == x.caller {
-			return cands[0], true
-		}
+	}
+	if x.overloadsDiffer(cands) {
+		// overloads of one class split between header and source, their
+		// parameters different and the arguments not telling them apart:
+		// which one the call reaches is not proven by where it is
+		return "", false
 	}
 	var local []string
 	for _, q := range cands {
@@ -780,6 +841,32 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 		return local[0], true
 	}
 	return "", false
+}
+
+// overloadsDiffer: cands are one class's methods (C/C++) whose declared
+// parameter types differ.
+func (x siteIndex) overloadsDiffer(cands []string) bool {
+	if x.vis == nil || len(cands) < 2 || x.paramTypes == nil {
+		return false
+	}
+	recv := strings.SplitN(x.recvOf[cands[0]], "@", 2)[0]
+	var first string
+	for i, q := range cands {
+		if r := strings.SplitN(x.recvOf[q], "@", 2)[0]; r == "" || r != recv {
+			return false
+		}
+		sets := x.paramTypes[q]
+		if len(sets) != 1 {
+			return false
+		}
+		sig := strings.Join(sets[0], ",")
+		if i == 0 {
+			first = sig
+		} else if sig != first {
+			return true
+		}
+	}
+	return false
 }
 
 // langFamily groups languages that call each other's definitions directly:
@@ -851,7 +938,126 @@ func declaredTypeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		}
 		return CallSite{Name: s.Name, Kind: CallExternal, Scope: t, NArgs: s.NArgs}
 	case t != "":
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes}
 	}
 	return s
+}
+
+var cPrimitives = map[string]string{
+	"int": "num", "long": "num", "short": "num", "unsigned": "num", "float": "num", "double": "num", "size_t": "num",
+	"int8_t": "num", "int16_t": "num", "int32_t": "num", "int64_t": "num", "uint8_t": "num", "uint16_t": "num",
+	"uint32_t": "num", "uint64_t": "num", "char": "str", "string": "str", "string_view": "str", "bool": "bool",
+}
+
+// byArgTypes keeps the overload sets whose parameters fit what the call
+// passes, preferring the one matching most argument types: toString(r) with r
+// a Reason is the Reason overload, not the UIAction one.
+func (x siteIndex) byArgTypes(cands []string) []string {
+	args := strings.Split(x.argTypes, ",")
+	callerRecv := ""
+	if x.recvOf != nil {
+		callerRecv = x.recvOf[x.caller]
+	}
+	for i, a := range args {
+		kind, expr, typed := strings.Cut(a, ":")
+		if !typed || len(kind) != 1 || !strings.Contains("qen", kind) {
+			continue
+		}
+		args[i] = ""
+		if x.types == nil {
+			continue
+		}
+		if kind == "q" {
+			expr = a // q:Cls::f is itself an expression
+		}
+		t := typeLeaf(x.types.eval(expr, callerRecv))
+		switch {
+		case t == "":
+		case kind != "n":
+			args[i] = t
+		case cPrimitives[t] == "num":
+			args[i] = "#num" // timeout * 0.9 on a number
+		}
+	}
+	known := func(t string) bool {
+		_, prim := cPrimitives[t]
+		if prim || x.types == nil {
+			return prim
+		}
+		return x.types.classes[t] != nil || x.types.enums[t]
+	}
+	score := func(params []string, cls string) (int, bool) {
+		n := 0
+		for i, a := range args {
+			if i >= len(params) || a == "" || params[i] == "" {
+				continue
+			}
+			p := params[i]
+			if cls != "" && x.types != nil {
+				p = x.types.ownNested(strings.SplitN(cls, "@", 2)[0], p) // Map::getPosition(const Tile&): Map::Tile
+			}
+			kind, prim := cPrimitives[p]
+			if (a == p || a == typeLeaf(p)) && !strings.HasPrefix(a, "#") {
+				n++ // the parameter's own type, the repo's or a library's
+				continue
+			}
+			if prim && kind == "num" && x.types != nil && a[0] >= 'A' && a[0] <= 'Z' && !x.types.enums[a] && x.types.classes[a] == nil {
+				if _, alias := x.types.aliases[a]; !alias {
+					return 0, false // a library class's object for a number
+				}
+			}
+			if !known(p) {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(a, "#"):
+				switch {
+				case prim && kind == a[1:]:
+					n++
+				case prim || x.types.enums[p]:
+					return 0, false // a literal of another kind
+				}
+			case a == p:
+				n++
+			case x.types != nil && containsStr(x.types.lineage(a), p):
+				n++ // a derived class passed for its base
+			case known(a):
+				return 0, false // two different known types
+			}
+		}
+		return n, true
+	}
+	best, out := -1, []string(nil)
+	var fits []string
+	for _, q := range cands {
+		sets := x.paramTypes[q]
+		if len(sets) == 0 {
+			fits = append(fits, q) // nothing written to compare
+			continue
+		}
+		top, ok := -1, false
+		for _, ps := range sets {
+			if n, fit := score(ps, x.recvOf[q]); fit {
+				ok = true
+				top = max(top, n)
+			}
+		}
+		if !ok {
+			continue
+		}
+		fits = append(fits, q)
+		switch {
+		case top > best:
+			best, out = top, []string{q}
+		case top == best:
+			out = append(out, q)
+		}
+	}
+	if best > 0 && len(out) == 1 {
+		return out
+	}
+	if len(fits) > 0 {
+		return fits
+	}
+	return cands
 }

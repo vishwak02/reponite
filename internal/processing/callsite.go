@@ -36,6 +36,10 @@ type CallSite struct {
 	// NArgs is a C/C++ call's argument count plus one (0: not counted), to
 	// tell overloads of one name apart.
 	NArgs int
+	// ArgTypes: what the C/C++ call passes, comma-joined, one hint per
+	// argument — a local's declared type, an enumerator's enum (Reason::X ->
+	// Reason), #num/#str for literals, "" unknown
+	ArgTypes string
 }
 
 // CallTyped: a member call whose receiver's declared type is known (a
@@ -67,6 +71,8 @@ func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []Cal
 					cs.NArgs = n + 1
 					if pack {
 						cs.NArgs = 0 // f(args...): how many is not written
+					} else if r.Name == "cpp" {
+						cs.ArgTypes = argTypeHints(k, vars)
 					}
 				}
 			}
@@ -593,4 +599,71 @@ func pySubmodule(b ImportBinding, attr string, modPkg func(string) (string, bool
 		return pkg
 	}
 	return ""
+}
+
+// argTypeHints describes each argument of a C/C++ call for overload choice.
+func argTypeHints(args content.AST, vars map[string]string) string {
+	var hints []string
+	any := false
+	for _, a := range args.Children() {
+		if !a.IsNamed() || isCommentType(a.Type()) {
+			continue
+		}
+		h := ""
+		switch a.Type() {
+		case "identifier":
+			if v := vars[a.Text()]; strings.HasPrefix(v, "v:") && !strings.Contains(v, "|") {
+				h = typeLeaf(v[2:])
+			} else if e := recvExpr(a, vars); e != "" && !strings.Contains(e, ",") {
+				h = "e:" + e // a field, a parameter typed at index time
+			}
+		case "field_expression":
+			if e := recvExpr(a, vars); e != "" && !strings.Contains(e, ",") {
+				h = "e:" + e // cfg.timeout: the field's declared type
+			}
+		case "binary_expression":
+			// timeout * 0.9, n + 1: a number when the other side is one
+			if k := a.Children(); len(k) == 3 && k[1].Type() != "" && strings.Contains("+-*/", k[1].Type()) {
+				for i, lit := range []int{2, 0} {
+					if k[lit].Type() == "number_literal" {
+						if e := recvExpr(k[i*2], vars); e != "" && !strings.Contains(e, ",") {
+							h = "n:" + e
+						}
+						break
+					}
+				}
+			}
+		case "qualified_identifier":
+			// Enum::Value, ns::Enum::Value: the enum
+			parts := strings.Split(strings.ReplaceAll(a.Text(), " ", ""), "::")
+			if len(parts) >= 2 {
+				h = parts[len(parts)-2]
+			}
+		case "call_expression", "compound_literal_expression":
+			// ros::Duration(s), Point{1, 2}: a temporary of that class
+			if fn := a.Children(); len(fn) > 0 {
+				switch fn[0].Type() {
+				case "identifier", "qualified_identifier", "type_identifier":
+					name := strings.ReplaceAll(fn[0].Text(), " ", "")
+					if leaf := typeLeaf(name); leaf != "" && leaf[0] >= 'A' && leaf[0] <= 'Z' {
+						h = leaf
+					} else if i := strings.LastIndex(name, "::"); i > 0 && fn[0].Type() == "qualified_identifier" && !strings.ContainsAny(name, "<,") {
+						h = "q:" + name // Location::from(p): what the static method returns
+					}
+				}
+			}
+		case "number_literal":
+			h = "#num"
+		case "string_literal", "raw_string_literal", "concatenated_string":
+			h = "#str"
+		case "true", "false":
+			h = "#bool"
+		}
+		any = any || h != ""
+		hints = append(hints, h)
+	}
+	if !any {
+		return ""
+	}
+	return strings.Join(hints, ",")
 }

@@ -22,7 +22,7 @@ type cppVisibility struct {
 	rev      map[string][]string        // header -> the files including it
 	homes    map[string][]string        // class name -> files defining it with a body
 	declares map[string][]string        // free function name -> files declaring or defining it
-	defaults map[string]bool            // names some declaration gives a defaulted parameter
+	defaults map[string]int             // names some declaration gives a defaulted parameter -> the fewest arguments it takes
 }
 
 // maxVisFiles bounds the include closures kept: beyond it (a kernel-sized C
@@ -31,7 +31,7 @@ const maxVisFiles = 30000
 
 func newCppVisibility(files []ParsedFile) *cppVisibility {
 	v := &cppVisibility{facts: map[string]*TypeFacts{}, includes: map[string][]string{},
-		closure: map[string]map[string]bool{}, incl: map[string]map[string]bool{}, homes: map[string][]string{}, declares: map[string][]string{}, defaults: map[string]bool{}}
+		closure: map[string]map[string]bool{}, incl: map[string]map[string]bool{}, homes: map[string][]string{}, declares: map[string][]string{}, defaults: map[string]int{}}
 	byBase := map[string][]string{} // file basename -> C/C++ files
 	n := 0
 	for _, f := range files {
@@ -53,8 +53,10 @@ func newCppVisibility(files []ParsedFile) *cppVisibility {
 		for fn := range f.Types.Declared {
 			v.declares[fn] = append(v.declares[fn], f.Path)
 		}
-		for fn := range f.Types.Defaults {
-			v.defaults[fn] = true
+		for fn, need := range f.Types.Defaults {
+			if prev, ok := v.defaults[fn]; !ok || need < prev {
+				v.defaults[fn] = need
+			}
 		}
 	}
 	if n == 0 || n > maxVisFiles || len(v.facts) == 0 {
@@ -86,7 +88,31 @@ func resolveInclude(from, inc string, byBase map[string][]string) []string {
 			out = append(out, c)
 		}
 	}
+	if len(out) > 1 {
+		// two packages ship a header of that name: the build lists the
+		// including package's own include directories first — the nearest
+		best, keep := -1, []string(nil)
+		for _, c := range out {
+			switch n := sharedDirs(from, c); {
+			case n > best:
+				best, keep = n, []string{c}
+			case n == best:
+				keep = append(keep, c)
+			}
+		}
+		out = keep
+	}
 	return out
+}
+
+// sharedDirs is how many leading directories paths a and b have in common.
+func sharedDirs(a, b string) int {
+	as, bs := strings.Split(path.Dir(a), "/"), strings.Split(path.Dir(b), "/")
+	n := 0
+	for n < len(as) && n < len(bs) && as[n] == bs[n] {
+		n++
+	}
+	return n
 }
 
 // included is the file and every header it includes, transitively.
@@ -108,6 +134,12 @@ func (v *cppVisibility) included(file string) map[string]bool {
 	}
 	v.incl[file] = c
 	return c
+}
+
+// linked reports whether a and b are one file, or one includes the other:
+// a header's inline overload and its source's out-of-line one.
+func (v *cppVisibility) linked(a, b string) bool {
+	return a == b || v.included(a)[b] || v.included(b)[a]
 }
 
 // seen is what code in file can name. A source file sees what it includes;

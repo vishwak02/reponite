@@ -13,6 +13,7 @@ package processing
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"os"
 	"path"
@@ -243,6 +244,34 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 
 	// qidOf maps a resolved function/method to its qualified id, or ("",false)
 	// for external packages and interface (abstract) methods.
+	// functions of a non-test package, by directory: an external test
+	// package's function of the same name is name@file (nameGoTestTwins)
+	ownNames := map[string]map[string]bool{}
+	for _, p := range pkgs {
+		if p.Types == nil || strings.HasSuffix(p.Name, "_test") {
+			continue
+		}
+		d := pkgDir[p.Types]
+		for _, n := range p.Types.Scope().Names() {
+			if _, ok := p.Types.Scope().Lookup(n).(*types.Func); ok {
+				if ownNames[d] == nil {
+					ownNames[d] = map[string]bool{}
+				}
+				ownNames[d][n] = true
+			}
+		}
+	}
+	twin := func(pkg *types.Package, d, name string, pos token.Pos, fset *token.FileSet) string {
+		if pkg != nil && strings.HasSuffix(pkg.Name(), "_test") && ownNames[d][name] {
+			return goTestTwinName(name, fset.File(pos).Name())
+		}
+		return name
+	}
+	var fsetOf *token.FileSet
+	for _, p := range pkgs {
+		fsetOf = p.Fset
+		break
+	}
 	qidOf := func(fn *types.Func) (string, bool) {
 		if fn == nil || fn.Pkg() == nil {
 			return "", false
@@ -252,6 +281,9 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 			return "", false // external / stdlib
 		}
 		name := fn.Name()
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() == nil && fsetOf != nil && fn.Pos().IsValid() {
+			name = twin(fn.Pkg(), d, name, fn.Pos(), fsetOf)
+		}
 		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
 			if isInterfaceType(sig.Recv().Type()) {
 				return "", false // dynamic dispatch — can't pin the concrete body
@@ -273,6 +305,11 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 					continue
 				}
 				caller := callerQID(dRel, fd)
+				if fd.Recv == nil && fd.Name.Name != "init" {
+					if n := twin(p.Types, dRel, fd.Name.Name, fd.Pos(), p.Fset); n != fd.Name.Name {
+						caller = qualify(dRel, n)
+					}
+				}
 				if fd.Recv == nil && fd.Name.Name == "init" {
 					caller = qualify(dRel, goInitName(p.Fset.File(fd.Pos()).Name())) // nameGoInits
 				}

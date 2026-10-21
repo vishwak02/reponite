@@ -12,6 +12,7 @@ package processing
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -36,13 +37,16 @@ type TypeFacts struct {
 	// Nested are the classes this file defines inside another class's
 	// body, as Outer::Inner
 	Nested map[string]bool
+	// Enums are the enumeration types this file defines
+	Enums map[string]bool
 	// FuncNS are the namespaces ("a::b", "" global) each free function this
 	// file declares or defines is in.
 	FuncNS map[string][]string
 	// Defaults are the function and method names this file declares with a
-	// defaulted parameter (f(int a, int b = 0);): their out-of-line
-	// definitions take fewer arguments than they list.
-	Defaults map[string]bool
+	// defaulted parameter (f(int a, int b = 0);), each with the fewest
+	// arguments such a declaration takes: their out-of-line definitions take
+	// fewer than they list, down to that.
+	Defaults map[string]int
 }
 
 // ClassFact is a class's member fields (name -> declared type) and bases.
@@ -106,7 +110,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 		return nil
 	}
 	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{},
-		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]bool{}, Nested: map[string]bool{}}
+		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}}
 	var nsStack []string // the named namespaces around the walk
 	inNS := func(name string, extra ...string) {
 		ns := strings.Join(append(append([]string(nil), nsStack...), extra...), "::")
@@ -128,6 +132,11 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					if inc := strings.Trim(p.Text(), "\"<> "); inc != "" {
 						tf.Includes = append(tf.Includes, inc)
 					}
+				}
+				continue
+			case "enum_specifier":
+				if id := firstChildAny(c, []string{"type_identifier"}); id != nil && firstChildAny(c, []string{"enumerator_list"}) != nil {
+					tf.Enums[id.Text()] = true
 				}
 				continue
 			case "template_declaration":
@@ -242,13 +251,16 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 				}
 				// using Impl = X<…>; inside the class: its members' Impl is X
 				local := map[string]string{}
-				for _, ad := range body.Children() {
+				for _, ad := range classMembers(body) {
 					if ad.Type() != "alias_declaration" {
 						continue
 					}
 					id := firstChildAny(ad, []string{"type_identifier"})
 					if td := firstChildAny(ad, []string{"type_descriptor"}); id != nil && td != nil {
 						if t := TypeName(td); t != "" && t != id.Text() {
+							if prev, seen := local[id.Text()]; seen && prev != t {
+								t = "" // #if A / #else: the build's configuration picks one
+							}
 							local[id.Text()] = t
 						}
 					}
@@ -260,7 +272,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					cf.Aliases[a] = t
 					tf.Aliases[name+"::"+a] = t // Cls::Alias named from outside
 				}
-				for _, fd := range body.Children() {
+				for _, fd := range classMembers(body) {
 					if fd.Type() != "field_declaration" {
 						continue
 					}
@@ -363,16 +375,39 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 			if i := strings.LastIndex(n, "::"); i >= 0 {
 				n = n[i+2:]
 			}
-			tf.Defaults[n] = true
+			need := 0
+			for _, p := range pl.Children() {
+				if p.Type() == "parameter_declaration" {
+					need++
+				}
+			}
+			if prev, ok := tf.Defaults[n]; !ok || need < prev {
+				tf.Defaults[n] = need
+			}
 		}
 	}
 	for n := range external {
 		delete(tf.Internal, n) // overloads of one name, some internal: the name is not
 	}
-	if len(tf.Classes) == 0 && len(tf.Aliases) == 0 && len(tf.Returns) == 0 && len(tf.Includes) == 0 && len(tf.Declared) == 0 {
+	if len(tf.Classes) == 0 && len(tf.Aliases) == 0 && len(tf.Returns) == 0 && len(tf.Includes) == 0 && len(tf.Declared) == 0 && len(tf.Enums) == 0 {
 		return nil
 	}
 	return tf
+}
+
+// classMembers are a class body's member declarations, those inside
+// #if/#ifdef/#else blocks included.
+func classMembers(body content.AST) []content.AST {
+	var out []content.AST
+	for _, c := range body.Children() {
+		switch c.Type() {
+		case "preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif", "preproc_elifdef":
+			out = append(out, classMembers(c)...)
+		default:
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // returnedField is "f:<field>" when a function's body returns a member
@@ -418,7 +453,48 @@ func returnedField(fn content.AST) string {
 				return "f:" + k[len(k)-1].Text()
 			}
 		}
+		// any other expression over the class's members (*std::get<0>(_t),
+		// _x.front()): evaluated in the class at index time
+		if x := recvExpr(e, nil); x != "" {
+			return "x:" + x
+		}
 		return ""
+	}
+	return ""
+}
+
+// tupleGet is the receiver expression of std::get<N>(t) / std::get<T>(t):
+// t's element N, or its element of type T.
+func tupleGet(fn content.AST, call []content.AST, vars map[string]string) string {
+	args := firstChildAny(fn, []string{"template_argument_list"})
+	var al content.AST
+	for _, c := range call {
+		if c.Type() == "argument_list" {
+			al = c
+		}
+	}
+	if args == nil || al == nil {
+		return ""
+	}
+	var arg content.AST
+	for _, c := range al.Children() {
+		if c.IsNamed() {
+			arg = c
+			break
+		}
+	}
+	if arg == nil {
+		return ""
+	}
+	base := recvExpr(arg, vars)
+	if base == "" {
+		return ""
+	}
+	if n := firstChildAny(args, []string{"number_literal"}); n != nil {
+		return then(base, "get#"+n.Text())
+	}
+	if t := TypeName(firstChildAny(args, []string{"type_descriptor"})); t != "" {
+		return then(base, "get:"+t)
 	}
 	return ""
 }
@@ -541,6 +617,12 @@ func TypeName(n content.AST) string {
 	switch n.Type() {
 	case "type_identifier":
 		return n.Text()
+	case "primitive_type", "sized_type_specifier":
+		// double, unsigned int: a number (no members, an overload's argument)
+		if f := strings.Fields(n.Text()); len(f) > 0 {
+			return f[len(f)-1]
+		}
+		return ""
 	case "type_descriptor":
 		return TypeName(firstChildAny(n, typeNodeTypes))
 	case "template_type":
@@ -570,6 +652,8 @@ func TypeName(n content.AST) string {
 				return "pair[" + args[0] + "]" + args[1]
 			}
 			return ""
+		case name == "tuple":
+			return "tuple[" + strings.Join(args, ";") + "]"
 		default:
 			return name
 		}
@@ -591,7 +675,7 @@ func TypeName(n content.AST) string {
 		}
 		if cur.Type() == "template_type" {
 			if id := firstChildAny(cur, []string{"type_identifier"}); id != nil {
-				if w := id.Text(); smartPointers[w] || seqContainers[w] || mapContainers[w] || w == "pair" {
+				if w := id.Text(); smartPointers[w] || seqContainers[w] || mapContainers[w] || w == "pair" || w == "tuple" {
 					return TypeName(cur)
 				}
 			}
@@ -706,8 +790,17 @@ func recvExpr(n content.AST, vars map[string]string) string {
 				}
 				return ""
 			}
+			// std::get<N>(t), std::get<T>(t): an element of a tuple
+			if id := firstChildAny(k[0], []string{"identifier"}); id != nil && id.Text() == "get" {
+				return tupleGet(k[0], k, vars)
+			}
 		}
 		if len(k) > 0 && k[0].Type() == "qualified_identifier" {
+			if tf := firstChildAny(k[0], []string{"template_function"}); tf != nil {
+				if id := firstChildAny(tf, []string{"identifier"}); id != nil && id.Text() == "get" {
+					return tupleGet(tf, k, vars) // std::get<…>(t)
+				}
+			}
 			// Cls::instance().m(): what Cls's static method returns — or, when
 			// Cls::instance names no method (ns::make()), as below
 			if scope, name := scopeAndLeaf(k[0]); scope != "" && name != "" {
@@ -738,6 +831,11 @@ func recvExpr(n content.AST, vars map[string]string) string {
 			if base = recvExpr(fk[0], vars); base == "" {
 				return ""
 			}
+		}
+		if fk[len(fk)-1].Type() == "template_method" {
+			// x.get<Tag>(): a template member of x's class, never a smart
+			// pointer's get() or a container's front()
+			return then(base, "()"+m)
 		}
 		switch {
 		case iterMembers[m]:
@@ -1030,11 +1128,13 @@ type typeTable struct {
 	// how many classes nest one of that name (two: the bare name is ambiguous)
 	nested   map[string]bool
 	nestedIn map[string]int
+	enums    map[string]bool // enumeration type names
+	depth    int             // nesting of method returns being evaluated
 }
 
 func newTypeTable(files []ParsedFile) *typeTable {
 	tt := &typeTable{classes: map[string]*ClassFact{}, aliases: map[string]string{}, returns: map[string]string{}, derived: map[string][]string{}, aliasArgs: map[string][]string{},
-		nested: map[string]bool{}, nestedIn: map[string]int{}}
+		nested: map[string]bool{}, nestedIn: map[string]int{}, enums: map[string]bool{}}
 	for _, f := range files {
 		if f.Types == nil {
 			continue
@@ -1052,6 +1152,9 @@ func newTypeTable(files []ParsedFile) *typeTable {
 		}
 		for k, v := range f.Types.AliasArgs {
 			tt.aliasArgs[k] = v
+		}
+		for k := range f.Types.Enums {
+			tt.enums[k] = true
 		}
 		for k := range f.Types.Nested {
 			if !tt.nested[k] {
@@ -1090,7 +1193,7 @@ func (tt *typeTable) canon(t string) string {
 }
 
 func (tt *typeTable) canonN(t string, depth int) string {
-	if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "pair[") {
+	if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "pair[") || strings.HasPrefix(t, "tuple[") {
 		return t // a container: its element type is canonical where it is read
 	}
 	for i := 0; i < 8 && t != ""; i++ {
@@ -1227,17 +1330,55 @@ func (tt *typeTable) inClass(t, callerRecv string) string {
 			return n
 		}
 	}
-	if callerRecv == "" || tt.classes[tt.canon(t)] != nil {
+	if callerRecv == "" {
 		return t
 	}
-	for _, c := range tt.lineage(callerRecv) {
-		if cf := tt.classes[c]; cf != nil {
-			if a, ok := cf.Aliases[t]; ok {
-				return a
-			}
-		}
+	if _, ok := tt.classAlias(t, callerRecv); ok {
+		return tt.inScope(t, callerRecv, 0) // aliases inside it too (std::array<MotorDriver, N>)
 	}
 	return t
+}
+
+// inScope is type t as written in class c: its aliases followed, inside a
+// container's element type too (std::array<MotorDriver, N> with the class's
+// using MotorDriver = …); "" when an alias is the build's to pick.
+func (tt *typeTable) inScope(t, c string, depth int) string {
+	if depth > 4 || t == "" {
+		return t
+	}
+	if elem, ok := strings.CutPrefix(t, "[]"); ok {
+		if e := tt.inScope(elem, c, depth+1); e != "" {
+			return "[]" + e
+		}
+		return ""
+	}
+	if a, ok := tt.classAlias(t, c); ok {
+		if a == "" {
+			return ""
+		}
+		return tt.inScope(a, c, depth+1)
+	}
+	return t
+}
+
+// classAlias is the type alias t names in cls (or a base): it shadows a
+// class of the same name outside (using MotorDriver = Traits::MotorDriver;
+// is not the class template MotorDriver). An alias of a template
+// parameter's member type is the instantiation's: "".
+func (tt *typeTable) classAlias(t, cls string) (string, bool) {
+	for _, c := range tt.lineage(cls) {
+		cf := tt.classes[c]
+		if cf == nil || len(cf.Aliases) == 0 {
+			continue
+		}
+		if a, ok := cf.Aliases[t]; ok {
+			if head, _, scoped := strings.Cut(a, "::"); scoped && containsStr(cf.TParams, head) {
+				return "", true
+			}
+			return a, true
+		}
+	}
+	return "", false
 }
 
 // lineage is cls and its bases, nearest first. A class template's base that
@@ -1350,7 +1491,7 @@ func (tt *typeTable) fieldType(cls, field string) (string, bool) {
 	for _, c := range tt.lineage(cls) {
 		if cf := tt.classes[c]; cf != nil {
 			if t, ok := cf.Fields[field]; ok {
-				return tt.ownNested(c, t), true
+				return tt.inScope(tt.ownNested(c, t), c, 0), true
 			}
 		}
 	}
@@ -1367,6 +1508,15 @@ func (tt *typeTable) methodReturn(cls, m string) string {
 		if t, ok := tt.returns[c+"."+m]; ok {
 			if f, isField := strings.CutPrefix(t, "f:"); isField {
 				t, _ = tt.fieldType(c, f)
+			} else if x, isExpr := strings.CutPrefix(t, "x:"); isExpr {
+				if tt.depth > 4 {
+					return "" // a method's return evaluated through itself
+				}
+				tt.depth++
+				t = tt.eval(x, c)
+				tt.depth--
+			} else {
+				t = tt.inScope(t, c, 0) // the class's aliases, as its declaration reads them
 			}
 			return t
 		}
@@ -1428,6 +1578,18 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 			return ""
 		}
 		switch {
+		case strings.HasPrefix(op, "get") && strings.HasPrefix(t, "tuple["):
+			elems := strings.Split(strings.TrimSuffix(strings.TrimPrefix(t, "tuple["), "]"), ";")
+			t = ""
+			if i, err := strconv.Atoi(strings.TrimPrefix(op, "get#")); err == nil && i < len(elems) {
+				t = elems[i]
+			} else if want := strings.TrimPrefix(op, "get:"); want != op {
+				for _, e := range elems {
+					if e == want || typeLeaf(e) == typeLeaf(want) {
+						t = e
+					}
+				}
+			}
 		case op == "[]" || op == "it":
 			t = elemOf(t, op == "it")
 		case op == ".first" || op == ".second":

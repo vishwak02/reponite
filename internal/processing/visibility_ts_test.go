@@ -2,7 +2,10 @@
 
 package processing
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A C++ call reaches only what its translation unit can name: its own file,
 // the headers it includes, and the definitions those headers declare.
@@ -304,5 +307,384 @@ class Tracker {
 	}
 	if _, ok := edges["app/include/app.Tracker.restore"]["rec/include/rec.RestoreStream.read"]; !ok {
 		t.Errorf("the macro's restore() calls read: %v", edges["app/include/app.Tracker.restore"])
+	}
+}
+
+// Overloads of one name in two files: the argument types written at the call
+// (an enumerator, a typed local) pick the overload whose parameter they fit.
+func TestCppOverloadByArgumentTypes(t *testing.T) {
+	files := map[string]string{
+		"ui/include/ui/strings.hpp": `enum class Reason { NONE, NO_TOTES };
+class Action {};
+std::string toString(Reason r);
+std::string toString(const Action& a);
+`,
+		"ui/src/reason.cpp": `#include "ui/strings.hpp"
+std::string toString(Reason r) { return "r"; }
+`,
+		"ui/src2/action.cpp": `#include "ui/strings.hpp"
+std::string toString(const Action& a) { return "a"; }
+`,
+		"app/src/splitter.cpp": `#include "ui/strings.hpp"
+void split() {
+    auto s = toString(Reason::NO_TOTES);
+}
+void show(const Action& act) {
+    auto s = toString(act);
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["app/src.split"]["ui/src.toString"]; !ok {
+		t.Errorf("an enumerator picks the enum overload: %v", edges["app/src.split"])
+	}
+	if _, ok := edges["app/src.show"]["ui/src2.toString"]; !ok {
+		t.Errorf("a typed argument picks its class's overload: %v", edges["app/src.show"])
+	}
+}
+
+func TestCppClassAliasShadowsClassTemplate(t *testing.T) {
+	files := map[string]string{
+		"lib/include/lib/driver.hpp": `namespace mc {
+template <typename Concrete>
+class MotorDriver {
+public:
+    bool velocity(double& v) { return static_cast<Concrete&>(*this).velocity(v); }
+};
+class Zlib : public MotorDriver<Zlib> {
+public:
+    bool velocity(double& v) const;
+};
+}
+`,
+		"lib/src/zlib.cpp": `#include "lib/driver.hpp"
+namespace mc {
+bool Zlib::velocity(double& v) const { return true; }
+}
+`,
+		"dt/include/dt/traits.hpp": `#include "lib/driver.hpp"
+namespace dt {
+struct Traits {
+#if USES_ZLIB
+    using MotorDriver = mc::Zlib;
+#endif
+};
+}
+`,
+		"dt/include/dt/manager.hpp": `#include "dt/traits.hpp"
+namespace dt {
+class Manager {
+public:
+    using MotorDriver = Traits::MotorDriver;
+    const MotorDriver& getMotorDriver(int i) const { return _drivers[i]; }
+private:
+    std::array<MotorDriver, 4> _drivers{};
+};
+}
+`,
+		"dt/include/dt/recovery.hpp": `#include "dt/traits.hpp"
+namespace dt {
+class Recovery {
+public:
+    using MotorDriver = Traits::MotorDriver;
+    using Drivers = std::array<MotorDriver, 4>;
+    void reset(Drivers& drivers);
+};
+}
+`,
+		"dt/src/recovery.cpp": `#include "dt/recovery.hpp"
+namespace dt {
+void Recovery::reset(Drivers& drivers) {
+    double v{};
+    for (auto& d : drivers) {
+        d.velocity(v);
+    }
+}
+}
+`,
+		"app/src/odom.cpp": `#include "dt/manager.hpp"
+void copy(const dt::Manager& m) {
+    const auto& d = m.getMotorDriver(0);
+    double v{};
+    d.velocity(v);
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["app/src.copy"]["lib/src.Zlib.velocity"]; !ok {
+		t.Errorf("the class's alias names the concrete driver, not the base template: %v", edges["app/src.copy"])
+	}
+	if _, ok := edges["dt/src.Recovery.reset"]["lib/src.Zlib.velocity"]; !ok {
+		t.Errorf("an array of the class's alias holds the concrete driver: %v", edges["dt/src.Recovery.reset"])
+	}
+	// two configurations, two drivers: the build picks, so no edge is drawn
+	files["dt/include/dt/traits.hpp"] = strings.Replace(files["dt/include/dt/traits.hpp"], "#endif", "#else\n    using MotorDriver = mc::Other;\n#endif", 1)
+	files["lib/include/lib/other.hpp"] = `namespace mc {
+class Other : public MotorDriver<Other> {
+public:
+    bool velocity(double& v) const { return false; }
+};
+}
+`
+	edges = indexAndEdges(t, files)
+	for to := range edges["app/src.copy"] {
+		if strings.Contains(to, ".velocity") {
+			t.Errorf("a configuration-dependent driver is not guessed: %v", edges["app/src.copy"])
+		}
+	}
+}
+
+func TestJSClassNamedLikeItsModule(t *testing.T) {
+	files := map[string]string{
+		"src/tracing/TraceManager.ts": `class TraceManager {
+  startSpan(name: string) { return name; }
+  recordEvent(name: string) { return this.startSpan(name); }
+  recordTopic(name: string) { this.recordEvent(name); }
+}
+export const traceManager = new TraceManager();
+export const recordEvent = (name: string) => traceManager.recordEvent(name);
+export const startSpan = (name: string) => traceManager.startSpan(name);
+`,
+		"src/hooks/useFlow.ts": `import { startSpan } from "../tracing/TraceManager";
+export function useFlow() {
+  startSpan("flow");
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["src/hooks.useFlow"]["src/tracing.TraceManager.startSpan"]; !ok {
+		t.Errorf("the imported function is the module's, not the class's method: %v", edges["src/hooks.useFlow"])
+	}
+	if _, ok := edges["src/tracing.TraceManager.recordTopic"]["src/tracing.TraceManager.TraceManager.recordEvent"]; !ok {
+		t.Errorf("this.recordEvent is the class's method: %v", edges["src/tracing.TraceManager.recordTopic"])
+	}
+	if _, ok := edges["src/tracing.TraceManager.recordTopic"]["src/tracing.TraceManager.recordEvent"]; ok {
+		t.Errorf("this.recordEvent is not the module's function: %v", edges["src/tracing.TraceManager.recordTopic"])
+	}
+}
+
+func TestPythonBareCallNeedsImport(t *testing.T) {
+	files := map[string]string{
+		"tools/stall.py": `def _n(row, key):
+    return int(row.get(key) or 0)
+`,
+		"reports/text.py": `def n(v):
+    return str(v)
+`,
+		"reports/doc.py": `from reports import text
+
+_n, _p = text.n, text.n
+_k, _v = "key", text.n
+
+def build(t):
+    return _n(t)
+`,
+		"reports/helpers.py": `def fmt(v):
+    return v
+`,
+		"reports/star.py": `from reports.helpers import *
+
+def show(v):
+    return fmt(v)
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["reports.doc.build"]["tools.stall._n"]; ok {
+		t.Errorf("a bare _n() bound by assignment is not another module's _n: %v", edges["reports.doc.build"])
+	}
+	if _, ok := edges["reports.doc.build"]["reports.text.n"]; !ok {
+		t.Errorf("_n = text.n binds text's n: %v", edges["reports.doc.build"])
+	}
+	if _, ok := edges["reports.star.show"]["reports.helpers.fmt"]; !ok {
+		t.Errorf("a star import brings fmt: %v", edges["reports.star.show"])
+	}
+}
+
+func TestCppOverloadByLibraryArgumentType(t *testing.T) {
+	files := map[string]string{
+		"fx/include/fx/fixture.hpp": `#include <ros/duration.h>
+class Fixture {
+public:
+    void advance(double seconds) { advance(ros::Duration(seconds)); }
+    void advance(ros::Duration delta);
+    void stepUntil() {
+        ros::Duration step(0.1);
+        advance(step);
+    }
+    static inline const ros::Duration POST_DELAY{5};
+};
+struct Config { double timeout; };
+`,
+		"fx/src/fixture.cpp": `#include "fx/fixture.hpp"
+void Fixture::advance(ros::Duration delta) {}
+`,
+		"fx/src/test_wait.cpp": `#include "fx/fixture.hpp"
+class Waits : public Fixture {
+public:
+    void settle(const Config& cfg) {
+        advance(cfg.timeout * 0.9);
+    }
+    void idle() {
+        advance(POST_DELAY);
+    }
+};
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["fx/include/fx.Fixture.stepUntil"]["fx/src.Fixture.advance"]; !ok {
+		t.Errorf("a ros::Duration argument picks the ros::Duration overload: %v", edges["fx/include/fx.Fixture.stepUntil"])
+	}
+	if _, ok := edges["fx/include/fx.Fixture.stepUntil"]["fx/include/fx.Fixture.advance"]; ok {
+		t.Errorf("not the double overload: %v", edges["fx/include/fx.Fixture.stepUntil"])
+	}
+	if _, ok := edges["fx/src.Waits.settle"]["fx/include/fx.Fixture.advance"]; !ok {
+		t.Errorf("a number (a double field times a literal) picks the double overload: %v", edges["fx/src.Waits.settle"])
+	}
+	if _, ok := edges["fx/src.Waits.idle"]["fx/src.Fixture.advance"]; !ok {
+		t.Errorf("a ros::Duration static member picks the ros::Duration overload: %v", edges["fx/src.Waits.idle"])
+	}
+}
+
+func TestCppTemplateMemberGetIsNotPassThrough(t *testing.T) {
+	files := map[string]string{
+		"idx/include/idx/index.hpp": `template <typename T>
+class IndexBase {
+public:
+    template <typename Tag>
+    const auto& get() const { return _index.template get<Tag>(); }
+    auto end() const { return _index.end(); }
+protected:
+    boost::multi_index_container<T> _index;
+};
+class Partitions {
+public:
+    bool has(int id) const;
+private:
+    IndexBase<int> _index;
+};
+`,
+		"idx/src/partitions.cpp": `#include "idx/index.hpp"
+bool Partitions::has(int id) const {
+    const auto& primary = _index.get<ById>();
+    return primary.find(id) != primary.end();
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["idx/src.Partitions.has"]["idx/include/idx.IndexBase.end"]; ok {
+		t.Errorf("get<Tag>() returns the library index, not the wrapper: %v", edges["idx/src.Partitions.has"])
+	}
+}
+
+func TestCppTwoPackagesOneClassName(t *testing.T) {
+	files := map[string]string{
+		"v1/include/v1/Map.hpp": `#include "types.hpp"
+class Map {
+public:
+    Elevator getElevator(const Location& l) const;
+    Elevator getElevator(const NodePtr& n) const { return getElevator(Location::from(n)); }
+    bool isElevator(const Location& l) const { return getElevator(l).ok; }
+};
+`,
+		"v1/include/v1/types.hpp": `struct Location { static Location from(const NodePtr& n); };
+`,
+		"v1/src/Map.cpp": `#include "v1/Map.hpp"
+Elevator Map::getElevator(const Location& l) const { return {}; }
+`,
+		"v2/include/v2/Map.hpp": `#include "types.hpp"
+class Map {
+public:
+    Elevator getElevator(const Location& l) const;
+};
+`,
+		"v2/include/v2/types.hpp": `struct Location { static Location from(const NodePtr& n); };
+`,
+		"v2/src/Map.cpp": `#include "v2/Map.hpp"
+Elevator Map::getElevator(const Location& l) const { return {}; }
+`,
+	}
+	edges := indexAndEdges(t, files)
+	for _, caller := range []string{"v1/include/v1.Map.isElevator", "v1/include/v1.Map.getElevator"} {
+		if _, ok := edges[caller]["v1/src.Map.getElevator"]; !ok {
+			t.Errorf("%s calls its own package's Location overload: %v", caller, edges[caller])
+		}
+		if _, ok := edges[caller]["v2/src.Map.getElevator"]; ok {
+			t.Errorf("%s never reaches the other package's Map: %v", caller, edges[caller])
+		}
+	}
+}
+
+func TestCppOverloadNestedParameterType(t *testing.T) {
+	files := map[string]string{
+		"geo/include/geo/Location.hpp": `struct Location { int x; };
+`,
+		"nav/include/nav/Map.hpp": `#include "geo/Location.hpp"
+class Map {
+public:
+    struct Tile { int id; };
+    static Point getPosition(const Tile& tile);
+    template <typename T>
+    std::optional<Point> getPosition(T t) const { return std::nullopt; }
+};
+`,
+		"nav/src/Map.cpp": `#include "nav/Map.hpp"
+Point Map::getPosition(const Tile& tile) { return {}; }
+`,
+		"nav/src/Utils.cpp": `#include "nav/Map.hpp"
+Point toPose(Map& map, const Location& location) {
+    auto p = map.getPosition(location);
+    return *p;
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["nav/src.toPose"]["nav/src.Map.getPosition"]; ok {
+		t.Errorf("a Location is no Map::Tile: %v", edges["nav/src.toPose"])
+	}
+}
+
+func TestCppNestedClassAfterBracedInitializer(t *testing.T) {
+	files := map[string]string{
+		"tr/include/tr/helper.hpp": `namespace trace::util {
+class TracingHelper {
+public:
+    class TraceWithCounts {
+    public:
+        TraceWithCounts(const std::string name, const Context& ctx)
+                : _name(name)
+                , _trace(name, ctx){};
+        ~TraceWithCounts() {
+            for (const auto& [key, value] : _counts) {
+                _trace.setTag(key, value);
+            }
+        }
+        TraceWithCounts(TraceWithCounts&&) = default;
+        int incrementCount(const std::string& key) { return ++_counts[key]; }
+    private:
+        std::map<std::string, int> _counts;
+    };
+    int incrementCount(const std::string& key) { return getTraceWithCounts().incrementCount(key); }
+    TraceWithCounts& getTraceWithCounts() { return *_current; }
+private:
+    std::optional<TraceWithCounts> _current;
+};
+}
+`,
+		"est/src/estimator.cpp": `#include "tr/helper.hpp"
+class Estimator {
+public:
+    void update();
+private:
+    trace::util::TracingHelper _tracing;
+};
+void Estimator::update() {
+    _tracing.incrementCount("imu");
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	t.Logf("%v", edges)
+	if _, ok := edges["tr/include/tr.TracingHelper.incrementCount"]["tr/include/tr.TraceWithCounts.incrementCount"]; !ok {
+		t.Errorf("the helper's incrementCount calls the nested class's: %v", edges["tr/include/tr.TracingHelper.incrementCount"])
 	}
 }

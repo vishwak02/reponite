@@ -198,7 +198,78 @@ func pyImports(root content.AST) []ImportBinding {
 	for _, stmt := range descendantsAny(root, []string{"import_from_statement"}) {
 		out = append(out, pyImportFromStatement(stmt)...)
 	}
+	return append(out, pyModuleAliases(root, out)...)
+}
+
+// pyModuleAliases are a module's top-level assignments of an imported
+// module's attribute: `_n, _pct = text.n, text.pct` binds _n as text's n,
+// just as `from ….text import n as _n` would.
+func pyModuleAliases(root content.AST, imports []ImportBinding) []ImportBinding {
+	byLocal := map[string]ImportBinding{}
+	for _, b := range imports {
+		byLocal[b.Local] = b
+	}
+	var out []ImportBinding
+	for _, st := range root.Children() {
+		if st.Type() != "expression_statement" {
+			continue
+		}
+		for _, a := range st.Children() {
+			kids := a.Children()
+			if a.Type() != "assignment" || len(kids) < 3 {
+				continue
+			}
+			names := pyListItems(kids[0], "identifier")
+			vals := pyListItems(kids[len(kids)-1], "attribute")
+			if len(names) == 0 || len(names) != len(vals) {
+				continue
+			}
+			for i, v := range vals {
+				if names[i] == nil || v == nil {
+					continue
+				}
+				vk := v.Children()
+				if len(vk) < 3 || vk[0].Type() != "identifier" || vk[len(vk)-1].Type() != "identifier" {
+					continue
+				}
+				b, ok := byLocal[vk[0].Text()]
+				if !ok || b.Local == "*" {
+					continue
+				}
+				mod := b.Module
+				switch {
+				case b.Symbol != "" && strings.HasSuffix(b.Module, "."):
+					mod = b.Module + b.Symbol // from . import text
+				case b.Symbol != "":
+					mod = b.Module + "." + b.Symbol
+				}
+				out = append(out, ImportBinding{Local: names[i].Text(), Module: mod, Symbol: vk[len(vk)-1].Text()})
+			}
+		}
+	}
 	return out
+}
+
+// pyListItems are n's items of type want: n itself, or the elements of a
+// tuple/list on either side of an assignment (nil where one is not want).
+func pyListItems(n content.AST, want string) []content.AST {
+	switch n.Type() {
+	case want:
+		return []content.AST{n}
+	case "pattern_list", "tuple_pattern", "expression_list", "tuple":
+		var out []content.AST
+		for _, c := range n.Children() {
+			switch c.Type() {
+			case ",", "(", ")":
+			case want:
+				out = append(out, c)
+			default:
+				out = append(out, nil)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func pyImportStatement(stmt content.AST) []ImportBinding {
@@ -249,6 +320,9 @@ func pyImportFromStatement(stmt content.AST) []ImportBinding {
 			if orig != "" && alias != "" {
 				out = append(out, ImportBinding{Local: alias, Module: mod, Symbol: orig})
 			}
+		case "wildcard_import":
+			// from m import *: every public name of m (a bare call may be one)
+			out = append(out, ImportBinding{Local: "*", Module: mod, Symbol: "*"})
 		}
 	}
 	return out

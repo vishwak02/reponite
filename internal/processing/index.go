@@ -9,6 +9,7 @@ package processing
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -105,6 +106,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
 	linkRobotEmbedded(files)
 	nameGoInits(files)
+	nameGoTestTwins(files)
 	expandCppMacros(repo, normVer, files)
 	mods := newModuleIndex(files)
 	classes := newClassGraph()
@@ -141,6 +143,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				}
 			}
 		}
+		moduleLevel := map[string]bool{}
+		for _, s := range f.Symbols {
+			if s.Recv == "" {
+				moduleLevel[s.Name] = true
+			}
+		}
 		for _, s := range f.Symbols {
 			// Methods qualify by receiver too (pkg.Recv.name) so same-named methods
 			// on different types are distinct; edge resolution still keys off the
@@ -150,6 +158,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				local = s.Recv + "." + s.Name
 			}
 			qid := qualifyModule(pkg, local)
+			if s.Recv != "" && moduleLevel[s.Name] && qid != qualify(pkg, local) {
+				// TraceManager.ts: class TraceManager's recordEvent and the
+				// module's own `export const recordEvent` — the class keeps
+				// its module in its id rather than share the function's
+				qid = qualify(pkg, local)
+			}
 			if prev, dup := byQID[qid]; dup && s.Recv != "" && prev.path != f.Path &&
 				isCSource(f.Path) && isCSource(prev.path) {
 				// Cls::f defined in two source files of one directory: two classes
@@ -229,7 +243,33 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
 	x.arity = arity
 	x.vis = newCppVisibility(files)
+	x.paramTypes = map[string][][]string{}
 	x.splits = splits
+	pyStars := map[string][]string{}
+	pyStarExt := map[string]bool{}
+	for _, f := range files {
+		if f.Lang != "python" {
+			continue
+		}
+		pyStars[f.Path] = []string{} // read: a file with no star import has none
+		for _, b := range f.Imports {
+			if b.Local != "*" {
+				continue
+			}
+			if pkg, ok := mods.resolve("python", f.Path, b.Module); ok {
+				pyStars[f.Path] = append(pyStars[f.Path], pkg)
+			} else {
+				pyStarExt[f.Path] = true
+			}
+		}
+	}
+	x.pyStar = func(p string) ([]string, bool) {
+		pkgs, read := pyStars[p]
+		if !read {
+			return nil, true // not known: the name rules
+		}
+		return pkgs, pyStarExt[p]
+	}
 	x.jsModule = func(pkg string) bool {
 		jm := mods.jsMods[pkg]
 		return jm != nil && langFamily(jm.lang) == "js"
@@ -240,6 +280,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	for _, qid := range order {
 		nodeSet[qid] = true
 		c := byQID[qid]
+		if len(c.sym.ParamTypes) > 0 {
+			x.paramTypes[qid] = c.sym.ParamTypes
+		}
 		if x.vis != nil {
 			x.defPath[qid], x.recvOf[qid] = c.path, c.sym.Recv
 			if more := alsoIn[qid]; len(more) > 0 {
@@ -425,8 +468,10 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				kept := qcalls[:0:0]
 				for _, qc := range qcalls {
 					v, local := c.sym.Vars[qc.Name]
-					if qc.Qualifier == "" && v == pyParamTag {
-						// a parameter called: whatever the caller passed
+					if qc.Qualifier == "" && local && !strings.HasPrefix(v, pyFixtureTag) {
+						// a parameter or local called: whatever value it holds (a
+						// callable object, a function passed in) — never the module
+						// function that shares its name
 						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "local"})
 						continue
 					}
@@ -738,6 +783,7 @@ func baseName(qid string) string {
 // mergeOverload folds overload b into a (the first definition): a keeps its
 // identity and signature; the calls of both bodies count.
 func mergeOverload(a, b Symbol) Symbol {
+	a.ParamTypes = append(append([][]string(nil), a.ParamTypes...), b.ParamTypes...)
 	a.Callees = append(append([]string(nil), a.Callees...), b.Callees...)
 	a.QualifiedCalls = append(append([]QualifiedCall(nil), a.QualifiedCalls...), b.QualifiedCalls...)
 	a.CallSites = append(append([]CallSite(nil), a.CallSites...), b.CallSites...)
@@ -778,6 +824,68 @@ func nameGoInits(files []ParsedFile) {
 			}
 		}
 	}
+}
+
+// nameGoTestTwins gives a function of an external test package (package
+// x_test) that shares its name with a function of package x in the same
+// directory its file's name (helper@create_test): two packages, two
+// functions — under one id the test's would replace the package's.
+func nameGoTestTwins(files []ParsedFile) {
+	pkgName := map[int]string{}
+	own := map[string]map[string]bool{} // dir -> free function names of the non-test package
+	for i, f := range files {
+		if f.Lang != "go" {
+			continue
+		}
+		src := f.Content
+		if src == "" && f.Load != nil {
+			src, _ = f.Load()
+		}
+		m := reGoPackage.FindStringSubmatch(src)
+		if m == nil {
+			continue
+		}
+		pkgName[i] = m[1]
+		if strings.HasSuffix(m[1], "_test") {
+			continue
+		}
+		d := path.Dir(f.Path)
+		if own[d] == nil {
+			own[d] = map[string]bool{}
+		}
+		for _, s := range f.Symbols {
+			if s.Recv == "" {
+				own[d][s.Name] = true
+			}
+		}
+	}
+	for i := range files {
+		f := &files[i]
+		if !strings.HasSuffix(pkgName[i], "_test") {
+			continue
+		}
+		taken := own[path.Dir(f.Path)]
+		renamed := map[string]string{}
+		for j := range f.Symbols {
+			if s := &f.Symbols[j]; s.Recv == "" && taken[s.Name] {
+				renamed[s.Name] = goTestTwinName(s.Name, f.Path)
+				s.Name = renamed[s.Name]
+			}
+		}
+		for j := range f.Spans {
+			if n, ok := renamed[f.Spans[j].Name]; ok {
+				f.Spans[j].Name = n
+			}
+		}
+	}
+}
+
+var reGoPackage = regexp.MustCompile(`(?m)^package\s+(\w+)`)
+
+// goTestTwinName is the id name of an external test package's function that
+// a function of the package itself also names.
+func goTestTwinName(name, file string) string {
+	return name + "@" + strings.TrimSuffix(path.Base(file), ".go")
 }
 
 // goInitName is the id name of a Go file's init function.

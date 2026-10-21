@@ -219,6 +219,8 @@ def main():
 
     def bases_of(key):
         """the class's bases as keys; None for a base outside the repo"""
+        if key not in classes:
+            return [None]  # a name bound to something that is not a class of the repo
         rel = key[0]
         imp = imports_of(rel, files[rel])
         out = []

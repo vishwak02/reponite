@@ -104,6 +104,8 @@ function insideFunction(n) {
 
 function isDefNode(n) {
   if (insideFunction(n)) return false;
+  // an overload signature declares, the implementation (with a body) defines
+  if ((ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n)) && !n.body) return false;
   return ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n) || ts.isClassDeclaration(n) ||
     ((ts.isArrowFunction(n) || ts.isFunctionExpression(n)) && nameOf(n) !== null &&
       (ts.isVariableDeclaration(n.parent) || ts.isPropertyDeclaration(n.parent) ||
@@ -160,6 +162,11 @@ function unwrapComponent(checker, e, depth) {
   }
   if (ts.isArrowFunction(e) || ts.isFunctionExpression(e) || ts.isClassExpression(e)) return defAt.has(e) ? e : null;
   if (ts.isCallExpression(e)) {
+    // styled(X)(styleFn), styled.div(…): a styled-components definition,
+    // whose arguments are styles, not the component that renders
+    let root = e.expression;
+    while (ts.isCallExpression(root) || ts.isPropertyAccessExpression(root)) root = root.expression;
+    if (ts.isIdentifier(root) && ["styled", "css", "keyframes", "createGlobalStyle"].includes(root.text)) return null;
     // the wrapped component is the outermost call's argument; a curried
     // wrapper's own arguments (connect(mapState, actions)) configure it
     for (const a of e.arguments) {
@@ -192,7 +199,9 @@ function targetDecl(checker, expr, depth = 0, jsx = false) {
   let sym = checker.getSymbolAtLocation(expr);
   if (!sym) return null;
   if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
-  const d = (sym.declarations || [])[0];
+  const decls = sym.declarations || [];
+  // overloads: the implementation is the definition
+  const d = decls.find((x) => (ts.isFunctionDeclaration(x) || ts.isMethodDeclaration(x)) && x.body) || decls[0];
   if (!d) return null;
   if (jsx && ts.isExportAssignment(d)) return unwrapComponent(checker, d.expression, depth);
   if (jsx && ts.isVariableDeclaration(d) && d.initializer && ts.isCallExpression(d.initializer) && !defAt.has(d.initializer)) {

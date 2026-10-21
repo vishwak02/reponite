@@ -36,7 +36,23 @@ def main():
         dirs[:] = [x for x in dirs if not x.startswith(".") and x not in ("node_modules", "__pycache__")]
         if "__init__.py" in files and not os.path.exists(os.path.join(os.path.dirname(d), "__init__.py")):
             roots.add(os.path.dirname(d))
-    project = jedi.Project(root, added_sys_path=sorted(roots))
+    projects = {}
+
+    def project_for(rel):
+        # as the file runs: a script's own directory is sys.path[0], and pytest
+        # puts the first directory above a test without an __init__.py first;
+        # `from utils.metrics import Metrics` next to the script is its utils
+        d = os.path.dirname(os.path.join(root, rel))
+        if d not in projects:
+            near = []
+            cur = d
+            while cur.startswith(root):
+                near.append(cur)
+                if cur == root:
+                    break
+                cur = os.path.dirname(cur)
+            projects[d] = jedi.Project(root, added_sys_path=near + sorted(r for r in roots if r not in near))
+        return projects[d]
 
     def enclosing(path, line):
         best = None
@@ -44,6 +60,34 @@ def main():
             if d["line"] <= line <= d["end"] and (best is None or d["line"] > best["line"]):
                 best = d
         return best
+
+    # names the repo imports under another name (`import X as _X`): an untyped
+    # call of the alias is just as undetermined for the name it stands for
+    aliases = {}
+    for rel in defs_by_path:
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8") as fh:
+                t = ast.parse(fh.read(), filename=rel)
+        except (SyntaxError, UnicodeDecodeError, ValueError, OSError):
+            continue
+        for n in ast.walk(t):
+            if isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    if a.asname and a.asname != a.name:
+                        aliases.setdefault(a.asname, set()).add(a.name)
+        for n in ast.walk(t):
+            # _real = net.ssh_command, _n, _pct = text.n, text.pct: a name
+            # bound to another module's function
+            if not isinstance(n, ast.Assign) or len(n.targets) != 1:
+                continue
+            tg, val = n.targets[0], n.value
+            names = tg.elts if isinstance(tg, ast.Tuple) else [tg]
+            vals = val.elts if isinstance(val, ast.Tuple) else [val]
+            if len(names) != len(vals):
+                continue
+            for nm, v in zip(names, vals):
+                if isinstance(nm, ast.Name) and isinstance(v, ast.Attribute) and nm.id != v.attr:
+                    aliases.setdefault(nm.id, set()).add(v.attr)
 
     added = 0
     external, unresolved = set(truth.pop("fixture_external", [])), set()
@@ -57,6 +101,7 @@ def main():
         except (SyntaxError, UnicodeDecodeError, ValueError, OSError) as e:
             print(f"jedigt: skipped {rel}: {e.__class__.__name__}", file=sys.stderr)
             continue
+        project = project_for(rel)
         script = jedi.Script(src, path=full, project=project)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -81,11 +126,24 @@ def main():
                     targets = jedi.Script(src, path=full, project=project).goto(line, col, follow_imports=True)
             except Exception:  # jedi gives up on some constructs
                 targets = []
+            if targets and all(t.type == "statement" for t in targets):
+                # a name bound by assignment (`_aggs = es.aggs`, a tuple of
+                # them): goto stops at the assignment, the value is the callee
+                try:
+                    inferred = script.infer(line, col)
+                except Exception:
+                    inferred = []
+                if inferred and all(t.type in ("function", "class") for t in inferred):
+                    targets = inferred
+                else:
+                    targets = []  # a variable whose value Jedi cannot name: undetermined
             name = f.attr if isinstance(f, ast.Attribute) else f.id
             if not targets:
                 # this call stays undetermined, whatever another call of the
                 # same name in the caller resolved to
                 unresolved.add(caller["id"] + ">" + name)
+                for orig in aliases.get(name, ()):
+                    unresolved.add(caller["id"] + ">" + orig)
                 continue
             # outside the repo only when Jedi names a real function, class or
             # module there: on some code it lands on an unrelated stub line

@@ -565,6 +565,7 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 		}
 		// the file's own module named in the id (dir.module.Class.f): this
 		// file, not a same-named class in a sibling module
+		moduleLevel := false // the id names a module-level definition of this file
 		if stem := fileModuleStem(f.Path); stem != "" {
 			mod := stem
 			if p != "" {
@@ -573,6 +574,7 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 			switch {
 			case strings.HasPrefix(qid, mod+"."):
 				score += 2
+				moduleLevel = !strings.Contains(qid[len(mod)+1:], ".")
 			case qid == mod && stem == base:
 				score += 2 // dir.main for main.py's main(): the id names its file
 			default:
@@ -587,7 +589,11 @@ func locateSymbol(files []File, qid string) (string, SymbolSpan, bool) {
 			}
 			sc := score
 			switch {
-			case owner != "" && ownedBy(f, sp, owner, base):
+			case moduleLevel && nestedInClass(f, sp):
+				sc-- // module TraceManager's startSpan, not its class TraceManager's
+			case owner != "" && !moduleLevel && ownedBy(f, sp, owner, base):
+				sc++
+			case moduleLevel:
 				sc++
 			case owner == "" && isCLikePath(f.Path) && hasWordAt(declHead(f, sp), "friend"):
 				// a friend defined in its class is a free function
@@ -647,10 +653,17 @@ func ownedBy(f File, sp SymbolSpan, owner, base string) bool {
 	if fileModuleStem(f.Path) == owner && !nestedInClass(f, sp) {
 		return true
 	}
-	for _, o := range f.Symbols {
-		if o.Name == owner && o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine && o != sp {
-			return true
+	// the innermost span enclosing it: TracingHelper's incrementCount, not
+	// that of the class TraceWithCounts nested in it
+	var in *SymbolSpan
+	for i, o := range f.Symbols {
+		if o.StartLine <= sp.StartLine && o.EndLine >= sp.EndLine && (o.StartLine < sp.StartLine || o.EndLine > sp.EndLine) &&
+			(in == nil || o.EndLine-o.StartLine < in.EndLine-in.StartLine) {
+			in = &f.Symbols[i]
 		}
+	}
+	if in != nil && in.Name == owner {
+		return true
 	}
 	line := declHead(f, sp)
 	return scopedDef(line, owner, base) || hasWordAt(line, owner+") "+base) || gtestDef(line, owner, base)

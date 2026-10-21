@@ -258,7 +258,7 @@ func (g *classGraph) method(cls, name string, super bool, nodeSet map[string]boo
 		if isExtBase(c) {
 			return "", false
 		}
-		if q := qualifyModule(g.pkg[c], g.name[c]+"."+name); nodeSet[q] {
+		if q := memberQID(g.pkg[c], g.name[c], name, nodeSet); nodeSet[q] {
 			return q, true
 		}
 	}
@@ -278,7 +278,7 @@ func (g *classGraph) overriders(cls, name string, nodeSet map[string]bool) []str
 			continue
 		}
 		seen[c] = true
-		if q := qualifyModule(g.pkg[c], g.name[c]+"."+name); nodeSet[q] {
+		if q := memberQID(g.pkg[c], g.name[c], name, nodeSet); nodeSet[q] {
 			out = append(out, q)
 		}
 		queue = append(queue, g.derived[c]...)

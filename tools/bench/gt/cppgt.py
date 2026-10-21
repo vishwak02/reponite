@@ -22,6 +22,7 @@ include paths, so far fewer headers are stubbed and far fewer calls stay
 undetermined.
 """
 
+import ctypes
 import json
 import multiprocessing
 import os
@@ -109,8 +110,11 @@ def header_dirs(roots):
                 out.append(d)  # vendored libraries included by their own dir (Box2D/Box2D.h)
             if os.path.basename(d) == "include":
                 out.append(d)
-                if os.path.isdir(os.path.join(d, "eigen3")):
-                    out.append(os.path.join(d, "eigen3"))
+                # subdirectories a package exports as include directories of
+                # their own (<XmlRpcValue.h> is ROS's include/xmlrpcpp)
+                for sub in ("eigen3", "xmlrpcpp"):
+                    if os.path.isdir(os.path.join(d, sub)):
+                        out.append(os.path.join(d, sub))
                 dirs[:] = []  # an include tree's own subdirectories are reached through it
     return out
 
@@ -241,6 +245,46 @@ def local_class_file(c, rel):
     return ""
 
 
+_invalid_fn = None
+
+
+def invalid_decl(cur):
+    """clang_isInvalidDeclaration: a declaration clang could not form (a type
+    of a stubbed header in it), which the Python bindings do not expose."""
+    global _invalid_fn
+    if _invalid_fn is None:
+        _invalid_fn = ci.conf.lib.clang_isInvalidDeclaration
+        _invalid_fn.argtypes = [ci.Cursor]
+        _invalid_fn.restype = ctypes.c_uint
+    return cur is not None and bool(_invalid_fn(cur))
+
+
+def guessed_overload(call, ref):
+    """ref is one of several methods of its name, and clang could not form an
+    argument's type or a sibling overload's declaration: the choice among
+    them is error recovery's, not overload resolution's."""
+    parent = ref.semantic_parent
+    if parent is None:
+        return False
+    siblings = [m for m in parent.get_children() if m.spelling == ref.spelling and m.kind in (
+        ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_TEMPLATE)]
+    if len(siblings) < 2:
+        return False
+    if any(invalid_decl(m) for m in siblings):
+        return True
+    for a in call.get_arguments():
+        r = a.referenced
+        if r is not None and r.kind in (ci.CursorKind.PARM_DECL, ci.CursorKind.VAR_DECL, ci.CursorKind.FIELD_DECL) and invalid_decl(r):
+            return True
+        t = a.type
+        if t.kind == ci.TypeKind.INVALID or t.get_canonical().kind == ci.TypeKind.INVALID:
+            return True
+        decl = t.get_pointee().get_declaration() if t.kind in (ci.TypeKind.POINTER, ci.TypeKind.LVALUEREFERENCE) else t.get_declaration()
+        if decl is not None and decl.kind == ci.CursorKind.NO_DECL_FOUND and t.kind == ci.TypeKind.UNEXPOSED:
+            return True
+    return False
+
+
 def parse_one(job):
     path, args, root, lib = job
     if not ci.Config.loaded:
@@ -259,6 +303,14 @@ def parse_one(job):
             return None
         n = os.path.realpath(f.name)
         return n[len(prefix):] if n.startswith(prefix) else None
+
+    def decl_at(cur):
+        # the function's first declaration: two programs of the repo may each
+        # declare a class of one qualified name (one USR) in their own headers,
+        # and the header a call saw tells which of the two it calls
+        k = cur.canonical
+        r = rel(k) if k is not None else None
+        return None if r is None else "%s:%d:%d" % (r, k.location.line, k.location.column)
 
     def visit(node, owner):
         for c in node.get_children():
@@ -287,7 +339,7 @@ def parse_one(job):
                     m = GTEST.match(source_line(c))
                     if m:
                         name = m.group(1) + "." + m.group(2)  # TEST_F(Suite, Case) { … }: Suite.Case
-                defs.append({"usr": c.get_usr(), "id": did, "path": r, "line": c.location.line,
+                defs.append({"usr": c.get_usr(), "id": did, "decl": decl_at(c), "path": r, "line": c.location.line,
                              "end": c.extent.end.line, "name": name, "called": called,
                              "local": local_class_file(c, rel)})
                 visit(c, did)
@@ -323,8 +375,18 @@ def parse_one(job):
                                   "line": c.location.line, "col": c.location.column, "bound": True})
                     visit(c, owner)
                     continue
-                target, external, at = None, False, None
+                if ref is not None and ref.kind == ci.CursorKind.CXX_METHOD and guessed_overload(c, ref):
+                    # an argument of a type clang could not read (its header
+                    # stubbed) picked one of several overloads by error
+                    # recovery, not by the type: undetermined
+                    ref = None
+                    calls.append({"from": owner, "name": spelling, "usr": None, "external": False,
+                                  "line": c.location.line, "col": c.location.column, "bound": False})
+                    visit(c, owner)
+                    continue
+                target, external, at, decl = None, False, None, None
                 if ref is not None:
+                    decl = decl_at(ref)
                     d = ref.get_definition() or ref
                     if rel(d) is None and d.location.file is not None:
                         external = True
@@ -355,7 +417,7 @@ def parse_one(job):
                     # to the template's definition below
                     qname = def_name(ref)
                 calls.append({"from": owner, "name": spelling, "usr": target, "external": external,
-                              "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at,
+                              "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at, "decl": decl,
                               "qname": qname, "cands": cands})
             # a lambda or a local class: its calls stay with the enclosing definition
             visit(c, owner)
@@ -404,11 +466,73 @@ def main():
     stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir)
     # Eigen's SSE kernels need the compiler's own intrinsics headers, which
     # a copied tree lacks; its scalar path declares the same API
-    args = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++", "-DEIGEN_DONT_VECTORIZE"]
-    for d in inc_dirs + [stub_dir] + sys_dirs:
-        args += ["-I", d]
-    jobs_list = [(f, (args if not f.endswith(".c") else ["-x", "c", "-std=c11"] + args[3:]), root, lib)
-                 for f in sources]
+    base = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++", "-DEIGEN_DONT_VECTORIZE"]
+
+    # catkin/ament packages: a source sees its own package's include
+    # directories, then those of the packages it depends on, as its build's
+    # include path lists them; two packages may each ship a header of one
+    # name (controller_app.hpp)
+    pkgs = {}  # package dir -> (name, dependency names)
+    for d, dirs, fs in os.walk(root):
+        dirs[:] = [x for x in dirs if not x.startswith(".")]
+        if "package.xml" in fs:
+            try:
+                with open(os.path.join(d, "package.xml"), encoding="utf-8", errors="replace") as fh:
+                    xml = fh.read()
+            except OSError:
+                continue
+            m = re.search(r"<name>\s*([^<\s]+)\s*</name>", xml)
+            if m:
+                pkgs[d] = (m.group(1), set(re.findall(r"<(?:build_)?depend>\s*([^<\s]+)\s*</", xml)))
+    pkg_dir = {name: d for d, (name, _) in pkgs.items()}
+
+    pkg_cache = {}
+
+    def package_of(f):
+        k = os.path.dirname(f)
+        if k not in pkg_cache:
+            pkg_cache[k] = find_package(k)
+        return pkg_cache[k]
+
+    def find_package(d):
+        while d.startswith(root):
+            if d in pkgs:
+                return d
+            if d == root:
+                break
+            d = os.path.dirname(d)
+        return None
+
+    def args_for(f):
+        def shared(d):
+            n = 0
+            for a, b in zip(os.path.relpath(d, root).split(os.sep), os.path.relpath(f, root).split(os.sep)):
+                if a != b:
+                    break
+                n += 1
+            return n
+        tier = {}
+        own = package_of(f)
+        if own:
+            seen, queue, order = {own}, [own], 0
+            while queue:
+                p = queue.pop(0)
+                tier.setdefault(p, order)
+                order += 1
+                for dep in sorted(pkgs[p][1]):
+                    dd = pkg_dir.get(dep)
+                    if dd and dd not in seen:
+                        seen.add(dd)
+                        queue.append(dd)
+
+        def rank(d):
+            p = package_of(os.path.join(d, "x"))
+            return (tier.get(p, len(tier) + 1), -shared(d), d)
+        args = list(base)
+        for d in sorted(inc_dirs, key=rank) + [stub_dir] + sys_dirs:
+            args += ["-I", d]
+        return args if not f.endswith(".c") else ["-x", "c", "-std=c11"] + args[3:]
+    jobs_list = [(f, args_for(f), root, lib) for f in sources]
     with multiprocessing.Pool(jobs) as pool:
         results = pool.map(parse_one, jobs_list, chunksize=4)
 
@@ -431,17 +555,32 @@ def main():
             canon[i] = first["id"]
         defs.append({"id": first["id"], "path": first["path"], "line": first["line"], "end": first["end"],
                      "name": first["name"], "test": is_test_path(first["path"])})
-    by_usr = {}
+    by_usr, by_decl, usr_defs = {}, {}, {}
     names, written, own_usrs = {}, {}, {}
     for ds, _ in results:
         for d in ds:
             by_usr.setdefault(d["usr"], canon[d["id"]])
+            usr_defs.setdefault(d["usr"], set()).add(canon[d["id"]])
+            if d.get("decl"):
+                by_decl.setdefault(d["decl"], set()).add(canon[d["id"]])
             if d["id"] == canon[d["id"]]:
                 own_usrs.setdefault(d["id"], set()).add(d["usr"])
             names.setdefault(canon[d["id"]], set()).update(n for n, k in d["called"].items() if k > 0)
             for n, k in d["called"].items():
                 key = (canon[d["id"]], n)
                 written[key] = max(written.get(key, 0), k)
+    # one declaration defined twice (an inline stub under #else and the real
+    # function in a source): the build configuration picks one, and a call of
+    # it is undetermined
+    configured = {u for ds, _ in results for d in ds
+                  if d.get("decl") and len(by_decl.get(d["decl"], ())) > 1 and len(usr_defs[d["usr"]]) > 1
+                  for u in [d["usr"]]}
+    # one USR defined twice (two programs' classes of one name): the call's
+    # declaration picks the definition, and without one it is undetermined
+    by_decl = {k: next(iter(v)) for k, v in by_decl.items() if len(v) == 1}
+    for u, ids in usr_defs.items():
+        if len(ids) > 1:
+            del by_usr[u]
     edges, external, have = [], set(), set()
     by_qname = {}  # Class.method -> the one definition of that name, if one
     for d in defs:
@@ -461,6 +600,10 @@ def main():
                     c["bound"], c["at"], c["usr"] = True, next(iter(ids)), None  # one function of the repo
                 elif ids == {None} and not any(c["cands"]):
                     c["bound"], c["external"] = True, True  # only library functions
+            if c["bound"] and not c["external"] and c.get("at") not in canon and c.get("decl") in by_decl:
+                c["at"] = by_decl[c["decl"]]
+            if c["usr"] in configured:
+                c["bound"], c["at"] = False, None
             known = c["bound"] and (c["usr"] is None or c["external"] or c.get("at") in canon or c["usr"] in by_usr)
             if not known and not c["name"].startswith("operator"):
                 unmapped.add(c["from"] + ">" + c["name"])

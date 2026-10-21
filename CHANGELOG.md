@@ -119,6 +119,32 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Fixed
 
+- **Python bare calls keep to the module**: `f()` reaches the module's own `f`, an import
+  or a star import (`from m import *`) — never another module's same-named function. A
+  module-level alias of an imported module's attribute (`_n, _pct = text.n, text.pct`)
+  binds like an import. A directory of ROS `.msg` files is no Python package
+  (`from pkg_msgs.msg import Location` is the generated message, not a repo class).
+- **C++ overloads and configurations**: an overload is chosen by its argument types —
+  a library class's temporary (`ros::Duration(s)`), a static method's result
+  (`Location::from(p)`), a field or static member, arithmetic on a number — and by the
+  fewest arguments its declared defaults allow; overloads split between header and
+  source that the arguments cannot tell apart are left unresolved rather than picked by
+  location. A class-scope alias shadows a same-named class template outside it
+  (`using MotorDriver = Traits::MotorDriver`), inside container types too
+  (`std::array<MotorDriver, N>`); members declared inside `#if`/`#else` are read, and an
+  alias the two branches define differently is left to the build. `x.get<Tag>()` is the
+  class's template member, not a smart pointer's `get()`. `std::get`/tuples and `auto`
+  getters returning a member expression are typed.
+- **C++ packages with the same names**: an `#include` two packages could satisfy is the
+  including package's own header, and an inline overload pairs only with an out-of-line
+  definition in a file it is linked to — two programs' classes of one name stay apart.
+- **Locations of nested-class methods**: `Outer.method` is located at `Outer`'s own
+  method, not at a same-named method of a class nested in it.
+- **JS/TS**: a class named like its file (`TraceManager.ts`) keeps its methods apart from
+  the module's same-named functions (`export const startSpan`); re-exported defaults
+  (`export { default } from`) and wrapped default exports with extra arguments resolve.
+- **Go**: an external test package's function (`package x_test`) sharing a name with the
+  package's own is a separate definition.
 - **C++ calls stay in the translation unit**: a call reaches only definitions its file
   can name through its includes; another file's anonymous-namespace or `static` helper,
   a class defined in another source file (each pimpl's `Impl`), a same-named fixture in
