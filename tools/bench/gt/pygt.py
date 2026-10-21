@@ -476,6 +476,12 @@ def main():
                                 seen.add((frm, to))
                                 edges.append({"from": frm, "to": to, "kind": "fixture", "line": sub.lineno})
                     continue
+                if chain == [] and name not in local_names and fimp.get(name, (None,))[0] in ("module", "pkg") \
+                        and name not in funcs.get(rel, {}):
+                    # a module object called: no function of the repo runs
+                    fixture_judged.add(site_key(frm, sub.func))
+                    fixture_external.add(frm + ">" + name)
+                    continue
                 if chain == [] and (name not in local_names or name in fimp):
                     if name in funcs.get(rel, {}):
                         to = funcs[rel][name]

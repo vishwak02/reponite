@@ -150,6 +150,10 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 - **C++ definitions of one name in several files** (each program's `main`, a header's
   inline overload and the source's) are merged, no longer the last one replacing the
   others' calls.
+- **Python `from pkg import mod`** of a submodule the package's `__init__` binds no
+  function to is the module: calling it is not a call of `mod.py`'s same-named function.
+- **Wrapped JSX components** with extra arguments or trailing commas
+  (`connect(…)(memo(Item, equal))`, `withRouter(\n connect(…)(Item),\n)`).
 - **`trace`** no longer follows a call on an object of unknown type into the one class
   of the repo with a method of that name (`self.kwargs.get()` into a view's `get`), and
   locates Python/JS symbols by their module (bodies, effects and class attributes were

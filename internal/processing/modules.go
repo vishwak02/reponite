@@ -505,7 +505,7 @@ func jsReturnClasses(src string, instances map[string]string) map[string]string 
 
 var (
 	reDefaultCall  = regexp.MustCompile(`(?m)^export\s+default\s+([A-Za-z_$][\w$.]*\s*\(.*)$`)
-	reWrappedLast  = regexp.MustCompile(`\(\s*([A-Za-z_$][\w$]*)\s*\)[)\s]*;?\s*$`)
+	reWrappedLast  = regexp.MustCompile(`\(\s*([A-Za-z_$][\w$]*)\s*(?:,[^()]*)?\)[),\s]*;?\s*$`)
 	reConstWrapped = `(?m)^(?:export\s+)?const\s+%s\s*=\s*([A-Za-z_$][\w$.]*\s*\(.*)$`
 )
 

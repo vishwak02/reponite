@@ -202,8 +202,10 @@ func main() {
 	for _, k := range t.ResolvedExternal {
 		resolvedName[k] = true
 	}
+	untyped := map[string]bool{} // from>name the extractor reports it could not type
 	for _, k := range t.Unresolved {
 		delete(resolvedName, k)
+		untyped[k] = true
 	}
 	calls := map[string]bool{} // from + ">" + name: the definition calls that name
 	for from, ns := range t.Names {
@@ -236,7 +238,7 @@ func main() {
 			}
 			bd := band(c.Confidence)
 			name := baseOf(defByID[to].Name)
-			if !anyEdge[k] && t.Names != nil && calls[from+">"+name] && !resolvedName[from+">"+name] {
+			if !anyEdge[k] && (t.Names != nil && calls[from+">"+name] || untyped[from+">"+name]) && !resolvedName[from+">"+name] {
 				sc.Undetermined[bd]++ // called on a receiver the extractor cannot type
 				if *showUndet > 0 && bd == "resolved(>=0.85)" {
 					*showUndet--

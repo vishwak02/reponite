@@ -326,6 +326,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		allDefs[q] = true
 	}
 	defined := func(pkg, name string) bool { return allDefs[qualifyModule(pkg, name)] }
+	// inInit: a package's __init__ itself defines name (pkg.f also names
+	// pkg/f.py's f, a module's function named like it)
+	inInit := func(pkg, name string) bool {
+		c, ok := byQID[qualifyModule(pkg, name)]
+		return ok && path.Base(c.path) == "__init__.py"
+	}
 
 	// Python receiver typing (pytypes.go): a dotted type or function name is
 	// resolved in the context of the file that writes it
@@ -396,6 +402,21 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				qcalls, typed = py.typedCalls(qid, qcalls)
 			}
 			var localSites []CallSite
+			if c.lang == "python" {
+				// from pkg import mod, mod a submodule pkg/__init__ binds no
+				// function to: the name is the module; calling it calls no
+				// function of the repo (a module is not callable)
+				kept := qcalls[:0:0]
+				for _, qc := range qcalls {
+					b, ok := c.imports[qc.Name]
+					if qc.Qualifier == "" && ok && b.Symbol != "" && pyImportsSubmodule(mods, c.path, b, inInit) {
+						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "module"})
+						continue
+					}
+					kept = append(kept, qc)
+				}
+				qcalls = kept
+			}
 			if c.lang == "python" && len(c.sym.Vars) > 0 {
 				// a test's parameter named like a fixture is the fixture's
 				// value: calling it runs the fixture's code only when the
@@ -776,4 +797,25 @@ func isCSource(p string) bool {
 func classBodyIn(f ParsedFile, cls string) bool {
 	cls, _, _ = strings.Cut(cls, "@")
 	return f.Types != nil && f.Types.Classes[cls] != nil
+}
+
+// pyImportsSubmodule: `from pkg import name` binds the submodule pkg.name —
+// pkg's __init__ neither defines nor re-exports name.
+func pyImportsSubmodule(mods moduleIndex, from string, b ImportBinding, inInit func(pkg, name string) bool) bool {
+	if _, ok := mods.resolve("python", from, b.Module+"."+b.Symbol); !ok {
+		return false
+	}
+	pkg, ok := mods.resolve("python", from, b.Module)
+	if !ok {
+		return false
+	}
+	if inInit(pkg, b.Symbol) {
+		return false
+	}
+	if jm := mods.jsMods[pkg]; jm != nil {
+		if _, ok := jm.imports[b.Symbol]; ok {
+			return false // __init__ imports the name (from .mod import mod)
+		}
+	}
+	return true
 }

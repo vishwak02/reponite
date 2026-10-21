@@ -243,3 +243,34 @@ void Behaviour::wire() {
 		t.Errorf("a forwarded pack fits any parameter count: %v", edges["app/src.Behaviour.wire"])
 	}
 }
+
+// `from pkg import mod` binds the submodule when pkg's __init__ binds no
+// such name: calling it calls a module, not mod.py's function of that name.
+func TestPythonCalledSubmoduleImport(t *testing.T) {
+	files := map[string]string{
+		"app/utils/__init__.py": "import json\n",
+		"app/utils/report.py":   "def report(errors):\n    return str(errors)\n",
+		"app/utils/shared.py":   "def shared():\n    return 1\n",
+		"app/lib/__init__.py":   "from .shared import shared\n",
+		"app/lib/shared.py":     "def shared():\n    return 2\n",
+		"app/main.py": `from app.utils import report
+from app.lib import shared
+
+def run():
+    report([1])
+    shared()
+`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["app.main.run"]
+	for k := range run {
+		if k == "app/utils.report" || k == "app/utils.report.report" {
+			t.Errorf("a called submodule is not its function: %v", run)
+		}
+	}
+	if _, ok := run["app/lib.shared"]; !ok {
+		if _, ok2 := run["app/lib.shared.shared"]; !ok2 {
+			t.Errorf("a name the package __init__ re-exports is the function: %v", run)
+		}
+	}
+}

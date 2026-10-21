@@ -44,6 +44,9 @@ type truth struct {
 	Defs  []def  `json:"defs"`
 	Edges []edge `json:"edges"`
 	Note  string `json:"note,omitempty"`
+	// Unresolved are calls (caller>name) the checker could not type — a
+	// package whose imports failed to load: undetermined, not absent
+	Unresolved []string `json:"unresolved,omitempty"`
 }
 
 func main() {
@@ -74,6 +77,7 @@ func main() {
 	}
 	seenDef := map[string]bool{}
 	seenEdge := map[string]bool{}
+	unresolved := map[string]bool{}
 	// a declaration position for every function object defined in the module
 	declOf := map[types.Object]string{}
 	modulePkg := map[string]bool{} // import paths of the module's own packages
@@ -143,6 +147,10 @@ func main() {
 						return true
 					}
 					obj := p.TypesInfo.Uses[id]
+					if obj == nil {
+						unresolved[from+">"+id.Name] = true // the checker never typed this name
+						return true
+					}
 					fn, ok := obj.(*types.Func)
 					if !ok {
 						return true
@@ -153,9 +161,13 @@ func main() {
 						if x, ok := sel.X.(*ast.Ident); ok {
 							switch o := p.TypesInfo.Uses[x].(type) {
 							case nil:
+								unresolved[from+">"+id.Name] = true
 								return true // an unresolved qualifier (a failed import)
 							case *types.PkgName:
 								if fn.Pkg() != o.Imported() {
+									if len(p.Errors) > 0 {
+										unresolved[from+">"+id.Name] = true // partial types: not a contradiction
+									}
 									return true
 								}
 							}
@@ -168,14 +180,25 @@ func main() {
 						// a package outside it whose import failed can carry a
 						// position borrowed from the module's own code
 						if fn.Pkg() == nil || !modulePkg[fn.Pkg().Path()] {
+							if len(p.Errors) > 0 {
+								// a package with load errors binds names to borrowed
+								// packages: which function this is is not known
+								unresolved[from+">"+id.Name] = true
+							}
 							return true
 						}
 						tp, tl := rel(p.Fset, fn.Pos())
 						if tp == "" {
+							if len(p.Errors) > 0 {
+								unresolved[from+">"+id.Name] = true // a module function the partial load placed nowhere
+							}
 							return true // outside the module
 						}
 						to = fmt.Sprintf("%s:%d", tp, tl)
 						if !seenDef[to] {
+							if len(p.Errors) > 0 {
+								unresolved[from+">"+id.Name] = true
+							}
 							return true
 						}
 					}
@@ -203,6 +226,10 @@ func main() {
 	if loadErrs > 0 {
 		t.Note = fmt.Sprintf("%d package load errors (types may be partial)", loadErrs)
 	}
+	for k := range unresolved {
+		t.Unresolved = append(t.Unresolved, k)
+	}
+	sort.Strings(t.Unresolved)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", " ")
 	if err := enc.Encode(t); err != nil {
