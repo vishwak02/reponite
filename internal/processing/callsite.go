@@ -57,13 +57,17 @@ func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []Cal
 		if ok {
 			for _, k := range kids {
 				if k.Type() == "argument_list" {
-					n := 0
+					n, pack := 0, false
 					for _, a := range k.Children() {
 						if a.IsNamed() && !isCommentType(a.Type()) {
 							n++
+							pack = pack || a.Type() == "parameter_pack_expansion"
 						}
 					}
 					cs.NArgs = n + 1
+					if pack {
+						cs.NArgs = 0 // f(args...): how many is not written
+					}
 				}
 			}
 		}

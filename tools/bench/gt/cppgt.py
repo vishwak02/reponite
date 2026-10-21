@@ -282,7 +282,15 @@ def parse_one(job):
                               "line": c.location.line, "bound": False})
                 visit(c, owner)
                 continue
-            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and c.spelling:
+            spelling = c.spelling if c.kind == ci.CursorKind.CALL_EXPR else ""
+            dependent = None
+            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and not spelling:
+                # f(t) with t of a template parameter's type: an unresolved
+                # lookup whose candidate set is the name's declarations
+                dependent = overload_candidates(c)
+                if dependent:
+                    spelling = dependent[0].spelling
+            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and spelling:
                 ref = c.referenced
                 if ref is not None and ref.kind in (ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR):
                     calls.append({"from": owner, "name": c.spelling, "usr": None, "external": False,
@@ -304,7 +312,7 @@ def parse_one(job):
                     # a dependent call: bound when every declaration its name
                     # finds is one function of the repo (overloads of one name in
                     # one directory are one definition)
-                    found = overload_candidates(c)
+                    found = dependent or overload_candidates(c)
                     if found:
                         cands = []
                         for d0 in found:
@@ -320,7 +328,7 @@ def parse_one(job):
                     # definition of its own: named Class.method, it is matched
                     # to the template's definition below
                     qname = def_name(ref)
-                calls.append({"from": owner, "name": c.spelling, "usr": target, "external": external,
+                calls.append({"from": owner, "name": spelling, "usr": target, "external": external,
                               "line": c.location.line, "col": c.location.column, "bound": ref is not None, "at": at,
                               "qname": qname, "cands": cands})
             # a lambda or a local class: its calls stay with the enclosing definition

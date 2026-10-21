@@ -183,3 +183,63 @@ def mock_call(respx_mock):
 		t.Errorf("a plain function's parameter is its argument: %v", edges["tests.helpers.run"])
 	}
 }
+
+// Two classes each nest an AccessImpl reached through their own alias: a
+// receiver typed through one class's alias calls that class's nested
+// method; a cast types its receiver; a forwarded parameter pack does not
+// count as one argument.
+func TestCppNestedAliasesCastsAndPacks(t *testing.T) {
+	files := map[string]string{
+		"bb/include/bb/server.hpp": `template <typename Spec>
+class ServerBoard {
+public:
+    class AccessImpl {
+    public:
+        bool hasGoal() const { return true; }
+    };
+    using Access = AccessImpl;
+};
+`,
+		"bb/include/bb/item.hpp": `template <typename Spec>
+class ItemBoard {
+public:
+    class AccessImpl {
+    public:
+        bool hasGoal() const { return false; }
+    };
+    using Access = AccessImpl;
+};
+`,
+		"app/src/behaviour.cpp": `#include "bb/server.hpp"
+#include "bb/item.hpp"
+class Task { public: void write() {} };
+class Behaviour {
+    using Board = ServerBoard<int>;
+    void run(const Task* t);
+    template <typename... A> void cb(A&&... a) {}
+    void wire();
+};
+void Behaviour::run(const Task* t) {
+    auto bb = Board::Access();
+    bb.hasGoal();
+    const_cast<Task*>(t)->write();
+}
+void Behaviour::wire() {
+    auto f = [this](auto&&... args) { cb(std::forward<decltype(args)>(args)...); };
+}
+`,
+	}
+	edges := indexAndEdges(t, files)
+	run := edges["app/src.Behaviour.run"]
+	// two classes' AccessImpl of one directory share the id AccessImpl, as
+	// overloads do; the alias reaches it through its own class's nesting
+	if _, ok := run["bb/include/bb.AccessImpl.hasGoal"]; !ok {
+		t.Errorf("the alias's own nested class: %v", run)
+	}
+	if _, ok := run["app/src.Task.write"]; !ok {
+		t.Errorf("a const_cast types its receiver: %v", run)
+	}
+	if _, ok := edges["app/src.Behaviour.wire"]["app/src.Behaviour.cb"]; !ok {
+		t.Errorf("a forwarded pack fits any parameter count: %v", edges["app/src.Behaviour.wire"])
+	}
+}

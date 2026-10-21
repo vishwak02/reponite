@@ -90,6 +90,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		path       string                   // the defining file
 	}
 	var order []string              // qualified ids, first-seen order
+	alsoIn := map[string][]string{} // C/C++ qid -> further files defining it (merged)
+	splits := map[string][]string{} // C/C++ class name -> its Cls@file twins
+	fileByPath := map[string]ParsedFile{}
+	for _, f := range files {
+		if langFamily(f.Lang) == "c" {
+			fileByPath[f.Path] = f
+		}
+	}
 	arity := map[string][2]int{}    // C/C++ qid -> parameter count range
 	byQID := map[string]computed{}  // qid -> facts
 	byBase := map[string][]string{} // bare name -> defining qids (for edge resolution)
@@ -141,11 +149,16 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				local = s.Recv + "." + s.Name
 			}
 			qid := qualifyModule(pkg, local)
-			if prev, dup := byQID[qid]; dup && s.Recv != "" && prev.path != f.Path && isCSource(f.Path) && isCSource(prev.path) {
+			if prev, dup := byQID[qid]; dup && s.Recv != "" && prev.path != f.Path &&
+				isCSource(f.Path) && isCSource(prev.path) {
 				// Cls::f defined in two source files of one directory: two classes
 				// of one name (each test file its own fixture), not one class —
 				// the later one is Cls@file
+				base := s.Recv
 				s.Recv += "@" + strings.TrimSuffix(path.Base(f.Path), path.Ext(f.Path))
+				if !containsStr(splits[base], s.Recv) {
+					splits[base] = append(splits[base], s.Recv)
+				}
 				local = s.Recv + "." + s.Name
 				qid = qualifyModule(pkg, local)
 			}
@@ -160,13 +173,21 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			}
 			imports := withLocalImports(byLocal, s.LocalImports)
 			own := s // this definition's own parameter count, before any merge
+			defPath := f.Path
 			if prev, dup := byQID[qid]; dup && lang != "python" && prev.path == f.Path {
 				// Overloads (Java, C++, C#, TypeScript signatures) share one id:
 				// the id calls what any of them calls. (Python: a later def
 				// replaces the earlier one, so the last body stands.)
 				s = mergeOverload(prev.sym, s)
+			} else if dup && langFamily(lang) == "c" && langFamily(prev.lang) == "c" && (s.Recv == "" || classBodyIn(f, s.Recv)) {
+				// f defined in two files of one directory (each program's main,
+				// two files' static helpers): one id calls what either calls —
+				// before, the later file's body replaced the earlier one's
+				s = mergeOverload(prev.sym, s)
+				defPath = prev.path
+				alsoIn[qid] = append(alsoIn[qid], f.Path)
 			}
-			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: imports, path: f.Path}
+			byQID[qid] = computed{sym: s, pkg: pkg, lang: lang, isTest: f.IsTest, symbolHash: sh, sigHash: content.SignatureHash(normVer, id), imports: imports, path: defPath}
 			if own.HasParams {
 				// overloads sharing the id take any of their parameter counts
 				a, seen := arity[qid]
@@ -207,18 +228,22 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
 	x.arity = arity
 	x.vis = newCppVisibility(files)
+	x.splits = splits
 	x.jsModule = func(pkg string) bool {
 		jm := mods.jsMods[pkg]
 		return jm != nil && langFamily(jm.lang) == "js"
 	}
 	if x.vis != nil {
-		x.defPath, x.recvOf = map[string]string{}, map[string]string{}
+		x.defPath, x.recvOf, x.alsoIn = map[string]string{}, map[string]string{}, map[string][]string{}
 	}
 	for _, qid := range order {
 		nodeSet[qid] = true
 		c := byQID[qid]
 		if x.vis != nil {
 			x.defPath[qid], x.recvOf[qid] = c.path, c.sym.Recv
+			if more := alsoIn[qid]; len(more) > 0 {
+				x.alsoIn[qid] = more
+			}
 		}
 		x.pkgOfQID[qid] = c.pkg
 		x.isTest[qid] = testish(c.isTest, c.pkg, c.sym.Recv)
@@ -745,4 +770,10 @@ func isCSource(p string) bool {
 		return true
 	}
 	return false
+}
+
+// classBodyIn: file f defines the body of class cls.
+func classBodyIn(f ParsedFile, cls string) bool {
+	cls, _, _ = strings.Cut(cls, "@")
+	return f.Types != nil && f.Types.Classes[cls] != nil
 }

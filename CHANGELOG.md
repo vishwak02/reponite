@@ -141,6 +141,15 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   never a module function of the same name; a test calling a fixture parameter runs the
   fixture's code only when the fixture returns a function it defines (a factory), found
   also when a conftest imports the fixture from another module.
+- **C++ receivers, round two**: casts (`const_cast<T*>(p)->f()`), objects constructed
+  with arguments (`T x(a);`), a class's own type aliases (`Batch b; b[k].push(…)`,
+  `Board::Access(…)`), `std::pair` elements, template parameters' defaults, and a
+  class nested in two classes told apart by the class it is reached through. `Base::f()`
+  calls the base's `f`; a forwarded parameter pack fits any parameter count; a source
+  file defining a class whose header it does not include defines another class.
+- **C++ definitions of one name in several files** (each program's `main`, a header's
+  inline overload and the source's) are merged, no longer the last one replacing the
+  others' calls.
 - **`trace`** no longer follows a call on an object of unknown type into the one class
   of the repo with a method of that name (`self.kwargs.get()` into a view's `get`), and
   locates Python/JS symbols by their module (bodies, effects and class attributes were

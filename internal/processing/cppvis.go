@@ -47,6 +47,9 @@ func newCppVisibility(files []ParsedFile) *cppVisibility {
 		for cls := range f.Types.Classes {
 			v.homes[cls] = append(v.homes[cls], f.Path)
 		}
+		for n := range f.Types.Nested {
+			v.homes[n] = append(v.homes[n], f.Path)
+		}
 		for fn := range f.Types.Declared {
 			v.declares[fn] = append(v.declares[fn], f.Path)
 		}
@@ -194,9 +197,13 @@ func (v *cppVisibility) visible(caller, def, recv, name string) bool {
 				own = append(own, h)
 			}
 		}
-		if len(own) > 0 {
-			homes = own
+		if len(own) == 0 {
+			// the source file includes no header defining the class: its
+			// members are another class of that name (one whose header the
+			// tree does not hold)
+			return false
 		}
+		homes = own
 		for _, h := range homes {
 			if seen[h] {
 				return true
@@ -245,4 +252,28 @@ func (v *cppVisibility) inNamespace(def, name, root, scope string) bool {
 		}
 	}
 	return false
+}
+
+// ofNested keeps the definitions belonging to the nested class Outer::Inner:
+// written in the file that defines it, or in a source file including that one.
+func (v *cppVisibility) ofNested(defs []string, nested string, defPath map[string]string, alsoIn map[string][]string) []string {
+	homes := v.homes[nested]
+	if len(homes) == 0 {
+		return defs
+	}
+	var out []string
+	for _, q := range defs {
+		match := false
+		for _, p := range append([]string{defPath[q]}, alsoIn[q]...) {
+			for _, h := range homes {
+				if p == h || isCSource(p) && v.included(p)[h] {
+					match = true
+				}
+			}
+		}
+		if match {
+			out = append(out, q)
+		}
+	}
+	return out
 }

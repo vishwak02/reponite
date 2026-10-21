@@ -5,6 +5,7 @@
 package processing
 
 import (
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -213,6 +214,24 @@ type siteIndex struct {
 	callerPath string
 	defPath    map[string]string
 	recvOf     map[string]string
+	alsoIn     map[string][]string // further files defining a merged C/C++ id
+	// splits: a C/C++ class name's twins Cls@file (two classes of one name)
+	splits map[string][]string
+}
+
+// recvDefs are the definitions of cls.name, including those of a same-named
+// class the caller's own source file defines, which the index names
+// Cls@file (visibility then keeps the one the caller can see).
+func (x siteIndex) recvDefs(cls, name string) []string {
+	out := x.byRecv[cls+"."+name]
+	if x.vis == nil || strings.Contains(cls, "@") || !isCSource(x.callerPath) {
+		return out
+	}
+	stem := strings.TrimSuffix(path.Base(x.callerPath), path.Ext(x.callerPath))
+	if own := x.byRecv[cls+"@"+stem+"."+name]; len(own) > 0 {
+		return own // the caller's own file's class shadows the others
+	}
+	return out
 }
 
 // visibleOnly keeps the definitions the caller's file can name.
@@ -224,6 +243,13 @@ func (x siteIndex) visibleOnly(cands []string) []string {
 	for _, q := range cands {
 		if x.vis.visible(x.callerPath, x.defPath[q], x.recvOf[q], BaseName(q)) {
 			out = append(out, q)
+			continue
+		}
+		for _, p := range x.alsoIn[q] {
+			if x.vis.visible(x.callerPath, p, x.recvOf[q], BaseName(q)) {
+				out = append(out, q)
+				break
+			}
 		}
 	}
 	return out
@@ -374,7 +400,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			// a bare name never reaches the enclosing class's own methods in
 			// Python or JavaScript: those need self. / this.
 			if callerRecv != "" && (s.Kind == CallSelf || !bareNameSkipsClass[lang]) {
-				if q, ok := pickOne(x.byRecv[callerRecv+"."+name], x); ok {
+				if q, ok := pickOne(x.recvDefs(callerRecv, name), x); ok {
 					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 					for _, o := range overrides(callerRecv, name, x) {
 						add(o) // this->f() in a base: a subclass's f may run instead
@@ -446,7 +472,7 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				add(query.Callee{Name: s.Root + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 				continue
 			}
-			if q, ok := pickOne(x.byRecv[s.Scope+"."+name], x); ok {
+			if q, ok := pickOne(x.recvDefs(s.Scope, name), x); ok {
 				add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
 				continue
 			}
@@ -458,6 +484,19 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 					add(c)
 				}
 				continue
+			}
+			if langFamily(lang) == "c" && x.types != nil && x.types.classes[x.types.canon(s.Scope)] != nil {
+				// Base::f() / Alias::f() on a class of the repo: the method its
+				// lineage defines (an alias keeps its template arguments)
+				if cs := typedCallees(s.Scope, name, lang, x); len(cs) > 0 && cs[0].ResolutionMethod != MethodExternal {
+					for _, c := range cs {
+						if c.ResolutionMethod == MethodOverride {
+							continue // Base::f() names that f: no dynamic dispatch
+						}
+						add(c)
+					}
+					continue
+				}
 			}
 			if langFamily(lang) == "c" {
 				// ns::f() with ns not a class of the repo: a free function
@@ -552,6 +591,12 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 	if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "pair[") {
 		t = "std::container" // a container's own member: size, insert, push_back, …
 	}
+	if x.types.nested[t] {
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
+	}
+	if root, _, scoped := strings.Cut(t, "::"); scoped && !externalScopes[root] && x.types.classes[t] == nil {
+		return s // Cls::Alias the table cannot follow: the type is not known
+	}
 	if strings.Contains(t, "::") || x.types.classes[t] != nil {
 		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs}
 	}
@@ -572,17 +617,34 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 	}
 	var out []query.Callee
 	several := false
-	for _, c := range x.types.lineage(written) {
-		if q, ok := pickOne(x.byRecv[c+"."+name], x); ok {
+	nested := x.types.nestedName(written, "")
+	for i, c := range x.types.lineage(written) {
+		defs := x.recvDefs(c, name)
+		for _, tw := range x.splits[c] {
+			defs = append(defs, x.byRecv[tw+"."+name]...)
+		}
+		if i == 0 && nested != "" && x.vis != nil {
+			defs = x.vis.ofNested(defs, nested, x.defPath, x.alsoIn)
+		} else if x.types.ambiguousNested(c) && langFamily(lang) == "c" {
+			if len(defs) > 0 {
+				several = true // Impl nested in two classes: which one is not written
+			}
+			break
+		}
+		if q, ok := pickOne(defs, x); ok {
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
 			break
 		}
-		if len(x.byRecv[c+"."+name]) > 1 {
+		if len(x.recvDefs(c, name)) > 1 {
 			several = true // overloads in several files, which one not told
 			break
 		}
 	}
 	out = append(out, overrides(cls, name, x)...)
+	if len(out) == 0 && !several && langFamily(lang) == "c" && x.types.open(written) {
+		// a base the class template takes as a parameter may define it
+		return []query.Callee{memberCalleeLang(name, lang, x)}
+	}
 	if len(out) == 0 && several {
 		out = append(out, query.Callee{Name: name, ResolutionMethod: MethodAmbiguous, Confidence: ConfAmbiguous})
 	} else if len(out) == 0 {
@@ -598,7 +660,7 @@ func overrides(cls, name string, x siteIndex) []query.Callee {
 	}
 	var out []query.Callee
 	for _, d := range x.types.descendants(cls) {
-		if q, ok := pickOne(x.byRecv[d+"."+name], x); ok && (x.callerTest || !x.isTest[q]) {
+		if q, ok := pickOne(x.recvDefs(d, name), x); ok && (x.callerTest || !x.isTest[q]) {
 			// A mock's override is a target only for test code.
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
 		}
