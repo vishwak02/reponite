@@ -612,18 +612,22 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 	if x.types != nil {
 		cls = x.types.canon(cls)
 	}
-	if strings.Contains(cls, "::") {
+	if strings.Contains(cls, "::") && (x.types == nil || x.types.classes[cls] == nil) {
 		return []query.Callee{{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}}
 	}
 	var out []query.Callee
 	several := false
-	nested := x.types.nestedName(written, "")
-	for i, c := range x.types.lineage(written) {
-		defs := x.recvDefs(c, name)
-		for _, tw := range x.splits[c] {
+	for _, c := range x.types.lineage(written) {
+		// Outer::Inner: the methods of the class of that name nested in Outer
+		leaf, nested := c, ""
+		if i := strings.LastIndex(c, "::"); i > 0 && x.types.nested[c] {
+			leaf, nested = c[i+2:], c
+		}
+		defs := x.recvDefs(leaf, name)
+		for _, tw := range x.splits[leaf] {
 			defs = append(defs, x.byRecv[tw+"."+name]...)
 		}
-		if i == 0 && nested != "" && x.vis != nil {
+		if nested != "" && x.vis != nil {
 			defs = x.vis.ofNested(defs, nested, x.defPath, x.alsoIn)
 		} else if x.types.ambiguousNested(c) && langFamily(lang) == "c" {
 			if len(defs) > 0 {
@@ -635,7 +639,7 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 			out = append(out, query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
 			break
 		}
-		if len(x.recvDefs(c, name)) > 1 {
+		if len(defs) > 1 {
 			several = true // overloads in several files, which one not told
 			break
 		}

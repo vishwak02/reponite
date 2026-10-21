@@ -55,7 +55,9 @@ type ClassFact struct {
 	// argument the instantiation passes.
 	TParams   []string
 	TDefaults []string // each type parameter's default ("" none)
-	BaseArgs  map[string][]string
+	// TDefaultArgs are each default's own template arguments
+	TDefaultArgs [][]string
+	BaseArgs     map[string][]string
 	// Aliases are the class's own type aliases (using Batch = std::map<…>;):
 	// what its members' and methods' locals of that type are
 	Aliases map[string]string
@@ -115,6 +117,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 	anon := 0                     // depth of anonymous namespaces around the walk
 	var tparams []string          // the template parameters of the declaration being walked
 	var tdefaults []string        // the defaults of those parameters ("" none), in order
+	var tdefaultArgs [][]string   // each default's template arguments
 	external := map[string]bool{} // names this file also declares with external linkage
 	var walk func(n content.AST, class string)
 	walk = func(n content.AST, class string) {
@@ -130,27 +133,30 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 			case "template_declaration":
 				if pl := firstChildAny(c, []string{"template_parameter_list"}); pl != nil {
 					var ps, defs []string
+					var defArgs [][]string
 					for _, p := range pl.Children() {
 						if p.Type() == "type_parameter_declaration" || p.Type() == "optional_type_parameter_declaration" || p.Type() == "variadic_type_parameter_declaration" {
 							if id := firstChildAny(p, []string{"type_identifier"}); id != nil {
 								ps = append(ps, id.Text())
 								def := ""
+								var dargs []string
 								if p.Type() == "optional_type_parameter_declaration" {
 									// template <typename B = Default>: the default
 									if d := firstChildAny(p, []string{"template_type", "qualified_identifier", "primitive_type"}); d != nil {
-										def = TypeName(d)
+										def, dargs = TypeName(d), writtenArgs(d)
 									} else if ids := namedKids(p); len(ids) > 1 && ids[len(ids)-1].Type() == "type_identifier" {
 										def = ids[len(ids)-1].Text()
 									}
 								}
 								defs = append(defs, def)
+								defArgs = append(defArgs, dargs)
 							}
 						}
 					}
-					outer, outerDefs := tparams, tdefaults
-					tparams, tdefaults = ps, defs
+					outer, outerDefs, outerArgs := tparams, tdefaults, tdefaultArgs
+					tparams, tdefaults, tdefaultArgs = ps, defs, defArgs
 					walk(c, class)
-					tparams, tdefaults = outer, outerDefs
+					tparams, tdefaults, tdefaultArgs = outer, outerDefs, outerArgs
 					continue
 				}
 			case "namespace_definition":
@@ -214,13 +220,12 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 				if class != "" {
 					tf.Nested[class+"::"+name] = true
 				}
-				cf := tf.Classes[name]
-				if cf == nil {
-					cf = &ClassFact{Fields: map[string]string{}}
-					tf.Classes[name] = cf
-				}
-				if n.Type() == "template_declaration" && len(tparams) > 0 && len(cf.TParams) == 0 {
-					cf.TParams, cf.TDefaults = tparams, tdefaults
+				// this body's own facts; merged into the class of its name, and kept
+				// apart as Outer::Inner for a nested class (two classes may each
+				// nest one of that name)
+				cf := &ClassFact{Fields: map[string]string{}}
+				if n.Type() == "template_declaration" && len(tparams) > 0 {
+					cf.TParams, cf.TDefaults, cf.TDefaultArgs = tparams, tdefaults, tdefaultArgs
 				}
 				if bc := firstChildAny(c, []string{"base_class_clause"}); bc != nil {
 					for _, b := range bc.Children() {
@@ -270,6 +275,14 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 							tf.Returns[name+"."+m] = t // in-class method declaration
 						}
 					}
+				}
+				if leaf := tf.Classes[name]; leaf == nil {
+					tf.Classes[name] = cf.clone()
+				} else {
+					leaf.merge(cf)
+				}
+				if class != "" {
+					tf.Classes[class+"::"+name] = cf
 				}
 				walk(body, name)
 			case "function_definition":
@@ -433,6 +446,38 @@ func writtenArgs(n content.AST) []string {
 		}
 	}
 	return nil
+}
+
+func (cf *ClassFact) clone() *ClassFact {
+	out := &ClassFact{Fields: map[string]string{}}
+	out.merge(cf)
+	return out
+}
+
+// merge adds src's facts (another body of a class of the same name).
+func (cf *ClassFact) merge(src *ClassFact) {
+	for k, v := range src.Fields {
+		if old, seen := cf.Fields[k]; seen && old != v {
+			v = "" // two classes of one name typing a field differently: unknown
+		}
+		cf.Fields[k] = v
+	}
+	cf.Bases = append(cf.Bases, src.Bases...)
+	if len(cf.TParams) == 0 {
+		cf.TParams, cf.TDefaults, cf.TDefaultArgs = src.TParams, src.TDefaults, src.TDefaultArgs
+	}
+	for b, a := range src.BaseArgs {
+		if cf.BaseArgs == nil {
+			cf.BaseArgs = map[string][]string{}
+		}
+		cf.BaseArgs[b] = a
+	}
+	for a, t := range src.Aliases {
+		if cf.Aliases == nil {
+			cf.Aliases = map[string]string{}
+		}
+		cf.Aliases[a] = t
+	}
 }
 
 // hasStatic: a declaration or definition written with the static storage
@@ -997,33 +1042,10 @@ func newTypeTable(files []ParsedFile) *typeTable {
 		for name, cf := range f.Types.Classes {
 			m := tt.classes[name]
 			if m == nil {
-				m = &ClassFact{Fields: map[string]string{}}
-				tt.classes[name] = m
+				tt.classes[name] = cf.clone()
+				continue
 			}
-			for k, v := range cf.Fields {
-				if old, seen := m.Fields[k]; seen && old != v {
-					// two classes of one name (nested in different outer
-					// classes) giving the field different types: unknown
-					v = ""
-				}
-				m.Fields[k] = v
-			}
-			m.Bases = append(m.Bases, cf.Bases...)
-			if len(m.TParams) == 0 {
-				m.TParams, m.TDefaults = cf.TParams, cf.TDefaults
-			}
-			for b, a := range cf.BaseArgs {
-				if m.BaseArgs == nil {
-					m.BaseArgs = map[string][]string{}
-				}
-				m.BaseArgs[b] = a
-			}
-			for a, t := range cf.Aliases {
-				if m.Aliases == nil {
-					m.Aliases = map[string]string{}
-				}
-				m.Aliases[a] = t
-			}
+			m.merge(cf)
 		}
 		for k, v := range f.Types.Aliases {
 			tt.aliases[k] = v
@@ -1253,29 +1275,44 @@ func (tt *typeTable) lineage(cls string) []string {
 		if cf == nil {
 			continue
 		}
-		bind := func(t string) string {
-			i := indexStr(cf.TParams, t)
-			if i >= 0 && i < len(args) && args[i] != "" {
-				return args[i]
-			}
-			if i >= 0 && i < len(cf.TDefaults) && cf.TDefaults[i] != "" {
-				return cf.TDefaults[i] // X<> takes the parameter's default
+		outer := ""
+		if i := strings.LastIndex(c, "::"); i > 0 && tt.nested[c] {
+			outer = c[:i] // a nested class's bases are first its siblings
+		}
+		sibling := func(t string) string {
+			if outer != "" && tt.nested[outer+"::"+t] {
+				return outer + "::" + t
 			}
 			return t
+		}
+		bind := func(t string) (string, []string) {
+			i := indexStr(cf.TParams, t)
+			if i >= 0 && i < len(args) && args[i] != "" {
+				return args[i], nil
+			}
+			if i >= 0 && i < len(cf.TDefaults) && cf.TDefaults[i] != "" {
+				var dargs []string // X<> takes the parameter's default
+				if i < len(cf.TDefaultArgs) {
+					dargs = cf.TDefaultArgs[i]
+				}
+				return sibling(cf.TDefaults[i]), dargs
+			}
+			return t, nil
 		}
 		for _, b := range cf.Bases {
 			var bargs []string
 			for _, a := range cf.BaseArgs[b] {
-				bargs = append(bargs, bind(a))
+				ba, _ := bind(a)
+				bargs = append(bargs, ba)
 			}
-			if bound := bind(b); bound != b {
-				queue = append(queue, inst{name: bound})
+			if bound, dargs := bind(b); bound != b {
+				queue = append(queue, inst{name: bound, args: dargs})
 				continue
 			}
 			if containsStr(cf.TParams, b) {
 				continue // a type parameter the instantiation does not tell
 			}
-			queue = append(queue, inst{name: b, args: bargs})
+			queue = append(queue, inst{name: sibling(b), args: bargs})
 		}
 	}
 	return out
@@ -1324,6 +1361,9 @@ func (tt *typeTable) fieldType(cls, field string) (string, bool) {
 // auto method returning a field: that field's type).
 func (tt *typeTable) methodReturn(cls, m string) string {
 	for _, c := range tt.lineage(cls) {
+		if i := strings.LastIndex(c, "::"); i > 0 && tt.nested[c] {
+			c = c[i+2:] // a nested class's methods are recorded by its name
+		}
 		if t, ok := tt.returns[c+"."+m]; ok {
 			if f, isField := strings.CutPrefix(t, "f:"); isField {
 				t, _ = tt.fieldType(c, f)

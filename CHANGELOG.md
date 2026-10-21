@@ -147,6 +147,13 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   class nested in two classes told apart by the class it is reached through. `Base::f()`
   calls the base's `f`; a forwarded parameter pack fits any parameter count; a source
   file defining a class whose header it does not include defines another class.
+- **C++ macro-generated members**: a repo macro that defines methods inside a class
+  body (`DECLARE_RECOVERY_LIST(_a, _b);` → `save()`/`restore()` with their calls) is
+  expanded — parameters, `__VA_ARGS__`, `#`, `##`, nested macros — and its methods are
+  symbols of the class, located at the macro's use.
+- **C++ nested classes keep their own facts**: `Outer::Inner` has its own fields, bases
+  and template defaults (with their arguments), so a nested `AccessRWImpl<Base = …>` of
+  one class is not merged with another class's nested `AccessRWImpl`.
 - **C++ definitions of one name in several files** (each program's `main`, a header's
   inline overload and the source's) are merged, no longer the last one replacing the
   others' calls.

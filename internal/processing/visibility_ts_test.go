@@ -274,3 +274,35 @@ def run():
 		}
 	}
 }
+
+// A repo macro that defines members inside a class body (a recovery list)
+// generates those methods, with the calls their bodies make.
+func TestCppMacroGeneratedMembers(t *testing.T) {
+	files := map[string]string{
+		"rec/include/rec/tools.hpp": `#pragma once
+class SaveStream { public: template <typename... T> void write(const T&... v) {} };
+class RestoreStream { public: template <typename... T> void read(T&... v) {} };
+#define _USING_STREAMS_ using Save = SaveStream;
+#define _DECLARE_LIST_(...)                                   \
+    _USING_STREAMS_                                           \
+public:                                                       \
+    void save(SaveStream& stream) const { stream.write(__VA_ARGS__); } \
+    void restore(RestoreStream& stream) { stream.read(__VA_ARGS__); }
+#define DECLARE_LIST(...) _DECLARE_LIST_(__VA_ARGS__)
+`,
+		"app/include/app/tracker.hpp": `#include "rec/tools.hpp"
+class Tracker {
+    int _a;
+    int _b;
+    DECLARE_LIST(_a, _b);
+};
+`,
+	}
+	edges := indexAndEdges(t, files)
+	if _, ok := edges["app/include/app.Tracker.save"]["rec/include/rec.SaveStream.write"]; !ok {
+		t.Errorf("the macro's save() calls write: %v (have %v)", edges["app/include/app.Tracker.save"], symKeys(edges))
+	}
+	if _, ok := edges["app/include/app.Tracker.restore"]["rec/include/rec.RestoreStream.read"]; !ok {
+		t.Errorf("the macro's restore() calls read: %v", edges["app/include/app.Tracker.restore"])
+	}
+}

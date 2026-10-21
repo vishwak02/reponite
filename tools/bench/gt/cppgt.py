@@ -215,6 +215,9 @@ def overload_candidates(call):
             break
         if k.kind in (ci.CursorKind.UNEXPOSED_EXPR, ci.CursorKind.DECL_REF_EXPR):
             todo += list(k.get_children())
+        elif k.kind == ci.CursorKind.MEMBER_REF_EXPR and not k.spelling:
+            # obj.f(t), f a member template: the object's members named f
+            todo += [g for g in k.get_children() if g.kind == ci.CursorKind.OVERLOADED_DECL_REF]
     if ovl is None:
         return None
     out = []
@@ -223,6 +226,19 @@ def overload_candidates(call):
         d._tu = call._tu
         out.append(d)
     return out
+
+
+def local_class_file(c, rel):
+    """The source file defining the class c is a member of, when that class
+    is defined in a source file (not a header); "" otherwise."""
+    p = c.semantic_parent
+    if p is None or p.kind not in CLASS_KINDS:
+        return ""
+    d = p.get_definition() or p
+    r = rel(d)
+    if r and r.endswith((".cpp", ".cc", ".cxx", ".c")):
+        return r
+    return ""
 
 
 def parse_one(job):
@@ -272,7 +288,8 @@ def parse_one(job):
                     if m:
                         name = m.group(1) + "." + m.group(2)  # TEST_F(Suite, Case) { … }: Suite.Case
                 defs.append({"usr": c.get_usr(), "id": did, "path": r, "line": c.location.line,
-                             "end": c.extent.end.line, "name": name, "called": called})
+                             "end": c.extent.end.line, "name": name, "called": called,
+                             "local": local_class_file(c, rel)})
                 visit(c, did)
                 continue
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and c.spelling.startswith("operator"):
@@ -290,6 +307,15 @@ def parse_one(job):
                 dependent = overload_candidates(c)
                 if dependent:
                     spelling = dependent[0].spelling
+                else:
+                    # obj.f(t) with t of a template parameter's type: unbound
+                    # until instantiation — a call of f, undetermined
+                    kids = list(c.get_children())
+                    if kids and kids[0].kind == ci.CursorKind.MEMBER_REF_EXPR and kids[0].spelling:
+                        calls.append({"from": owner, "name": kids[0].spelling, "usr": None, "external": False,
+                                      "line": c.location.line, "col": c.location.column, "bound": False})
+                        visit(c, owner)
+                        continue
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and spelling:
                 ref = c.referenced
                 if ref is not None and ref.kind in (ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR):
@@ -392,7 +418,9 @@ def main():
     groups = {}
     for ds, _ in results:
         for d in ds:
-            k = (os.path.dirname(d["path"]), d["name"])
+            # a class a source file defines is that file's own: two test files'
+            # fixtures of one name are two classes (reponite: Cls@file)
+            k = (os.path.dirname(d["path"]), d["name"], d.get("local") or "")
             g = groups.setdefault(k, {})
             g[d["id"]] = d
     canon = {}

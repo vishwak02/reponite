@@ -105,6 +105,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	monikers := map[string]string{} // qid -> SCIP moniker (§8B.4)
 	linkRobotEmbedded(files)
 	nameGoInits(files)
+	expandCppMacros(repo, normVer, files)
 	mods := newModuleIndex(files)
 	classes := newClassGraph()
 	type classDecl struct {
