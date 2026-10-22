@@ -263,7 +263,7 @@ func TestIndexFilesCapturesTargetSignatureFromPeers(t *testing.T) {
 		}},
 		Imports: []ImportBinding{{Local: "user", Module: "github.com/acme/api/pkg/user"}},
 	}}
-	if err := indexFiles(local, "web", "HEAD", 1, files, nil, peer, nil); err != nil {
+	if err := indexFiles(local, "web", "HEAD", 1, files, nil, peer, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	hits := local.ExternalRefsTo("github.com/acme/api", "GetUser")
@@ -276,7 +276,7 @@ func TestIndexFilesCapturesTargetSignatureFromPeers(t *testing.T) {
 
 	// Without peers the same index captures nothing — unknown, never guessed.
 	solo := storage.NewMem()
-	if err := indexFiles(solo, "web", "HEAD", 1, files, nil, nil, nil); err != nil {
+	if err := indexFiles(solo, "web", "HEAD", 1, files, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if h := solo.ExternalRefsTo("github.com/acme/api", "GetUser"); len(h) != 1 || h[0].TargetSignatureHash != "" {

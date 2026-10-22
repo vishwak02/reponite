@@ -60,6 +60,7 @@ type Score struct {
 	Repo, Ref, Lang string
 	Defs            ratio            // ground-truth definitions reponite stores at the same place
 	Edges           map[string]ratio // by confidence band: precision of reponite's edges
+	ByMethod        map[string]ratio // by resolution method (provenance): precision of its edges
 	Undetermined    map[string]int   // by band: edges the extractor cannot judge (dynamic receivers)
 	EdgeRecall      ratio            // ground-truth static edges reponite has
 	FalseEdges      []string         `json:",omitempty"` // examples
@@ -168,7 +169,7 @@ func main() {
 	syms := st.SymbolsAt(*repo, *ref)
 	qidAt := map[string]string{} // qid -> ground-truth def id
 	defHit := map[string]bool{}
-	sc := Score{Repo: *repo, Ref: *ref, Lang: t.Lang, Edges: map[string]ratio{}, Undetermined: map[string]int{}}
+	sc := Score{Repo: *repo, Ref: *ref, Lang: t.Lang, Edges: map[string]ratio{}, ByMethod: map[string]ratio{}, Undetermined: map[string]int{}}
 	for q := range syms {
 		p, s, e, ok := query.LocateSymbol(files, q)
 		if !ok {
@@ -246,15 +247,18 @@ func main() {
 				}
 				continue
 			}
-			r := sc.Edges[bd]
+			r, m := sc.Edges[bd], sc.ByMethod[c.ResolutionMethod]
 			r.Total++
+			m.Total++
 			if anyEdge[k] {
 				r.Hit++
+				m.Hit++
 			} else if len(sc.FalseEdges) < *listN {
 				sc.FalseEdges = append(sc.FalseEdges, fmt.Sprintf("[%s %.2f] %s (%s) -> %s (%s)", c.ResolutionMethod, c.Confidence,
 					caller, from, c.Name, to))
 			}
 			sc.Edges[bd] = r
+			sc.ByMethod[c.ResolutionMethod] = m
 		}
 	}
 	var inferredRecall, inferredResolved ratio
@@ -306,6 +310,14 @@ func main() {
 		fmt.Printf("  edge precision %-17s %s%s\n", bd, sc.Edges[bd], u)
 	}
 	fmt.Printf("  edge recall (static)   %s\n", sc.EdgeRecall)
+	var methods []string
+	for m := range sc.ByMethod {
+		methods = append(methods, m)
+	}
+	sort.Strings(methods)
+	for _, m := range methods {
+		fmt.Printf("    by provenance %-22s %s\n", m, sc.ByMethod[m])
+	}
 	gate("resolved edge precision", sc.Edges["resolved(>=0.85)"], minPrecision)
 	gate("static edge recall", sc.EdgeRecall, minRecall)
 	fmt.Printf("  reponite symbols with no definition at their place: %d\n", sc.Unmapped)

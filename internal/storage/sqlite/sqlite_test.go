@@ -527,3 +527,157 @@ func TestSQLiteOpenWhileAnotherWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A long-running reader (an MCP server) keeps its decoded call graph, but a
+// write by another process — a re-index — is seen at the next question.
+func TestSQLiteSnapshotSeesAnotherProcessWrite(t *testing.T) {
+	path := t.TempDir() + "/index.db"
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := writer.Put("billing", "HEAD", "Charge", rec("c", "sig", "b1", 1, "validateCard")); err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.Snapshot("billing", "HEAD").Callees["Charge"]; len(got) != 1 || got[0].Name != "validateCard" {
+		t.Fatalf("first read: %+v", got)
+	}
+	// the cached answer is the caller's to change
+	snap := reader.Snapshot("billing", "HEAD")
+	snap.Callees["Charge"] = nil
+	if got := reader.Snapshot("billing", "HEAD").Callees["Charge"]; len(got) != 1 {
+		t.Fatalf("a caller's change to its snapshot leaked into the cache: %+v", got)
+	}
+	if err := writer.Put("billing", "HEAD", "Charge", rec("c2", "sig", "b2", 1, "chargeCard")); err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.Snapshot("billing", "HEAD").Callees["Charge"]; len(got) != 1 || got[0].Name != "chargeCard" {
+		t.Fatalf("another process's write is read: %+v", got)
+	}
+}
+
+// A server answers tool calls on several goroutines while it warms its caches:
+// reads of one store from many goroutines must be safe (go test -race).
+func TestSQLiteConcurrentReads(t *testing.T) {
+	st, err := Open(t.TempDir() + "/index.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, ref := range []string{"HEAD", "v1", "v2"} {
+		if err := st.Put("billing", ref, "Charge", rec("c"+ref, "sig", "b", 1, "validateCard")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan bool)
+	for g := 0; g < 8; g++ {
+		go func(g int) {
+			for i := 0; i < 50; i++ {
+				ref := []string{"HEAD", "v1", "v2"}[(g+i)%3]
+				st.Snapshot("billing", ref)
+				st.SymbolsAt("billing", ref)
+				st.SymbolAt("billing", "Charge", ref)
+			}
+			done <- true
+		}(g)
+	}
+	for g := 0; g < 8; g++ {
+		<-done
+	}
+}
+
+// Every cached read sees another process's re-index: a symbol lookup after
+// the ref was decoded (an MCP warm-up), and one whose cache was filled before
+// any snapshot was taken.
+func TestSQLiteSymbolReadsSeeAnotherProcessWrite(t *testing.T) {
+	path := t.TempDir() + "/index.db"
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if err := writer.Put("billing", "HEAD", "Charge", rec("c", "sig1", "b1", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if got := reader.SymbolsAt("billing", "HEAD")["Charge"].SignatureHash; got != content.Hash("sig1") {
+		t.Fatalf("first read: %v", got)
+	}
+	if err := writer.Put("billing", "HEAD", "Charge", rec("c", "sig2", "b2", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Put("billing", "HEAD", "Refund", rec("r", "sig", "b", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := reader.SymbolAt("billing", "Charge", "HEAD"); got.SignatureHash != content.Hash("sig2") {
+		t.Errorf("SymbolAt reads the re-indexed signature: %v", got.SignatureHash)
+	}
+	if _, ok := reader.SymbolAt("billing", "Refund", "HEAD"); !ok {
+		t.Error("a symbol the re-index added is found")
+	}
+	if got := reader.SymbolsAt("billing", "HEAD")["Charge"].SignatureHash; got != content.Hash("sig2") {
+		t.Errorf("SymbolsAt reads the re-indexed signature: %v", got)
+	}
+	// a cache filled before the first snapshot: the write between them is
+	// still seen
+	late, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Close()
+	late.SymbolsAt("billing", "HEAD")
+	if err := writer.Put("billing", "HEAD", "Charge", rec("c", "sig3", "b3", 1)); err != nil {
+		t.Fatal(err)
+	}
+	late.Snapshot("billing", "HEAD")
+	if got := late.SymbolsAt("billing", "HEAD")["Charge"].SignatureHash; got != content.Hash("sig3") {
+		t.Errorf("a write after the first fill and before the first snapshot is read: %v", got)
+	}
+}
+
+// A graph query orders callees on its own copy: the store's cached slices
+// are shared by every reader (go test -race).
+func TestSQLiteGraphDoesNotReorderCache(t *testing.T) {
+	st, err := Open(t.TempDir() + "/index.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	r := rec("m", "sig", "b", 1, "pkg.zeta", "pkg.alpha", "pkg.mid")
+	r.Callees[2].Confidence = 0.5
+	if err := st.Put("pkg", "HEAD", "pkg.main", r); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"pkg.zeta", "pkg.alpha", "pkg.mid"} {
+		if err := st.Put("pkg", "HEAD", c, rec(c, "sig", "b", 1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := append([]query.Callee(nil), st.Snapshot("pkg", "HEAD").Callees["pkg.main"]...)
+	done := make(chan bool)
+	for g := 0; g < 4; g++ {
+		go func() {
+			query.CallGraph(st, "pkg", "HEAD", "pkg.main", 2, 50, true, true)
+			done <- true
+		}()
+	}
+	for g := 0; g < 4; g++ {
+		<-done
+	}
+	after := st.Snapshot("pkg", "HEAD").Callees["pkg.main"]
+	for i := range before {
+		if before[i] != after[i] {
+			t.Fatalf("the cached callee order changed: %v -> %v", before, after)
+		}
+	}
+}

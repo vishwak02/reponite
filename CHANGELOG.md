@@ -13,6 +13,21 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Added
 
+- **Compiler-exact calls (`--precise`)**: `index --precise on` parses C/C++ translation units
+  with libclang (loaded at run time, no headers needed to build; each unit in a worker
+  process): a unit the build's `compile_commands.json` lists with its command (`clang-compdb`
+  1.0), any other with include paths read from the packages plus `--cpp-headers` trees and
+  the revision's pinned submodules (`clang-synth` 0.97). Compiler-bound calls replace
+  inferred ones, a virtual call also links the overrides, and calls it could not bind keep
+  the inferred edge. Results are stored per translation unit by every file it read (repo and
+  submodule files by content, others by size, times and inode) and by the headers an include could
+  newly find, so later indexes of other refs reuse them; the default `--precise cached`
+  (also used by `watch` and an MCP server's refresh) never compiles and costs nothing for a
+  repo that was never compiled. `precise status` / `precise gc`.
+- **Faster answers from a long-running server**: a ref's call graph is decoded once and kept
+  (a few refs at a time), symbol lookups and test discovery are indexed, and the store's
+  caches are safe across concurrent tool calls and see another process's re-index.
+
 - **`trace` follows DRF serializers**: a view's `serializer_class` and the serializers
   nested in it as fields (`document = DocumentSerializer(...)`) are walked for what
   they run per response — `SerializerMethodField` getters and `to_representation` —
@@ -93,6 +108,17 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   function defined in a class is a free function, and a class defined again in another
   source file of the directory (each test file its own fixture) is `Cls@file`, its calls kept
   apart. Reindex to pick it up.
+- **Call edges (IndexVer 18)**: C++ overloads are chosen by argument types (library
+  temporaries, static method results, fields, arithmetic) and by the fewest arguments a
+  declaration's defaults allow; a repo macro defining methods in a class body gives the
+  class those methods and their calls; a nested class keeps its own fields, bases and
+  template defaults; class-scope aliases shadow same-named class templates; an include two
+  packages could satisfy is the including package's. Python: a bare call reaches the module's
+  own definitions, imports, star imports and module-level aliases of imported attributes
+  (`f = mod.f`) only. JS/TS: a class named
+  like its file keeps its methods apart from the module's functions. A revision read from git
+  takes the monikers of an `index.scip` committed at its root, as a working tree does.
+  Reindex to pick it up.
 - **`usages`** finds a call made under a renamed import (`import Header from './x'`, a
   barrel's `export { a as b }`): the call graph says the caller calls the target, and the
   one imported name the caller calls that no other callee explains is that call.

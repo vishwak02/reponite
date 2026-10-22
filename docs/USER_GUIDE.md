@@ -79,9 +79,11 @@ Content is addressed by hash, so **identical code across refs is stored once**. 
 ### Confidence and provenance
 
 Every answer carries how it was derived and how certain it is. Each call-graph edge is scored
-by how it was resolved: `1.0` type-checker proven · `0.95` SCIP symbol-resolved across repos ·
-`0.9` uniquely name-resolved · `0.75` import-resolved across repos · `0.6` external or opaque ·
-`0.5` ambiguous. A verdict takes the **minimum** over its evidence, so a single weak edge caps
+by how it was resolved: `1.0` compiler-proven (`go-types`, `clang-compdb`) · `0.97` clang with
+include paths reponite read from the packages
+(`clang-synth`) · `0.95` SCIP symbol-resolved across repos · `0.9` uniquely name-resolved ·
+`0.85` resolved on the receiver's declared type · `0.75` import-resolved across repos · `0.6`
+external or opaque · `0.5` ambiguous. See [Compiler-exact calls](#compiler-exact-calls---precise). A verdict takes the **minimum** over its evidence, so a single weak edge caps
 the whole answer. What cannot be resolved is counted and reported, never guessed. Every JSON
 answer ends with a `_meta` block: the ref read, freshness, warnings, and coverage.
 
@@ -735,12 +737,60 @@ on the machine, not one system. So a command run **inside a repo** reads that re
 `REPONITE_FLEET=<file>` names a registry for one system — a deployed product's repositories
 — and is always read whole; `--local` narrows any command to the current repo.
 
+### Compiler-exact calls (`--precise`)
+
+Call edges are normally inferred from the code's structure, without building it. Where a
+compiler can read the code, reponite asks it instead:
+
+- **Go**: whenever the module builds offline — the type checker runs on every Go package (`go-types`).
+- **C and C++**: `reponite index --precise on` parses every translation unit with libclang
+  (loaded at run time; install your distribution's `libclang` package, or point
+  `--libclang`/`$REPONITE_LIBCLANG` at it). A unit the build's `compile_commands.json` lists
+  (at the tree root or in `build/`, or `--compdb PATH`; a workspace's database is fine) is
+  compiled with that command: its edges are `clang-compdb`. Any other unit gets an include
+  path built from the packages (`package.xml` dependencies, `include/` directories) plus
+  `--cpp-headers DIR` trees — a ROS install, a copied `/usr/include`, generated message
+  headers: `clang-synth`. `--cpp-arg` adds an argument to every unit.
+What the compiler bound replaces the inferred edge for that call; what it could not bind (a
+dependent call in a template, a call whose argument's type comes from a missing header, a
+call inside a function a framework macro defines) keeps the inferred edge. A call of a
+virtual method through an object also links the overrides the class hierarchy holds, since
+any of them may run. A revision's pinned submodules whose objects are on the machine are
+given to the compiler as headers, not as the repo's own code.
+
+**Speed.** Compiling is slow, so it is never the default. Each translation unit's result is
+stored by its source, its compile arguments, the clang version and every file it read —
+the repo's and its submodules' by content, others (system, ROS, generated headers) by size,
+times and inode — in `$REPONITE_PRECISE_DIR`, else `$REPONITE_STORE_DIR/.precise`, else
+the user cache directory (`~/.cache/reponite/.precise`). A unit compiled once is reused by
+every later index — another tag, branch or repo, several versions of a unit kept side by
+side — while all of those are unchanged and no header appeared where one of its includes
+(or `__has_include`) would now find it: a header of a name the unit reads, anywhere in the
+repo, or one an include did not find, recompiles it; a header of another name leaves it
+cached. The default, `--precise cached`, only reads those results and never compiles, so it
+costs nothing for a repo none of whose units were compiled; `--precise off` ignores them
+(a revision indexed with them is indexed again without). Run `--precise on` once per release (or in CI) and every index after it —
+including `reponite watch` and an MCP server's refresh — gets compiler-exact C/C++ calls at
+inferred speed: the `--cpp-headers`, `--cpp-arg` and `--compdb` a repo was last compiled
+with are remembered (`configs/<repo>.json` in that directory) and reused by runs that give
+none. A revision indexed with compiler-exact calls is not re-indexed by a later default run.
+When some units are not compiled (a cached run after edits, a unit that failed), a call is
+proven only if no unit left out seems to define its name.
+
+```sh
+reponite index --git v2.3.0 --precise on --cpp-headers /opt/ros/noetic
+reponite index --tags 'v2.*'              # cached: unchanged units reuse v2.3.0's results
+reponite precise status                   # libclang found? store size
+reponite precise gc --max-size 2G         # least recently used results removed
+```
+
 ### SCIP: symbol-precise cross-repo edges
 
 Cross-repo links normally match on `(module path, name)` — precise about the module, but
 still a name match. If you generate a **SCIP index** (`scip-go`, `scip-typescript`,
-`scip-python`, …) and leave `index.scip` at a repo root, reponite reads it and every symbol
-gains a globally unique **moniker**:
+`scip-python`, …) and leave `index.scip` at a repo root (or commit it there: a revision
+indexed with `--git` reads its own), reponite reads it and every symbol gains a globally
+unique **moniker**:
 
 ```
 scip-go gomod github.com/acme/api v1.2.0 `pkg/user`/GetUser().

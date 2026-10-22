@@ -906,6 +906,11 @@ func baseIndexOf(syms map[string]SymbolRef) baseIndex {
 	for k := range syms {
 		b := baseName(k)
 		idx[b] = append(idx[b], k)
+		if i := strings.LastIndex(b, "/"); i >= 0 {
+			// an id whose last segment holds a path (a package.json entry,
+			// a heading): also under "/"+its end, for a name matching there
+			idx["/"+b[i+1:]] = append(idx["/"+b[i+1:]], k)
+		}
 	}
 	return idx
 }

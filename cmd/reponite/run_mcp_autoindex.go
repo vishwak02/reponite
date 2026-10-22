@@ -34,9 +34,11 @@ func newSymbolParser() func(path, content string) []query.EditedSymbol {
 // momentarily partial right after mount; `reponite watch` gives continuous
 // mid-session freshness.
 func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
+	// compiled C/C++ results are reused, as a plain `reponite index` does
+	opt := processing.IndexOptions{PreciseDriver: cachedDriver(repo)}
 	if len(st.Refs(repo)) == 0 {
 		fmt.Fprintf(os.Stderr, "reponite: no index for %q; indexing %s@HEAD on mount...\n", repo, dir)
-		if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
+		if err := processing.IndexDirWith(st, repo, "HEAD", dir, version.NormVer, opt); err != nil {
 			fmt.Fprintln(os.Stderr, "reponite: auto-index failed:", err)
 		}
 		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
@@ -52,7 +54,7 @@ func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
 		return
 	}
 	go func() {
-		if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
+		if err := processing.IndexDirWith(st, repo, "HEAD", dir, version.NormVer, opt); err != nil {
 			fmt.Fprintln(os.Stderr, "reponite: background refresh failed:", err)
 			return
 		}

@@ -87,6 +87,12 @@ def post(u):
 
 func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]string {
 	t.Helper()
+	return indexAndEdgesWith(t, files, nil)
+}
+
+// indexAndEdgesWith indexes files with a compiler's proven calls (precise.go).
+func indexAndEdgesWith(t *testing.T, files map[string]string, units []PreciseUnit) map[string]map[string]string {
+	t.Helper()
 	var parsed []ParsedFile
 	for path, src := range files {
 		if strings.HasSuffix(path, ".json") {
@@ -119,7 +125,7 @@ func indexAndEdges(t *testing.T, files map[string]string) map[string]map[string]
 			Symbols: Extract(root, rules, 1), Spans: spans, Imports: Imports(root, rules), Types: typeFactsFor(root, rules)})
 	}
 	m := storage.NewMem()
-	if err := IndexFiles(m, "r", "v1", 1, parsed); err != nil {
+	if err := indexFiles(m, "r", "v1", 1, parsed, nil, nil, nil, units); err != nil {
 		t.Fatal(err)
 	}
 	out := map[string]map[string]string{}

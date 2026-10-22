@@ -11,6 +11,7 @@ import (
 	"runtime/pprof"
 	"time"
 
+	"github.com/vishwak02/reponite/internal/precise/cxx"
 	"github.com/vishwak02/reponite/internal/query"
 	"github.com/vishwak02/reponite/internal/version"
 )
@@ -52,6 +53,12 @@ func main() {
 		usage()
 	case "demo":
 		runDemo()
+	case "cxx-worker":
+		// internal: one C/C++ compiler worker of --precise (precise/cxx)
+		if err := cxx.Serve(os.Stdin, os.Stdout, os.Getenv("REPONITE_LIBCLANG")); err != nil {
+			fmt.Fprintln(os.Stderr, "reponite cxx-worker:", err)
+			os.Exit(1)
+		}
 	case "guide":
 		fmt.Println(query.Guide)
 	case "setup":
@@ -62,7 +69,7 @@ func main() {
 		watchCommand(os.Args[2:])
 	case "serve":
 		serveCommand(os.Args[2:])
-	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests", "ui", "map", "explain", "trace", "models", "config", "coverage", "links":
+	case "index", "compat", "diff", "grep", "search", "semsearch", "investigate", "rootcause", "rootcause-trace", "ci-check", "ximpact", "blast-radius", "usages", "topics", "logsite", "impls", "routes", "verify-edit", "repos", "fleet", "context", "brief", "refs", "why", "errors", "tests", "ui", "map", "explain", "trace", "models", "config", "coverage", "links", "precise":
 		indexBackedCommand(os.Args[1], os.Args[2:])
 	case "init", "impact", "arch",
 		"sync", "status", "gc":

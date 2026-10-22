@@ -51,6 +51,8 @@ func indexBackedCommand(cmd string, args []string) {
 		cmdCoverage(args)
 	case "links":
 		cmdLinks(args)
+	case "precise":
+		cmdPrecise(args)
 	case "logsite":
 		cmdLogSite(args)
 	case "impls":
@@ -167,7 +169,9 @@ func cmdIndex(args []string) {
 	var gitRev, tagGlob string
 	var excludes excludeFlags
 	var submodules, force bool
-	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>[,<rev>...]] [--tags GLOB] [--submodules] [--force] [--exclude GLOB]...", args, func(fs *flag.FlagSet) {
+	var pf preciseFlags
+	pos := parseCmd("index", "index [<dir>] [ref] [--git <rev>[,<rev>...]] [--tags GLOB] [--submodules] [--force] [--exclude GLOB]... [--precise off|cached|on] [--cpp-headers DIR]...", args, func(fs *flag.FlagSet) {
+		pf.register(fs)
 		fs.StringVar(&gitRev, "git", "", "index git revisions' trees (tag/branch/SHA, comma-separated) instead of the working tree")
 		fs.StringVar(&tagGlob, "tags", "", "also index every tag matching this glob (e.g. '3.7.*'), each under its own name")
 		fs.BoolVar(&submodules, "submodules", false, "also index each submodule at the exact commit the revision pins, as ref <repo>@<label>")
@@ -184,7 +188,7 @@ func cmdIndex(args []string) {
 	// per-caller skew. Without them the skew is honestly "unknown".
 	peers := openPeers(dir)
 	defer peers.Close()
-	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary}
+	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary, PreciseDriver: pf.driver(repo)}
 	if gitRev == "" && tagGlob == "" {
 		ref := arg(pos, 1, "HEAD")
 		if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
@@ -220,7 +224,7 @@ func cmdIndex(args []string) {
 		if len(revs) > 1 {
 			fmt.Printf("[%d/%d] ", i+1, len(revs))
 		}
-		indexOneRev(st, repo, dir, rv, opt, force)
+		indexOneRev(st, repo, dir, rv, opt, force, &pf)
 		if submodules {
 			indexSubmodules(repo, dir, rv, excludes, force, 1)
 		}
@@ -232,17 +236,23 @@ func cmdIndex(args []string) {
 // indexOneRev indexes one revision, or reuses an index of the same commit
 // under the current ruleset (resume: an interrupted batch re-run skips what
 // is done; a second label for the same commit copies rows, not work).
-func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt processing.IndexOptions, force bool) {
+func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt processing.IndexOptions, force bool, pf *preciseFlags) {
 	filter := refFilter(opt.Excludes)
-	if !force && (filter != "" || st.RefFilter(repo, rv.Label) != "") {
+	stored := st.RefFilter(repo, rv.Label)
+	storedBase, wasPrecise := strings.CutSuffix(stored, preciseMark)
+	compileNow := pf != nil && pf.mode == "on"
+	off := pf != nil && pf.mode == "off" // compiled calls asked away: a ref holding them is redone
+	if !force && (filter != "" || stored != "") {
 		// --exclude makes a label a different file set from another label of the
 		// same commit: the label is skipped only when it was indexed at this
 		// commit with exactly this filter, and never aliased to another label.
-		if st.RefAtCommit(repo, rv.Label, rv.Commit, version.IndexVer) && st.RefFilter(repo, rv.Label) == filter {
+		// One indexed with compiler-exact calls is done for any later run;
+		// one indexed without them is redone only by --precise on.
+		if st.RefAtCommit(repo, rv.Label, rv.Commit, version.IndexVer) && storedBase == filter && (wasPrecise || !compileNow) && !(off && wasPrecise) {
 			fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))
 			return
 		}
-	} else if !force {
+	} else if !force && !compileNow && !off {
 		if have, ok := st.RefByCommit(repo, rv.Commit, version.IndexVer); ok {
 			if have == rv.Label {
 				fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))
@@ -264,6 +274,9 @@ func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt p
 	}
 	if err := st.SetIndexVersion(repo, rv.Label, version.IndexVer); err != nil {
 		fail(err)
+	}
+	if pf != nil && pf.compiled {
+		filter += preciseMark
 	}
 	if err := st.SetRefFilter(repo, rv.Label, filter); err != nil {
 		fail(err)
@@ -305,7 +318,7 @@ func indexSubmodules(parent, dir string, rv processing.GitRev, excludes excludeF
 		label := parent + "@" + rv.Label
 		fmt.Printf("  submodule ")
 		indexOneRev(sst, sub, p.RepoDir, processing.GitRev{Label: label, Rev: p.Commit, Commit: p.Commit},
-			processing.IndexOptions{Excludes: excludes, Report: printIndexSummary}, force)
+			processing.IndexOptions{Excludes: excludes, Report: printIndexSummary}, force, nil)
 		registerRepo(sub, p.RepoDir, sst.ModulePath(sub))
 		sst.Close()
 		if depth < maxSubmoduleDepth {

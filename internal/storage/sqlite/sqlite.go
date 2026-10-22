@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 
@@ -43,8 +44,11 @@ const FormatVersion = 2
 
 // Store is a SQLite-backed query.Store.
 type Store struct {
-	db    *sql.DB
-	path  string           // on-disk path (":memory:" for tests), for the dashboard DB view
+	db   *sql.DB
+	path string // on-disk path (":memory:" for tests), for the dashboard DB view
+	// idMu guards names and refs: a server answers tool calls on several
+	// goroutines at once
+	idMu  sync.Mutex
 	names map[string]int64 // interned-name cache
 	refs  map[[2]string]int64
 	// symsMu guards syms, the decoded SymbolsAt answer per ref. A query such
@@ -60,6 +64,42 @@ type Store struct {
 	files      map[int64][]query.File
 	filesBytes int
 	filesOrder []int64
+	// snaps holds decoded Snapshot answers per ref: a long-running server
+	// (MCP, the dashboard) answers question after question from the same
+	// call graph, and reading it from SQLite was most of each answer's time.
+	// Every write drops it.
+	snapsMu    sync.Mutex
+	snaps      map[int64]query.RefSnapshot
+	snapsOrder []int64 // least recently used first; at most maxSnaps kept
+	// dataVersion is SQLite's data_version when the caches were filled: it
+	// changes when another process commits (a re-index while a server runs),
+	// and the caches are then dropped.
+	dataVersion int64
+	// gen counts invalidations: a read that started before one is not cached
+	// (another reader's freshen may have dropped the caches while it ran, and
+	// storing it then would keep a half-written ref for good).
+	gen atomic.Uint64
+}
+
+// freshen drops the cached reads when another process has written the
+// database since they were filled (this process's writes drop them anyway).
+// Every cached read calls it first; it returns the generation the read's
+// result may be cached under.
+func (s *Store) freshen() uint64 {
+	var v int64
+	if s.db.QueryRow(`PRAGMA data_version`).Scan(&v) != nil {
+		s.invalidate() // cannot tell: nothing cached is trusted
+		return s.gen.Load()
+	}
+	s.snapsMu.Lock()
+	changed := v != s.dataVersion
+	s.dataVersion = v
+	s.snapsMu.Unlock()
+	if changed {
+		s.invalidate()
+		s.resetIDs()
+	}
+	return s.gen.Load()
 }
 
 // filesBudget bounds the content kept by the Files cache.
@@ -67,12 +107,16 @@ const filesBudget = 512 << 20
 
 // invalidate drops cached reads; called by every write.
 func (s *Store) invalidate() {
+	s.gen.Add(1)
 	s.symsMu.Lock()
 	s.syms = nil
 	s.symsMu.Unlock()
 	s.filesMu.Lock()
 	s.files, s.filesBytes, s.filesOrder = nil, 0, nil
 	s.filesMu.Unlock()
+	s.snapsMu.Lock()
+	s.snaps, s.snapsOrder = nil, nil
+	s.snapsMu.Unlock()
 }
 
 const schema = `
@@ -232,8 +276,41 @@ type execer interface {
 	QueryRow(string, ...interface{}) *sql.Row
 }
 
+func (s *Store) cachedName(name string) (int64, bool) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
+	id, ok := s.names[name]
+	return id, ok
+}
+
+func (s *Store) setName(name string, id int64) {
+	s.idMu.Lock()
+	s.names[name] = id
+	s.idMu.Unlock()
+}
+
+func (s *Store) cachedRef(k [2]string) (int64, bool) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
+	id, ok := s.refs[k]
+	return id, ok
+}
+
+func (s *Store) setRef(k [2]string, id int64) {
+	s.idMu.Lock()
+	s.refs[k] = id
+	s.idMu.Unlock()
+}
+
+// resetIDs drops both id caches (a rolled-back transaction, another process's write).
+func (s *Store) resetIDs() {
+	s.idMu.Lock()
+	s.names, s.refs = map[string]int64{}, map[[2]string]int64{}
+	s.idMu.Unlock()
+}
+
 func (s *Store) nameID(x execer, name string) (int64, error) {
-	if id, ok := s.names[name]; ok {
+	if id, ok := s.cachedName(name); ok {
 		return id, nil
 	}
 	if _, err := x.Exec(`INSERT OR IGNORE INTO names(s) VALUES(?)`, name); err != nil {
@@ -243,26 +320,26 @@ func (s *Store) nameID(x execer, name string) (int64, error) {
 	if err := x.QueryRow(`SELECT id FROM names WHERE s=?`, name).Scan(&id); err != nil {
 		return 0, err
 	}
-	s.names[name] = id
+	s.setName(name, id)
 	return id, nil
 }
 
 // lookupName returns an existing name's id without creating it.
 func (s *Store) lookupName(name string) (int64, bool) {
-	if id, ok := s.names[name]; ok {
+	if id, ok := s.cachedName(name); ok {
 		return id, true
 	}
 	var id int64
 	if err := s.db.QueryRow(`SELECT id FROM names WHERE s=?`, name).Scan(&id); err != nil {
 		return 0, false
 	}
-	s.names[name] = id
+	s.setName(name, id)
 	return id, true
 }
 
 func (s *Store) refID(x execer, repo, ref string) (int64, error) {
 	k := [2]string{repo, ref}
-	if id, ok := s.refs[k]; ok {
+	if id, ok := s.cachedRef(k); ok {
 		return id, nil
 	}
 	if _, err := x.Exec(`INSERT OR IGNORE INTO refs_v2(repo, ref) VALUES(?, ?)`, repo, ref); err != nil {
@@ -272,21 +349,21 @@ func (s *Store) refID(x execer, repo, ref string) (int64, error) {
 	if err := x.QueryRow(`SELECT id FROM refs_v2 WHERE repo=? AND ref=?`, repo, ref).Scan(&id); err != nil {
 		return 0, err
 	}
-	s.refs[k] = id
+	s.setRef(k, id)
 	return id, nil
 }
 
 // lookupRef returns an existing ref's id without creating it.
 func (s *Store) lookupRef(repo, ref string) (int64, bool) {
 	k := [2]string{repo, ref}
-	if id, ok := s.refs[k]; ok {
+	if id, ok := s.cachedRef(k); ok {
 		return id, true
 	}
 	var id int64
 	if err := s.db.QueryRow(`SELECT id FROM refs_v2 WHERE repo=? AND ref=?`, repo, ref).Scan(&id); err != nil {
 		return 0, false
 	}
-	s.refs[k] = id
+	s.setRef(k, id)
 	return id, true
 }
 
@@ -371,10 +448,14 @@ func (s *Store) withTx(fn func(tx *sql.Tx) error) error {
 	}
 	if err := fn(tx); err != nil {
 		tx.Rollback()
-		s.names, s.refs = map[string]int64{}, map[[2]string]int64{} // ids of a rolled-back tx
+		s.resetIDs() // ids of a rolled-back tx
 		return err
 	}
-	return tx.Commit()
+	err = tx.Commit()
+	// again after the commit: a reader that cached between the write's first
+	// invalidate and its commit read the old rows
+	s.invalidate()
+	return err
 }
 
 // AddRef records/updates a ref's commit and manifest hash.
@@ -791,8 +872,19 @@ func scanSymRef(sc interface{ Scan(...interface{}) error }, extra ...interface{}
 }
 
 func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
+	s.freshen()
 	rid, ok := s.lookupRef(repo, ref)
 	if !ok {
+		return query.SymbolRef{Present: false}, false
+	}
+	s.symsMu.Lock()
+	cached, hit := s.syms[rid]
+	s.symsMu.Unlock()
+	if hit {
+		// the ref is decoded already (a SymbolsAt): no query per symbol
+		if sr, ok := cached[symbol]; ok {
+			return sr, true
+		}
 		return query.SymbolRef{Present: false}, false
 	}
 	nid, ok := s.lookupName(symbol)
@@ -809,6 +901,7 @@ func (s *Store) SymbolAt(repo, symbol, ref string) (query.SymbolRef, bool) {
 }
 
 func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
+	gen := s.freshen()
 	rid, ok := s.lookupRef(repo, ref)
 	if !ok {
 		return map[string]query.SymbolRef{}
@@ -826,10 +919,12 @@ func (s *Store) SymbolsAt(repo, ref string) map[string]query.SymbolRef {
 	}
 	out := s.symbolsAt(rid)
 	s.symsMu.Lock()
-	if s.syms == nil {
-		s.syms = map[int64]map[string]query.SymbolRef{}
+	if s.gen.Load() == gen {
+		if s.syms == nil {
+			s.syms = map[int64]map[string]query.SymbolRef{}
+		}
+		s.syms[rid] = out
 	}
-	s.syms[rid] = out
 	s.symsMu.Unlock()
 	cp := make(map[string]query.SymbolRef, len(out))
 	for k, v := range out {
@@ -872,11 +967,62 @@ func (s *Store) RefCounts(repo, ref string) (symbols, edges, files int, ok bool)
 }
 
 func (s *Store) Snapshot(repo, ref string) query.RefSnapshot {
-	snap := query.RefSnapshot{Symbols: map[string]query.SymbolFacts{}, Callees: map[string][]query.Callee{}}
+	gen := s.freshen()
 	rid, ok := s.lookupRef(repo, ref)
 	if !ok {
-		return snap
+		return query.RefSnapshot{Symbols: map[string]query.SymbolFacts{}, Callees: map[string][]query.Callee{}}
 	}
+	s.snapsMu.Lock()
+	cached, hit := s.snaps[rid]
+	if hit {
+		s.touchSnap(rid)
+	}
+	s.snapsMu.Unlock()
+	if !hit {
+		cached = s.readSnapshot(rid)
+		s.snapsMu.Lock()
+		if s.snaps == nil {
+			s.snaps = map[int64]query.RefSnapshot{}
+		}
+		if _, raced := s.snaps[rid]; !raced && s.gen.Load() == gen {
+			s.snaps[rid] = cached
+			s.snapsOrder = append(s.snapsOrder, rid)
+			for len(s.snapsOrder) > maxSnaps { // a query over many refs keeps only the latest few
+				delete(s.snaps, s.snapsOrder[0])
+				s.snapsOrder = s.snapsOrder[1:]
+			}
+		}
+		s.snapsMu.Unlock()
+	}
+	// the caller's own maps (one may add to them); the slices are shared:
+	// callers copy before reordering one
+	out := query.RefSnapshot{Symbols: make(map[string]query.SymbolFacts, len(cached.Symbols)), Callees: make(map[string][]query.Callee, len(cached.Callees))}
+	for k, v := range cached.Symbols {
+		out.Symbols[k] = v
+	}
+	for k, v := range cached.Callees {
+		out.Callees[k] = v[:len(v):len(v)]
+	}
+	return out
+}
+
+// maxSnaps bounds the Snapshot cache: an agent asks about one or two refs
+// at a time, and a large ref's decoded call graph is tens of megabytes.
+const maxSnaps = 3
+
+// touchSnap marks rid most recently used (snapsMu held).
+func (s *Store) touchSnap(rid int64) {
+	for i, r := range s.snapsOrder {
+		if r == rid {
+			s.snapsOrder = append(append(s.snapsOrder[:i:i], s.snapsOrder[i+1:]...), rid)
+			return
+		}
+	}
+}
+
+// readSnapshot reads one ref's symbols and call graph from the database.
+func (s *Store) readSnapshot(rid int64) query.RefSnapshot {
+	snap := query.RefSnapshot{Symbols: map[string]query.SymbolFacts{}, Callees: map[string][]query.Callee{}}
 	rows, err := s.db.Query(`SELECT n.s, s.symbol_hash, s.signature_hash, s.behavior_hash FROM ref_syms r
 		JOIN syms s ON s.id = r.sym_id JOIN names n ON n.id = r.name_id WHERE r.ref_id=?`, rid)
 	if err == nil {
@@ -905,6 +1051,7 @@ func (s *Store) Snapshot(repo, ref string) query.RefSnapshot {
 }
 
 func (s *Store) Files(repo, ref string) []query.File {
+	gen := s.freshen()
 	rid, ok := s.lookupRef(repo, ref)
 	if !ok {
 		return nil
@@ -921,6 +1068,10 @@ func (s *Store) Files(repo, ref string) []query.File {
 		n += len(f.Content)
 	}
 	s.filesMu.Lock()
+	if s.gen.Load() != gen {
+		s.filesMu.Unlock()
+		return out
+	}
 	if s.files == nil {
 		s.files = map[int64][]query.File{}
 	}
@@ -944,6 +1095,7 @@ func (s *Store) Files(repo, ref string) []query.File {
 // FilesMatching returns the files at a ref whose path keep accepts, inflating
 // only those (query.PathFilesReader).
 func (s *Store) FilesMatching(repo, ref string, keep func(path string) bool) []query.File {
+	s.freshen()
 	rid, ok := s.lookupRef(repo, ref)
 	if !ok {
 		return nil

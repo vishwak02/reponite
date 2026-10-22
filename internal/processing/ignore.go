@@ -9,6 +9,7 @@ package processing
 
 import (
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/query"
@@ -50,7 +51,36 @@ type IndexOptions struct {
 	// a lone per-repo store cannot see. nil = capture only what this store
 	// knows; the skew then reads unknown, never guessed.
 	Peers query.Store
+	// Precise are calls a compiler proved for this ref (precise.go), from a
+	// driver run or a cache; they replace inferred edges where they decide.
+	Precise []PreciseUnit
+	// PreciseDriver, when set, is run on the ref's C/C++ sources (precise.go)
+	// and its proven calls join Precise.
+	PreciseDriver func(PreciseSource) []PreciseUnit
 }
+
+// PreciseSource is what a precise driver reads of one ref: its C/C++ files
+// (and the manifests a build reads) by path with their git blob ids, their
+// content, and a way to put them on disk when a compiler must read them.
+type PreciseSource struct {
+	Files map[string]string
+	// Dir is the repo's directory on disk (where a build database's paths
+	// point, also for a ref read from git).
+	Dir string
+	// Extra are C/C++ files the walk excludes (a vendored directory's
+	// headers): never units, but a unit may include them.
+	Extra       map[string]string
+	Read        func(rel string) ([]byte, error)
+	Materialize func() (root string, cleanup func(), err error)
+	// Libs gives the C/C++ files of the submodules the ref pins (by their
+	// path in the ref's tree, at the pinned commits): code the build compiles
+	// against but that is not this repo's. Materialize puts them beside the
+	// sources, in LibDir(root). Read only when a driver needs them.
+	Libs func() map[string]string
+}
+
+// LibDir is where Materialize puts a ref's submodule files for root.
+func LibDir(root string) string { return filepath.Join(filepath.Dir(root), "libs") }
 
 // IndexSummary describes what an index pass actually took in.
 type IndexSummary struct {

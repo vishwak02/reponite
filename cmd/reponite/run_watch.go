@@ -30,10 +30,11 @@ func watchCommand(args []string) {
 	defer st.Close()
 
 	var mu sync.Mutex
+	opt := processing.IndexOptions{PreciseDriver: cachedDriver(repo)}
 	reindex := func() {
 		mu.Lock()
 		defer mu.Unlock()
-		if err := processing.IndexDir(st, repo, "HEAD", dir, version.NormVer); err != nil {
+		if err := processing.IndexDirWith(st, repo, "HEAD", dir, version.NormVer, opt); err != nil {
 			fmt.Fprintln(os.Stderr, "reindex error:", err)
 			return
 		}

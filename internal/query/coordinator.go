@@ -200,6 +200,43 @@ func resolveIn(syms map[string]SymbolRef, q string) []string {
 	return out
 }
 
+// resolveIndexed is resolveIn through a base-name index of syms: a loop that
+// resolves many names against one ref looks at each name's few candidates,
+// not at every symbol.
+func resolveIndexed(idx baseIndex, syms map[string]SymbolRef, q string) []string {
+	if _, ok := syms[q]; ok {
+		return []string{q}
+	}
+	if q == "" || strings.Contains(q, "::") || strings.Contains(q[strings.LastIndex(q, ".")+1:], "/") {
+		return resolveIn(syms, q) // C++ spelling, or the end of a directory path
+	}
+	var out []string
+	cands := idx[baseName(q)]
+	if !strings.Contains(q, ".") {
+		cands = append(append([]string(nil), cands...), idx["/"+q]...) // ids ending in a path segment q
+	}
+	seen := map[string]bool{}
+	for _, k := range cands {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		if baseName(k) == q || strings.HasSuffix(k, "."+q) || strings.HasSuffix(k, "/"+q) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isTestIn is IsTestQID answered from a ref's symbols already read.
+func isTestIn(syms map[string]SymbolRef, qid string) bool {
+	if sym, ok := syms[qid]; ok {
+		return IsTestSymbol(sym, qid)
+	}
+	return IsTestName(baseName(qid))
+}
+
 // resolveCpp resolves a C++-spelled name (Class::method, ns::Class::method,
 // ::ns::f) against reponite's ids, which qualify by directory and class with
 // "." and carry no C++ namespace: leading qualifiers are dropped one at a time

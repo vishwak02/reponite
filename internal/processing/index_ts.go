@@ -36,6 +36,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	var skipped []SkippedFile
 	hasGo := false
 	manifests := map[string][]byte{} // module-manifest files (go.mod, package.json, ...) by rel path
+	cfiles := map[string]string{}    // a precise driver's inputs -> blob id
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -60,6 +61,11 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		}
 		if !info.Mode().IsRegular() {
 			return nil // a symlink or device: its target is indexed where it lives
+		}
+		if opt.PreciseDriver != nil && preciseInput(rel) {
+			if b, err := os.ReadFile(path); err == nil {
+				cfiles[rel] = blobID(b)
+			}
 		}
 		c, cerr := classifyFile(fileInput{
 			path: rel, size: info.Size(),
@@ -99,7 +105,19 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 	if hasGo {
 		precise = TypeResolvedEdges(dir)
 	}
-	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers, goModules(manifests)); err != nil {
+	units := opt.Precise
+	if opt.PreciseDriver != nil && len(cfiles) > 0 {
+		units = append(units, opt.PreciseDriver(PreciseSource{
+			Files: cfiles,
+			Dir:   dir,
+			Read:  func(rel string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))) },
+			Materialize: func() (string, func(), error) {
+				abs, err := filepath.Abs(dir) // the compiler reports absolute paths
+				return abs, func() {}, err
+			},
+		})...)
+	}
+	if err := indexFiles(w, repo, ref, normVer, files, precise, opt.Peers, goModules(manifests), units); err != nil {
 		return err
 	}
 	// Report where the index came from. A repo that vendors third-party code
@@ -177,6 +195,11 @@ func loadSCIP(dir string) (map[string]scip.Document, map[string]bool) {
 	if err != nil {
 		return nil, nil
 	}
+	return decodeSCIP(data)
+}
+
+// decodeSCIP is loadSCIP's decoding, shared with a git ref's own index.scip.
+func decodeSCIP(data []byte) (map[string]scip.Document, map[string]bool) {
 	idx, err := scip.Parse(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reponite: ignoring %s (%v)\n", SCIPFileName, err)

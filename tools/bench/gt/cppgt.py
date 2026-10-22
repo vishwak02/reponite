@@ -13,13 +13,18 @@ Calls to constructors and destructors are not recorded (reponite links a
 construction to the class), nor is virtual dispatch: an edge goes to the
 method the call names statically.
 
-usage: python3 -I cppgt.py <dir> [--libclang PATH] [--jobs N] [--headers DIR]... > truth.json
+usage: python3 -I cppgt.py <dir> [--libclang PATH] [--jobs N] [--headers DIR]... [--lib DIR]... > truth.json
 
 --headers DIR adds a tree of real headers (a copy of a build image's
 /opt/ros/<distro>/include, /usr/include and the workspace's generated
 devel/include): every directory named include under it, and eigen3, become
 include paths, so far fewer headers are stubbed and far fewer calls stay
 undetermined.
+
+--lib DIR adds the code of a submodule the revision pins (checked out at
+DIR, laid out as in the repo): as for the repo's own code, every directory
+holding headers is an include path (after the repo's), as its build adds
+them; its definitions are not the repo's.
 """
 
 import ctypes
@@ -434,7 +439,11 @@ def main():
         i = argv.index("--libclang")
         lib = argv[i + 1]
         del argv[i:i + 2]
-    extra = []
+    extra, libs = [], []
+    while "--lib" in argv:
+        i = argv.index("--lib")
+        libs.append(os.path.realpath(argv[i + 1]))
+        del argv[i:i + 2]
     while "--headers" in argv:
         i = argv.index("--headers")
         extra.append(os.path.realpath(argv[i + 1]))
@@ -462,6 +471,18 @@ def main():
     # what the host lacks (ROS, Eigen, Boost, the generated messages)
     sys_dirs = system_dirs(extra)
     sys_dirs += [d for d in header_dirs(extra) if d not in sys_dirs]
+    # a pinned submodule's headers, found as the repo's are
+    lib_inc = set()
+    for lr in libs:
+        for d, dirs, fs in os.walk(lr):
+            dirs[:] = [x for x in dirs if not x.startswith(".")]
+            if any(f.endswith(HEADERS) for f in fs):
+                lib_inc.add(d)
+                parts = os.path.relpath(d, lr).split(os.sep)
+                for i, p in enumerate(parts):
+                    if p == "include":
+                        lib_inc.add(os.path.join(lr, *parts[:i + 1]))
+    sys_dirs += [d for d in sorted(lib_inc) if d not in sys_dirs]
     stub_dir = tempfile.mkdtemp(prefix="cppgt-stubs-")
     stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir)
     # Eigen's SSE kernels need the compiler's own intrinsics headers, which

@@ -82,7 +82,7 @@ func CallGraph(s Store, repo, ref, symbol string, depth, limit int, tests, exter
 			for _, n := range frontier {
 				var nbrs []Callee
 				if dir > 0 {
-					nbrs = snap.Callees[n]
+					nbrs = append([]Callee(nil), snap.Callees[n]...) // the store's slice is shared
 				} else {
 					nbrs = callers[n]
 				}

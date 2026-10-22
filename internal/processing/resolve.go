@@ -38,6 +38,11 @@ const (
 	// unique symbol identity produced independently by each repo's indexer, so
 	// the link is symbol-to-symbol, not a name/path match (§8B.4, Phase 6b).
 	MethodSCIP = "scip-resolved"
+	// MethodClang: an in-repo C/C++ call clang bound with the build's own
+	// compile commands; MethodClangSynth: with include paths read from the
+	// packages' manifests instead (the build's flags were not available).
+	MethodClang      = "clang-compdb"
+	MethodClangSynth = "clang-synth"
 )
 
 // Confidence per resolution method (§7, invariant 5), monotonic with certainty:
@@ -47,11 +52,15 @@ const (
 	// ConfSCIP: cross-boundary but symbol-resolved. Just under type-proven
 	// in-repo resolution — the moniker is exact, yet it still asserts a
 	// SOURCE-level dependency, and SCIP indexes can lag the working tree.
-	ConfSCIP      = 0.95
-	ConfResolved  = 0.9
-	ConfImport    = 0.75
-	ConfExternal  = 0.6
-	ConfAmbiguous = 0.5
+	ConfSCIP  = 0.95
+	ConfClang = 1.0
+	// ConfClangSynth: compiler-bound, but with include paths the build may
+	// order differently
+	ConfClangSynth = 0.97
+	ConfResolved   = 0.9
+	ConfImport     = 0.75
+	ConfExternal   = 0.6
+	ConfAmbiguous  = 0.5
 )
 
 // pkgOf returns the package qualifier for a file: its directory relative to the
@@ -212,10 +221,10 @@ type siteIndex struct {
 	// callerPath is the calling definition's file, defPath and recvOf each
 	// definition's file and class
 	// jsModule: a JS/TS module of the repo whose exports were read (nil: none)
-	jsModule   func(pkg string) bool
+	jsModule func(pkg string) bool
 	// pyStar is the repo modules a Python file star-imports (from m import
 	// *), and whether it star-imports a module outside the repo
-	pyStar func(path string) (pkgs []string, external bool)
+	pyStar     func(path string) (pkgs []string, external bool)
 	vis        *cppVisibility
 	inNS       [2]string // C++ ns::f(): the written outermost and innermost namespace
 	callerPath string

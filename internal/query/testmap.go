@@ -183,6 +183,11 @@ func Tests(s Store, repo, ref, symbol string, depth, budget int) TestsResult {
 	httpEdge := map[[2]string]bool{}
 	syms := s.SymbolsAt(repo, ref)
 	symIdx := baseIndexOf(syms)
+	sortedSyms := make([]string, 0, len(syms))
+	for k := range syms {
+		sortedSyms = append(sortedSyms, k)
+	}
+	sort.Strings(sortedSyms)
 	for _, l := range RoutesWith(s, repo, ref, "", 100000, RoutesOptions{}).Links {
 		testClient := false
 		for _, c := range l.Clients {
@@ -195,12 +200,11 @@ func Tests(s Store, repo, ref, symbol string, depth, budget int) TestsResult {
 			continue // only a test's request makes the route an edge here
 		}
 		var targets []string
-		for _, t := range resolveIn(syms, l.Route.Handler) {
+		for _, t := range resolveIndexed(symIdx, syms, l.Route.Handler) {
 			targets = append(targets, t)
-			for k := range syms {
-				if strings.HasPrefix(k, t+".") {
-					targets = append(targets, k)
-				}
+			// the handler class's methods: the ids sorting right after it
+			for i := sort.SearchStrings(sortedSyms, t+"."); i < len(sortedSyms) && strings.HasPrefix(sortedSyms[i], t+"."); i++ {
+				targets = append(targets, sortedSyms[i])
 			}
 		}
 		for _, c := range l.Clients {
@@ -252,7 +256,7 @@ func Tests(s Store, repo, ref, symbol string, depth, budget int) TestsResult {
 				seen[caller] = true
 				via := append([]string{n.qid}, n.via...)
 				viaHTTP := n.http || httpEdge[[2]string{caller, n.qid}]
-				if IsTestQID(s, repo, ref, caller) {
+				if isTestIn(syms, caller) {
 					path, span, ok := locateSymbol(files, caller)
 					if ok && isRobotPath(path) && !robotTestCase(byPath[path], span.StartLine) {
 						ok = false // a keyword in a suite file is a helper the walk passes through, not a test

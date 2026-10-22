@@ -80,7 +80,7 @@ const (
 func TestParseDocumentsAndOccurrences(t *testing.T) {
 	data := encodeIndex(
 		encodeDocument("pkg/svc/handler.go",
-			occ{symbol: monHelper, line: 9, isDef: true},   // definition on line 10
+			occ{symbol: monHelper, line: 9, isDef: true},    // definition on line 10
 			occ{symbol: monGetUser, line: 11, isDef: false}, // reference on line 12
 		),
 	)
@@ -128,10 +128,10 @@ func TestParseRejectsGarbage(t *testing.T) {
 func TestLocalDefsAndMap(t *testing.T) {
 	idx, err := Parse(encodeIndex(
 		encodeDocument("pkg/svc/handler.go",
-			occ{symbol: monHelper, line: 4, isDef: true},    // helper defined here
-			occ{symbol: monGetUser, line: 6, isDef: false},  // external reference
-			occ{symbol: monHelper, line: 7, isDef: false},   // in-repo reference
-			occ{symbol: monGetUser, line: 8, isDef: false},  // duplicate external ref
+			occ{symbol: monHelper, line: 4, isDef: true},          // helper defined here
+			occ{symbol: monGetUser, line: 6, isDef: false},        // external reference
+			occ{symbol: monHelper, line: 7, isDef: false},         // in-repo reference
+			occ{symbol: monGetUser, line: 8, isDef: false},        // duplicate external ref
 			occ{symbol: "orphan/moniker", line: 99, isDef: false}, // outside any span
 		),
 	))

@@ -109,7 +109,16 @@ const (
 	//      wrapped in a HOC (memo(X), connect(…)(X)) is X. Python: a called
 	//      parameter is the argument; a fixture parameter called runs the
 	//      fixture only when it returns a function it defines.
-	IndexVer = 17
+	//  18: C++ overloads are chosen by argument types and by the fewest
+	//      arguments a declaration's defaults allow; a repo macro's methods
+	//      in a class body are the class's; a nested class keeps its own
+	//      fields and bases; class-scope aliases shadow class templates; an
+	//      include two packages satisfy is the including package's. Python:
+	//      a bare call reaches the module's own definitions, imports and
+	//      module-level aliases of imported attributes only. JS/TS: a class named like its file
+	//      keeps its methods apart. A ref read from git takes the monikers
+	//      of the index.scip committed at its root, as a working tree does.
+	IndexVer = 18
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

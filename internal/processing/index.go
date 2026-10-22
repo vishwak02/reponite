@@ -70,7 +70,7 @@ type ParsedFile struct {
 // directory) so distinct definitions sharing a bare name (e.g. storage.Mem.Put
 // vs sqlite.Store.Put) are distinct nodes and never conflated (correctness).
 func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) error {
-	return indexFiles(w, repo, ref, normVer, files, nil, nil, nil)
+	return indexFiles(w, repo, ref, normVer, files, nil, nil, nil, nil)
 }
 
 // indexFiles is IndexFiles with an optional precise edge map (callerQID -> base
@@ -79,7 +79,7 @@ func IndexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile) er
 // goMods maps each Go module's directory to its module path (goModules), so
 // a Go call through an import resolves to the imported package's directory;
 // nil when the tree has no go.mod.
-func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string][]string, peers query.Store, goMods map[string]string) error {
+func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, precise map[string]map[string][]string, peers query.Store, goMods map[string]string, units []PreciseUnit) error {
 	type computed struct {
 		sym        Symbol
 		pkg        string
@@ -422,6 +422,18 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	}
 
 	nodes := make([]Node, 0, len(order))
+	// a compiler's proven calls (precise.go), by caller
+	var proven PreciseEdges
+	if len(units) > 0 {
+		qidsByPath := map[string][]string{}
+		for _, q := range order {
+			qidsByPath[byQID[q].path] = append(qidsByPath[byQID[q].path], q)
+			for _, p := range alsoIn[q] {
+				qidsByPath[p] = append(qidsByPath[p], q)
+			}
+		}
+		proven = preciseEdges(units, newLocIndex(units, files, qidsByPath), func(q string) bool { return byQID[q].sym.Kind == "type" })
+	}
 	var edges []Edge
 	resolved := make(map[string][]query.Callee, len(order))
 	for _, qid := range order {
@@ -616,6 +628,32 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			callees = resolveSiteEdgesLang(c.pkg, c.sym.Recv, c.lang, sites, x)
 		} else {
 			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, nil)
+		}
+		if pc := proven[qid]; pc != nil && c.lang != "go" {
+			callees = mergePrecise(callees, pc, nodeSet, func(q string, recvs []string) []query.Callee {
+				classOf := func(m string) string { return strings.SplitN(byQID[m].sym.Recv, "@", 2)[0] }
+				all := overrides(classOf(q), BaseName(q), x)
+				if len(recvs) == 0 || x.types == nil {
+					return all
+				}
+				// only the overrides of the classes the objects can be: the
+				// receiver's class and those deriving from it
+				can := map[string]bool{}
+				for _, r := range recvs {
+					cls := byQID[r].sym.Name
+					can[cls] = true
+					for _, d := range x.types.descendants(cls) {
+						can[strings.SplitN(d, "@", 2)[0]] = true
+					}
+				}
+				var out []query.Callee
+				for _, o := range all {
+					if can[classOf(o.Name)] {
+						out = append(out, o)
+					}
+				}
+				return out
+			})
 		}
 		// An unresolved target is a NAME, not a symbol: when it equals a real
 		// symbol id (a function in a root-level file is just "save"), mark it
