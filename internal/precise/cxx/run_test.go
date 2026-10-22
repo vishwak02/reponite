@@ -607,3 +607,13 @@ int use(B* b) { return b->f(); }
 	}
 	t.Errorf("no edge for b->f(): %+v", out.Edges)
 }
+
+// A directory holding its own limits.h is reached by quoted includes beside
+// it: on the include path it would hide the system's.
+func TestIncludeRootsSkipLibcNames(t *testing.T) {
+	set := map[string]bool{}
+	includeRoots(map[string]string{"gfx/internal/limits.h": "1", "gfx/internal/draw.h": "2", "gfx/include/gfx.h": "3"}, set)
+	if set["gfx/internal"] || !set["gfx/include"] {
+		t.Errorf("include roots: %v", set)
+	}
+}

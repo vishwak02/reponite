@@ -459,18 +459,41 @@ func isHeader(p string) bool {
 // includeRoots adds to set every directory holding headers directly ("x.hpp"
 // next to its sources) and every directory named include.
 func includeRoots(files map[string]string, set map[string]bool) {
+	// a directory holding its own limits.h or string.h is reached by quoted
+	// includes beside it: on the include path it would hide the system's
+	shadows := map[string]bool{}
+	for p := range files {
+		if stdHeaders[path.Base(p)] {
+			shadows[path.Dir(p)] = true
+		}
+	}
 	for p := range files {
 		if !isHeader(p) {
 			continue
 		}
 		dir := path.Dir(p)
-		set[dir] = true
+		if !shadows[dir] {
+			set[dir] = true
+		}
 		parts := strings.Split(dir, "/")
 		for i, s := range parts {
-			if s == "include" {
-				set[strings.Join(parts[:i+1], "/")] = true
+			if d := strings.Join(parts[:i+1], "/"); s == "include" && !shadows[d] {
+				set[d] = true
 			}
 		}
+	}
+}
+
+// stdHeaders are the C library's headers (and the POSIX ones code includes
+// as if they were).
+var stdHeaders = map[string]bool{}
+
+func init() {
+	for _, h := range strings.Fields(`assert.h complex.h ctype.h errno.h fenv.h float.h inttypes.h iso646.h limits.h
+		locale.h math.h setjmp.h signal.h stdalign.h stdarg.h stdatomic.h stdbool.h stddef.h stdint.h stdio.h
+		stdlib.h stdnoreturn.h string.h tgmath.h threads.h time.h uchar.h wchar.h wctype.h fcntl.h pthread.h
+		unistd.h strings.h memory.h malloc.h`) {
+		stdHeaders[h] = true
 	}
 }
 
