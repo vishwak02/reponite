@@ -520,6 +520,9 @@ func jsxTag(el content.AST) []string {
 // Uses CallNameTypes when set (e.g. C/C++ include field_identifier so a member
 // method resolves to its own name), else NameTypes.
 func calleeIdents(call content.AST, r LangRules) []string {
+	if call.Type() == goGenericCall {
+		return goGenericCallee(call)
+	}
 	types := callNameTypes(r)
 	var ids []string
 	for _, c := range call.Children() {
@@ -552,7 +555,13 @@ func calleeLeaves(n content.AST, nameTypes, callTypes []string) []string {
 	if containsStr(nameTypes, n.Type()) {
 		return []string{n.Text()}
 	}
-	if isArgNode(n.Type()) || isFunctionLiteral(n.Type()) {
+	if n.Type() == goGenericCall && containsStr(callTypes, n.Type()) {
+		if ids := goGenericCallee(n); len(ids) > 0 {
+			return append(ids, callResult)
+		}
+	}
+	if isArgNode(n.Type()) || isFunctionLiteral(n.Type()) || n.Type() == "type_arguments" {
+		// f[T](x), f<T>(x): the type arguments are not what is called
 		// [&]{ … }() / (() => …)(): the function called is the literal itself,
 		// whose own calls are collected as calls of their own — the names in
 		// its body are not what this call calls
@@ -566,6 +575,46 @@ func calleeLeaves(n content.AST, nameTypes, callTypes []string) []string {
 		out = append(out, callResult)
 	}
 	return out
+}
+
+// goGenericCall is the node tree-sitter-go makes of F[T](x) and pkg.F[T](x):
+// written alone, an explicitly instantiated generic function's call reads
+// like a conversion to a generic type.
+const goGenericCall = "type_conversion_expression"
+
+// goGenericCallee is the callee of a Go call that reads as a conversion to a
+// generic type — F[T](x) is [F], pkg.F[T](x) is [pkg, F] — and nil for any
+// other conversion (([]byte)(s) calls nothing). A real conversion to a
+// generic type (List[int](v)) reads the same; the type checker tells the two
+// apart, and the name rules treat it as they treat T(v).
+func goGenericCallee(n content.AST) []string {
+	for _, c := range n.Children() {
+		if !c.IsNamed() {
+			continue
+		}
+		if c.Type() != "generic_type" {
+			return nil
+		}
+		for _, t := range c.Children() {
+			switch t.Type() {
+			case "type_identifier":
+				return []string{t.Text()}
+			case "qualified_type":
+				var ids []string
+				for _, q := range t.Children() {
+					if q.Type() == "package_identifier" || q.Type() == "type_identifier" {
+						ids = append(ids, q.Text())
+					}
+				}
+				if len(ids) == 2 {
+					return ids
+				}
+				return nil
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 // superMember is f of a Python super().f / super(Cls, self).f callee: the
