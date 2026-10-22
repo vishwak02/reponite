@@ -578,6 +578,30 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					}
 					sites = append(kept, site)
 				}
+				// ns.f() / <ns.Item /> on a named import that is a whole
+				// module passed on by a barrel (import * as ns; export { ns }):
+				// that module's f
+				for _, qc := range c.sym.QualifiedCalls {
+					b, ok := c.imports[qc.Qualifier]
+					if !ok || b.Default || b.Symbol == "" || qc.Chain != 2 {
+						continue
+					}
+					mp, ok := mods.resolve(c.lang, c.path, b.Module)
+					if !ok {
+						continue
+					}
+					np, ok := mods.resolveNamespace(mp, b.Symbol)
+					if !ok {
+						continue
+					}
+					kept := sites[:0]
+					for _, s := range sites {
+						if !(s.Name == qc.Name && (s.Kind == CallScoped && s.Scope == b.Symbol || s.Kind == CallMember && receivers[qc.Name] == 1)) {
+							kept = append(kept, s)
+						}
+					}
+					sites = append(kept, CallSite{Name: qc.Name, Kind: CallModule, Scope: np})
+				}
 				// f().m() on a function whose return class is known
 				hasReturn := func(pkg, name string) bool { return mods.returns[pkg][name] != "" }
 				for _, qc := range c.sym.QualifiedCalls {

@@ -149,3 +149,32 @@ type Other = { a: number };
 		t.Errorf("Item spans at %v, want [7]", lines)
 	}
 }
+
+// import * as Shapes from './shapes'; export { Shapes }: <Shapes.Circle />
+// through the barrel is the Circle that module passes on.
+func TestTSXNamespaceThroughBarrel(t *testing.T) {
+	files := map[string]string{
+		"src/layers/shapes/Circle/Circle.tsx": `const CircleLayer = () => null;
+export default CircleLayer;`,
+		"src/layers/shapes/Circle/index.ts": `import Circle from './Circle';
+export default Circle;`,
+		"src/layers/shapes/Square.tsx": `export const Square = () => null;`,
+		"src/layers/shapes/index.ts": `import Circle from './Circle';
+import { Square as Box } from './Square';
+export { Circle, Box };`,
+		"src/layers/index.ts": `import * as Shapes from './shapes';
+export * as More from './shapes';
+export { Shapes };`,
+		"src/map.tsx": `import { Shapes, More } from './layers';
+export const Map = () => (
+  <div>
+    <Shapes.Circle />
+    <More.Box />
+  </div>
+);`,
+	}
+	edges := indexAndEdges(t, files)
+	m := edges["src.map.Map"]
+	wantMethod(t, m, "src/layers/shapes/Circle.Circle.CircleLayer", MethodResolved)
+	wantMethod(t, m, "src/layers/shapes.Square", MethodResolved)
+}

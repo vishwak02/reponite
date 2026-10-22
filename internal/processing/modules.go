@@ -105,6 +105,8 @@ type jsModule struct {
 var (
 	reExportFrom = regexp.MustCompile(`(?m)^export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]`)
 	reExportStar = regexp.MustCompile(`(?m)^export\s+\*\s+from\s*['"]([^'"]+)['"]`)
+	// export * as ns from './m': ns is m's namespace
+	reExportStarAs = regexp.MustCompile(`(?m)^export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]`)
 	// export { a as b } of the module's own names (no from)
 	reExportLocal = regexp.MustCompile(`(?m)^export\s+\{([^}]*)\}\s*;?\s*$`)
 )
@@ -176,6 +178,9 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			}
 			for _, m := range reExportStar.FindAllStringSubmatch(src, -1) {
 				jm.stars = append(jm.stars, m[1])
+			}
+			for _, m := range reExportStarAs.FindAllStringSubmatch(src, -1) {
+				jm.reexp[m[1]] = ImportBinding{Local: m[1], Module: m[2]} // a namespace: no Symbol, not a default
 			}
 			for _, m := range reExportLocal.FindAllStringSubmatch(src, -1) {
 				for _, spec := range strings.Split(m[1], ",") {
@@ -484,6 +489,53 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 			}
 		}
 		return "", "", false
+	}
+	return walk(pkg, name, 0)
+}
+
+// resolveNamespace follows a JS/TS module's exports to where name is bound
+// to a whole module — `import * as ns from './m'` (re-exported as
+// `export { ns }`) or `export * as ns from './m'` — and returns that
+// module's package id; false when name is anything else.
+func (mi moduleIndex) resolveNamespace(pkg, name string) (string, bool) {
+	seen := map[string]bool{}
+	var walk func(pkg, name string, depth int) (string, bool)
+	walk = func(pkg, name string, depth int) (string, bool) {
+		if depth > 10 || seen[pkg+"\x00"+name] {
+			return "", false
+		}
+		seen[pkg+"\x00"+name] = true
+		jm := mi.jsMods[pkg]
+		if jm == nil || langFamily(jm.lang) != "js" {
+			return "", false
+		}
+		follow := func(b ImportBinding) (string, bool) {
+			p, ok := mi.resolve(jm.lang, jm.path, b.Module)
+			switch {
+			case !ok || b.Default:
+				return "", false
+			case b.Symbol == "":
+				return p, true // the module itself
+			}
+			return walk(p, b.Symbol, depth+1)
+		}
+		if b, ok := jm.reexp[name]; ok {
+			return follow(b)
+		}
+		if a, ok := jm.aliases[name]; ok {
+			return walk(pkg, a, depth+1)
+		}
+		if b, ok := jm.imports[name]; ok {
+			return follow(b)
+		}
+		for _, star := range jm.stars {
+			if p, ok := mi.resolve(jm.lang, jm.path, star); ok {
+				if np, ok := walk(p, name, depth+1); ok {
+					return np, true
+				}
+			}
+		}
+		return "", false
 	}
 	return walk(pkg, name, 0)
 }
