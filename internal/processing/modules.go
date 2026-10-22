@@ -88,7 +88,7 @@ var (
 	reArrowRet = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\([^()]*\)\s*:\s*([A-Z][\w$]*)\s*=>`)
 	reTypedVar = regexp.MustCompile(`(?m)^(?:export\s+)?(?:let|var|const)\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Z][\w$]*)\s*[;=\n]`)
 	reReturnID = regexp.MustCompile(`\breturn\s+([A-Za-z_$][\w$]*)\s*;?\s*$`)
-	reConstObj = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\{`)
+	reConstObj = regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\{`)
 )
 
 var reExportDefaultNew = regexp.MustCompile(`(?m)^export\s+default\s+new\s+([A-Z][\w$]*)\s*[(<]`)
@@ -112,7 +112,7 @@ var (
 // reExportDefault reads `export default Name` (a declared function or
 // class, or a name declared elsewhere in the module).
 // reDefaultCallOnly: export default f(…) — a call's result, not f itself
-var reDefaultCallOnly = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?[A-Za-z_$][\w$]*\s*\($`)
+var reDefaultCallOnly = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?[A-Za-z_$][\w$]*\s*[(<]$`)
 
 var reExportDefault = regexp.MustCompile(`(?m)^export\s+default\s+(?:async\s+)?(?:function\*?\s+|class\s+)?([A-Za-z_$][\w$]*)\s*(?:;|$|\(|\{|<|extends\b)`)
 
@@ -435,11 +435,12 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 			if d := mi.defaults[pkg]; d != "" {
 				return walk(pkg, d, depth+1)
 			}
-			// export { default } from './m' (an index passing on m's default)
+			// export { default } from './m' (an index passing on m's default),
+			// export { f as default } from './m' (m's f)
 			if jm := mi.jsMods[pkg]; jm != nil {
-				if b, ok := jm.reexp["default"]; ok {
+				if b, ok := jm.reexp["default"]; ok && b.Symbol != "" {
 					if p, ok := mi.resolve(jm.lang, jm.path, b.Module); ok {
-						return walk(p, "default", depth+1)
+						return walk(p, b.Symbol, depth+1)
 					}
 				}
 			}
@@ -534,9 +535,9 @@ func jsReturnClasses(src string, instances map[string]string) map[string]string 
 }
 
 var (
-	reDefaultCall  = regexp.MustCompile(`(?m)^export\s+default\s+([A-Za-z_$][\w$.]*\s*\(.*)$`)
+	reDefaultCall  = regexp.MustCompile(`(?m)^export\s+default\s+([A-Za-z_$][\w$.]*\s*(?:<[^()]*>)?\s*\(.*)$`)
 	reWrappedLast  = regexp.MustCompile(`\(\s*([A-Za-z_$][\w$]*)\s*(?:,[^()]*)?\)[),\s]*;?\s*$`)
-	reConstWrapped = `(?m)^(?:export\s+)?const\s+%s\s*=\s*([A-Za-z_$][\w$.]*\s*\(.*)$`
+	reConstWrapped = `(?m)^(?:export\s+)?const\s+%s\s*=\s*([A-Za-z_$][\w$.]*\s*(?:<[^()]*>)?\s*\(.*)$`
 )
 
 // wrappedDefault is the component a module's default export wraps in a

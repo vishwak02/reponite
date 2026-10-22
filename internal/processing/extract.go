@@ -101,6 +101,7 @@ func ExtractGo(root content.AST, normVer int) []Symbol { return Extract(root, Go
 // associated with the declaration that immediately follows it.
 func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 	var out []Symbol
+	shadowed := tsShadowedTypes(root, r)
 	// enclosing carries the name of the class/type we're descending through, so
 	// class-based languages (Python/JS/TS/Java) qualify a method by its enclosing
 	// class the way Go qualifies by its receiver — keeping same-named methods on
@@ -130,6 +131,8 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 				// A bare type reference (`struct Foo x;`, forward declaration) —
 				// not a definition; emit nothing, keep walking.
 				walk(child, enclosing)
+			case shadowed != nil && enclosing == "" && containsStr(tsTypeOnlyDecls, t) && shadowed[t+"\x00"+nameOf(child, r)]:
+				// interface Item beside function Item: the value takes the id
 			case containsStr(r.TypeDecl, t):
 				out = append(out, typeSymbols(child, r, normVer, joinDoc(doc))...)
 				// Descend for nested methods, qualified by this type's name. Go-style
@@ -492,9 +495,11 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 }
 
 // jsxTag returns the identifiers of a JSX element's tag when it names a
-// component: `<CartItem>` -> [CartItem], `<Form.Field>` -> [Form, Field]. An
-// intrinsic element (`<div>`, `<motion.div>` — lowercase first segment) or a
-// fragment renders no repo code and yields nil. Only the tag is read: the
+// component: `<CartItem>` -> [CartItem], `<Form.Field>` -> [Form, Field],
+// `<_Row>` -> [_Row]. An intrinsic element (`<div>`, `<my-widget>`; also
+// `<motion.div>` — lowercase first segment) or a fragment renders no repo
+// code and yields nil: as in the compiler, a tag is intrinsic when it starts
+// with a lowercase letter or holds a dash. Only the tag is read: the
 // attributes' identifiers (`onClick={save}`) are values, not the callee.
 func jsxTag(el content.AST) []string {
 	for _, c := range el.Children() {
@@ -504,7 +509,7 @@ func jsxTag(el content.AST) []string {
 		switch c.Type() {
 		case "identifier", "member_expression", "nested_identifier":
 			ids := identLeaves(c, []string{"identifier", "property_identifier"})
-			if len(ids) == 0 || ids[0] == "" || ids[0][0] < 'A' || ids[0][0] > 'Z' {
+			if len(ids) == 0 || ids[0] == "" || ids[0][0] >= 'a' && ids[0][0] <= 'z' || strings.Contains(ids[0], "-") {
 				return nil
 			}
 			return ids
@@ -820,6 +825,59 @@ func varFunction(decl content.AST) (string, content.AST) {
 		}
 	}
 	return name, nil
+}
+
+// tsTypeOnlyDecls are the TypeScript declarations that live only in the
+// type space.
+var tsTypeOnlyDecls = []string{"interface_declaration", "type_alias_declaration"}
+
+// tsShadowedTypes are the module-level interfaces and type aliases of a
+// TypeScript file that share their name with a module-level function, class
+// or function-valued variable of the file (keyed node type + "\x00" + name).
+// The two live in different spaces — `interface Item` and `function Item` —
+// but would share one id; calls and renders name the value, so the type
+// gives way.
+func tsShadowedTypes(root content.AST, r LangRules) map[string]bool {
+	if r.Name != "typescript" || root == nil {
+		return nil
+	}
+	values := map[string]bool{}
+	var types []content.AST
+	var scan func(n content.AST)
+	scan = func(n content.AST) {
+		for _, c := range n.Children() {
+			t := c.Type()
+			switch {
+			case t == "export_statement":
+				scan(c)
+			case containsStr(tsTypeOnlyDecls, t):
+				types = append(types, c)
+			case containsStr(r.FuncDecl, t), t == "class_declaration", t == "abstract_class_declaration":
+				if name := nameOf(c, r); name != "" {
+					values[name] = true
+				}
+			case t == "lexical_declaration", t == "variable_declaration":
+				for _, d := range c.Children() {
+					if d.Type() == "variable_declarator" {
+						if name, fn := varFunction(d); fn != nil && name != "" {
+							values[name] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	scan(root)
+	var out map[string]bool
+	for _, d := range types {
+		if name := nameOf(d, r); values[name] {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[d.Type()+"\x00"+name] = true
+		}
+	}
+	return out
 }
 
 // extractVarFunc builds the symbol for `const X = () => ...` (see VarFuncDecl).

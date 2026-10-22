@@ -546,8 +546,10 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					receivers[qc.Name]++
 				}
 				for _, qc := range c.sym.QualifiedCalls {
+					// (a default import's Symbol is the name the module
+					// exports as default: var utils = {…}; export default utils)
 					b, ok := c.imports[qc.Qualifier]
-					if !ok || b.Default || b.Symbol == "" || qc.Chain != 2 {
+					if !ok || b.Symbol == "" || qc.Chain != 2 {
 						continue
 					}
 					mp, ok := mods.resolve(c.lang, c.path, b.Module)
@@ -610,6 +612,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					if s.Kind == CallModule && !nodeSet[qualifyModule(s.Scope, s.Name)] {
 						if p, n, ok := mods.resolveExport(s.Scope, s.Name, defined); ok {
 							sites[i].Scope, sites[i].Name = p, n
+						} else if b, ok := c.imports[s.Name]; ok && b.Default && b.Symbol == "" {
+							// a default import of a module that passes its
+							// default on (export { f as default } from './f')
+							if p, n, ok := mods.resolveExport(s.Scope, "default", defined); ok {
+								sites[i].Scope, sites[i].Name = p, n
+							}
 						}
 					}
 				}
