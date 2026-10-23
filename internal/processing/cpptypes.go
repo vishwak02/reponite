@@ -614,6 +614,9 @@ func TypeName(n content.AST) string {
 	if n == nil {
 		return ""
 	}
+	if t, ok := gmockWrapped(n); ok {
+		return t // StrictMock<T>: a T
+	}
 	switch n.Type() {
 	case "type_identifier":
 		return n.Text()
