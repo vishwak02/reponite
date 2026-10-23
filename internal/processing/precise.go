@@ -23,6 +23,9 @@ import (
 type PreciseCall struct {
 	CallerPath string // the calling definition's file and (1-based) line
 	CallerLine int
+	// CallerName is the calling definition's own name (f of ns::Cls::f), ""
+	// unknown: it tells apart definitions that share a line
+	CallerName string
 	Name       string // the called name as written (f, not ns::Cls::f)
 	CalleePath string // the called definition, when it is the repo's
 	CalleeLine int
@@ -69,26 +72,41 @@ type locSpan struct {
 	start, end int
 }
 
-// at is the qid of the innermost definition of path spanning line, "" none
-// — and "" when two different definitions share that innermost span (the
-// members a macro generates on one line): the line does not say which.
-func (li locIndex) at(path string, line int) string {
-	best, size, tie := "", 1<<30, false
+// at is the qid of the innermost definition of path spanning line, "" none.
+// Several different definitions can share that innermost span (the members
+// a macro generates on one line): the one named name ("" unknown) is meant,
+// and "" when the name does not single one out.
+func (li locIndex) at(path string, line int, name string) string {
+	var inner []string
+	size := 1 << 30
 	for _, s := range li[path] {
 		if s.start > line || line > s.end {
 			continue
 		}
 		switch d := s.end - s.start; {
 		case d < size:
-			best, size, tie = s.qid, d, false
-		case d == size && s.qid != best:
-			tie = true
+			inner, size = []string{s.qid}, d
+		case d == size && !containsStr(inner, s.qid):
+			inner = append(inner, s.qid)
 		}
 	}
-	if tie {
+	if len(inner) <= 1 || name == "" {
+		if len(inner) == 1 {
+			return inner[0]
+		}
 		return ""
 	}
-	return best
+	named := ""
+	for _, q := range inner {
+		if BaseName(q) != name {
+			continue
+		}
+		if named != "" {
+			return "" // two of that name: still not said which
+		}
+		named = q
+	}
+	return named
 }
 
 // newLocIndex locates every definition of the files the units name, with the
@@ -175,7 +193,7 @@ func preciseEdges(units []PreciseUnit, li locIndex, isType func(string) bool) Pr
 	out := PreciseEdges{}
 	for _, u := range units {
 		for _, c := range u.Calls {
-			from := li.at(c.CallerPath, c.CallerLine)
+			from := li.at(c.CallerPath, c.CallerLine, c.CallerName)
 			if from == "" || c.Name == "" || isType != nil && isType(from) {
 				continue
 			}
@@ -191,7 +209,7 @@ func preciseEdges(units []PreciseUnit, li locIndex, isType func(string) bool) Pr
 			case c.External:
 				pc.External[c.Name] = true
 			case c.CalleePath != "":
-				to := li.at(c.CalleePath, c.CalleeLine)
+				to := li.at(c.CalleePath, c.CalleeLine, c.Name)
 				if to == from && (c.CalleePath != c.CallerPath || c.CalleeLine != c.CallerLine) {
 					// a definition nested in the caller that this index does
 					// not hold (a local class's method, inside a test body):
@@ -213,7 +231,7 @@ func preciseEdges(units []PreciseUnit, li locIndex, isType func(string) bool) Pr
 				if c.Virtual {
 					recv := ""
 					if c.RecvPath != "" {
-						if r := li.at(c.RecvPath, c.RecvLine); r != "" && isType != nil && isType(r) {
+						if r := li.at(c.RecvPath, c.RecvLine, ""); r != "" && isType != nil && isType(r) {
 							recv = r
 						}
 					}

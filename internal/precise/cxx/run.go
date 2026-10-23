@@ -24,7 +24,7 @@ import (
 
 // driverVersion changes whenever what a unit's Result holds changes: cached
 // results of an older driver are then never read.
-const driverVersion = "cxx-7"
+const driverVersion = "cxx-8"
 
 // Method labels, as the indexer's provenance (processing.MethodClang…).
 const (
@@ -91,6 +91,7 @@ func withRoot(args []string, root, libs string) []string {
 type Edge struct {
 	CallerPath string
 	CallerLine int
+	CallerName string // the calling definition's own name ("" unknown)
 	Name       string
 	CalleePath string
 	CalleeLine int
@@ -399,9 +400,10 @@ func link(results []Result, methods []string, elsewhere func(Call) bool) []Edge 
 	seen := map[Edge]bool{}
 	var out []Edge
 	type ownerName struct {
-		path string
-		line int
-		name string
+		path  string
+		line  int
+		owner string // the definition's name: two may share a line
+		name  string
 	}
 	for ri, r := range results {
 		method := methods[ri]
@@ -409,14 +411,14 @@ func link(results []Result, methods []string, elsewhere func(Call) bool) []Edge 
 		// some call of it clang dropped (error recovery) — not proven
 		calls, refs := map[ownerName]int{}, map[ownerName]int{}
 		for _, c := range r.Calls {
-			calls[ownerName{c.OwnerPath, c.OwnerLine, c.Name}]++
+			calls[ownerName{c.OwnerPath, c.OwnerLine, c.OwnerName, c.Name}]++
 		}
 		for _, x := range r.Refs {
-			refs[ownerName{x.OwnerPath, x.OwnerLine, x.Name}]++
+			refs[ownerName{x.OwnerPath, x.OwnerLine, x.OwnerName, x.Name}]++
 		}
 		for k, n := range refs {
 			if n > calls[k] {
-				e := Edge{CallerPath: k.path, CallerLine: k.line, Name: k.name, Unbound: true, Method: method}
+				e := Edge{CallerPath: k.path, CallerLine: k.line, CallerName: k.owner, Name: k.name, Unbound: true, Method: method}
 				if !seen[e] {
 					seen[e] = true
 					out = append(out, e)
@@ -424,7 +426,7 @@ func link(results []Result, methods []string, elsewhere func(Call) bool) []Edge 
 			}
 		}
 		for _, c := range r.Calls {
-			e := Edge{CallerPath: c.OwnerPath, CallerLine: c.OwnerLine, Name: c.Name, Method: method}
+			e := Edge{CallerPath: c.OwnerPath, CallerLine: c.OwnerLine, CallerName: c.OwnerName, Name: c.Name, Method: method}
 			switch c.Kind {
 			case 'E':
 				e.External = true
@@ -467,6 +469,9 @@ func link(results []Result, methods []string, elsewhere func(Call) bool) []Edge 
 		}
 		if a.CallerLine != b.CallerLine {
 			return a.CallerLine < b.CallerLine
+		}
+		if a.CallerName != b.CallerName {
+			return a.CallerName < b.CallerName
 		}
 		if a.Name != b.Name {
 			return a.Name < b.Name

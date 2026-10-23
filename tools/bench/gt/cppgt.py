@@ -171,6 +171,19 @@ def source_line(c):
     return ls[n - 1] if 0 < n <= len(ls) else ""
 
 
+def source_statement(c):
+    """The source line a cursor sits on, joined with the next ones until its
+    parentheses close: a macro use written over several lines
+    (TEST_F(Suite,\n Case))."""
+    line = source_line(c)
+    ls = _lines.get(c.location.file.name, []) if c.location.file is not None else []
+    n = c.location.line
+    while line.count("(") > line.count(")") and n < len(ls) and n < c.location.line + 8:
+        line += " " + ls[n].strip()
+        n += 1
+    return line
+
+
 CALLED = re.compile(r"\b([A-Za-z_]\w*)\s*(?=\(|<[^;{}()]*>\s*\()")
 
 
@@ -351,7 +364,7 @@ def parse_one(job):
                 # with googletest present the body is a TestBody method of a
                 # generated class; stubbed, TEST_F(…) parses as a function
                 if c.spelling in ("TestBody", toks[0] if toks else ""):
-                    m = GTEST.match(source_line(c))
+                    m = GTEST.match(source_statement(c))
                     if m:
                         name = m.group(1) + "." + m.group(2)  # TEST_F(Suite, Case) { … }: Suite.Case
                 defs.append({"usr": c.get_usr(), "id": did, "decl": decl_at(c), "path": r, "line": c.location.line,
@@ -367,6 +380,20 @@ def parse_one(job):
                 visit(c, owner)
                 continue
             spelling = c.spelling if c.kind == ci.CursorKind.CALL_EXPR else ""
+            callee_ref = None
+            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and not spelling:
+                # ((obj).f)(…), as googletest's EXPECT_CALL(obj, f) expands:
+                # clang names no callee through parentheses; the member or
+                # function inside them is what is called
+                kids = list(c.get_children())
+                inner = kids[0] if kids else None
+                if inner is not None and inner.kind == ci.CursorKind.PAREN_EXPR:
+                    while inner is not None and inner.kind in (ci.CursorKind.PAREN_EXPR, ci.CursorKind.UNEXPOSED_EXPR):
+                        sub = list(inner.get_children())
+                        inner = sub[0] if sub else None
+                    if inner is not None and inner.kind in (ci.CursorKind.MEMBER_REF_EXPR, ci.CursorKind.DECL_REF_EXPR) \
+                            and inner.referenced is not None and inner.spelling:
+                        spelling, callee_ref = inner.spelling, inner.referenced
             dependent = None
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and not spelling:
                 # f(t) with t of a template parameter's type: an unresolved
@@ -384,7 +411,7 @@ def parse_one(job):
                         visit(c, owner)
                         continue
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and spelling:
-                ref = c.referenced
+                ref = callee_ref or c.referenced
                 if ref is not None and ref.kind in (ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR):
                     calls.append({"from": owner, "name": c.spelling, "usr": None, "external": False,
                                   "line": c.location.line, "col": c.location.column, "bound": True})

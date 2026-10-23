@@ -173,7 +173,37 @@ func macroArgs(text string, open int) ([]string, int) {
 	return nil, -1
 }
 
-var reIdent = regexp.MustCompile(`#?\s*[A-Za-z_]\w*`)
+// reIdent is a body's identifier, or #identifier (stringified); a ## paste
+// is marked before it runs.
+var reIdent = regexp.MustCompile(`#\s*[A-Za-z_]\w*|[A-Za-z_]\w*`)
+
+var rePaste = regexp.MustCompile(`\s*##\s*`)
+
+var reCommaVA = regexp.MustCompile(`,\s*##\s*__VA_ARGS__`)
+
+// expandVAOpt is body with each __VA_OPT__(x) replaced by x when the
+// variadic arguments are not empty, else by nothing (C++20).
+func expandVAOpt(body string, nonEmpty bool) string {
+	for {
+		i := strings.Index(body, "__VA_OPT__")
+		if i < 0 {
+			return body
+		}
+		open := strings.IndexByte(body[i:], '(')
+		if open < 0 {
+			return body
+		}
+		end := closingParen(body, i+open)
+		if end < 0 {
+			return body
+		}
+		in := ""
+		if nonEmpty {
+			in = body[i+open+1 : end]
+		}
+		body = body[:i] + in + body[end+1:]
+	}
+}
 
 // substituteMacro is mac's body with its parameters replaced by args.
 func substituteMacro(mac cppMacro, args []string) string {
@@ -185,14 +215,22 @@ func substituteMacro(mac cppMacro, args []string) string {
 			val[p] = ""
 		}
 	}
+	body := mac.body
 	if mac.variadic {
 		var rest []string
 		if len(args) > len(mac.params) {
 			rest = args[len(mac.params):]
 		}
-		val["__VA_ARGS__"] = strings.Join(rest, ", ")
+		va := strings.Join(rest, ", ")
+		val["__VA_ARGS__"] = va
+		if va == "" {
+			// f(x, ##__VA_ARGS__) with nothing passed: the comma goes too (GNU)
+			body = reCommaVA.ReplaceAllString(body, "")
+		}
+		body = expandVAOpt(body, va != "")
 	}
-	body := reIdent.ReplaceAllStringFunc(mac.body, func(tok string) string {
+	body = rePaste.ReplaceAllString(body, "\x00") // a ## b: pasted once substituted
+	body = reIdent.ReplaceAllStringFunc(body, func(tok string) string {
 		if strings.HasPrefix(tok, "#") {
 			name := strings.TrimSpace(tok[1:])
 			if v, ok := val[name]; ok {
@@ -205,7 +243,7 @@ func substituteMacro(mac cppMacro, args []string) string {
 		}
 		return tok
 	})
-	return regexp.MustCompile(`\s*##\s*`).ReplaceAllString(body, "")
+	return strings.ReplaceAll(body, "\x00", "")
 }
 
 // expandCppMacros adds the members repo macros define inside class bodies to
@@ -225,6 +263,21 @@ func expandCppMacros(repo string, normVer int, files []ParsedFile) {
 		}
 		srcs[f.Path] = src
 	}
+	all := map[string]string{} // C too: a C file's macros, a C++ file's uses
+	for _, f := range files {
+		if langFamily(f.Lang) != "c" {
+			continue
+		}
+		if src, ok := srcs[f.Path]; ok {
+			all[f.Path] = src
+		} else if src = f.Content; src == "" && f.Load != nil {
+			all[f.Path], _ = f.Load()
+		} else {
+			all[f.Path] = src
+		}
+	}
+	expandBodyMacros(files, all, normVer)
+	addGmockMatchers(repo, normVer, files, srcs)
 	macros := cppMacros(srcs)
 	// only macros whose expansion defines a function body generate members
 	defining := map[string]bool{}
@@ -233,7 +286,14 @@ func expandCppMacros(repo string, normVer int, files []ParsedFile) {
 			defining[name] = true
 		}
 	}
-	if len(defining) == 0 {
+	mocks := false // googletest's mock-method macros (gmock.go)
+	for _, src := range srcs {
+		if strings.Contains(src, "MOCK_") {
+			mocks = true
+			break
+		}
+	}
+	if len(defining) == 0 && !mocks {
 		return
 	}
 	for i := range files {
@@ -255,7 +315,8 @@ func expandCppMacros(repo string, normVer int, files []ParsedFile) {
 			if k := strings.IndexAny(t, "( \t"); k > 0 {
 				name = t[:k]
 			}
-			if !defining[name] || strings.HasPrefix(t, "#") {
+			mock := mocks && gmockMockMacro(name)
+			if !defining[name] && !mock || strings.HasPrefix(t, "#") {
 				continue
 			}
 			cls := enclosingClassSpan(f.Spans, classes, ln+1)
@@ -270,11 +331,21 @@ func expandCppMacros(repo string, normVer int, files []ParsedFile) {
 			if open < 0 {
 				continue
 			}
-			_, end := macroArgs(src, pos+open)
+			args, end := macroArgs(src, pos+open)
 			if end < 0 {
 				continue
 			}
-			expanded := cppExpand(src[pos:end], macros, 0)
+			var expanded string
+			if mock {
+				// the framework's macro, whatever the repo vendors of it
+				members, ok := gmockMembers(name, args)
+				if !ok {
+					continue
+				}
+				expanded = members
+			} else {
+				expanded = cppExpand(src[pos:end], macros, 0)
+			}
 			for _, s := range cppMemberParser("class "+cls+" {\n"+expanded+"\n};", normVer) {
 				if s.Recv != cls || s.Kind == "type" {
 					continue
@@ -297,4 +368,25 @@ func enclosingClassSpan(spans []query.SymbolSpan, classes map[string]bool, line 
 		}
 	}
 	return best
+}
+
+// addGmockMatchers adds the functions googletest's MATCHER macros define
+// (gmock.go) to each C++ file's symbols and spans.
+func addGmockMatchers(repo string, normVer int, files []ParsedFile, srcs map[string]string) {
+	for i := range files {
+		f := &files[i]
+		for _, m := range gmockMatchers(srcs[f.Path]) {
+			for _, s := range cppMemberParser(m.text, normVer) {
+				if s.Name != m.name || s.Recv != "" || s.Kind == "type" {
+					continue
+				}
+				s.ParamMin, s.ParamMax, s.HasParams, s.ParamTypes = len(m.params), len(m.params), true, nil
+				one := []Symbol{s}
+				sealSymbols(repo, f.Lang, normVer, one)
+				f.Symbols = append(f.Symbols, one[0])
+				f.Spans = append(f.Spans, query.SymbolSpan{Name: s.Name, StartLine: m.start, EndLine: m.end})
+				break
+			}
+		}
+	}
 }

@@ -188,6 +188,9 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 		Dir:   absDir,
 		Env:   offlineGoEnv(),
 		Tests: true,
+		// one file set for every module's load: positions from any of them
+		// resolve against it
+		Fset: token.NewFileSet(),
 	}
 	// every module of the tree: the root's, and nested ones (a repo whose Go
 	// code is a module in a subdirectory, or several modules side by side)
@@ -230,17 +233,32 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 
 	// Directory (relative to absDir) of each type-checked package, so callee
 	// packages map onto the same qids IndexFiles derives from file paths.
+	// Besides the loaded packages themselves this takes their variants: a
+	// test build recompiles a package that imports the package under test (a
+	// generated mock imported by an external test package becomes
+	// "fake [app.test]"), and one module's load holds its own copy of a
+	// sibling module's package it requires — each a *types.Package of its
+	// own, whose functions are the tree's all the same. A variant is known by
+	// its import path; a package that is not in the module cache is reported
+	// with the importing file as its own, so files alone do not place one.
 	pkgDir := map[*types.Package]string{}
+	root := absDir + string(filepath.Separator)
+	dirOf := map[string]string{} // import path -> directory
 	for _, p := range pkgs {
-		if p.Types == nil || len(p.GoFiles) == 0 {
+		if p.Types == nil || len(p.GoFiles) == 0 || !strings.HasPrefix(p.GoFiles[0], root) {
 			continue
 		}
 		rel, err := filepath.Rel(absDir, filepath.Dir(p.GoFiles[0]))
 		if err != nil || rel == "." {
 			rel = ""
 		}
-		pkgDir[p.Types] = rel
+		dirOf[p.PkgPath] = filepath.ToSlash(rel)
 	}
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		if d, ok := dirOf[p.PkgPath]; ok && p.Types != nil && len(p.GoFiles) > 0 && strings.HasPrefix(p.GoFiles[0], root) {
+			pkgDir[p.Types] = d
+		}
+	})
 
 	// qidOf maps a resolved function/method to its qualified id, or ("",false)
 	// for external packages and interface (abstract) methods.
@@ -267,11 +285,7 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 		}
 		return name
 	}
-	var fsetOf *token.FileSet
-	for _, p := range pkgs {
-		fsetOf = p.Fset
-		break
-	}
+	fsetOf := cfg.Fset
 	qidOf := func(fn *types.Func) (string, bool) {
 		if fn == nil || fn.Pkg() == nil {
 			return "", false
@@ -281,7 +295,7 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 			return "", false // external / stdlib
 		}
 		name := fn.Name()
-		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() == nil && fsetOf != nil && fn.Pos().IsValid() {
+		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() == nil && fn.Pos().IsValid() {
 			name = twin(fn.Pkg(), d, name, fn.Pos(), fsetOf)
 		}
 		if sig, ok := fn.Type().(*types.Signature); ok && sig.Recv() != nil {
@@ -357,7 +371,11 @@ func typeResolvedEdges(dir string) (map[string]map[string][]string, []string, in
 
 // calleeFunc resolves a call's function expression to the *types.Func it targets.
 func calleeFunc(info *types.Info, fun ast.Expr) *types.Func {
-	switch e := fun.(type) {
+	switch e := ast.Unparen(fun).(type) {
+	case *ast.IndexExpr: // F[T]() or pkg.F[T](): an explicitly instantiated generic function
+		return calleeFunc(info, e.X)
+	case *ast.IndexListExpr: // F[K, V]()
+		return calleeFunc(info, e.X)
 	case *ast.Ident: // f()
 		if fn, ok := info.Uses[e].(*types.Func); ok {
 			return fn

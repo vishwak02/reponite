@@ -92,7 +92,7 @@ var GoRules = LangRules{
 	RecvTypes:  []string{"parameter_list"},
 	RecvName:   []string{"type_identifier"},
 	BodyTypes:  []string{"block"},
-	CallTypes:  []string{"call_expression"},
+	CallTypes:  []string{"call_expression", goGenericCall}, // F[T](x) parses as a conversion
 	SortChild:  []string{"import_spec_list"},
 	Builtins:   goBuiltins,
 }

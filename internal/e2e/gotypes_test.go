@@ -54,3 +54,41 @@ func TestGoTypesPreciseResolution(t *testing.T) {
 		t.Fatalf("precise edge must be go-types@%v, got %+v", processing.ConfTypes, doEdge)
 	}
 }
+
+// A test build recompiles every package that imports the package under test:
+// a generated mock imported by an external test package is type-checked as a
+// variant of its own ("mock [app.test]"), and calls into it are still the
+// tree's — as is an explicitly instantiated generic function (F[T](x)).
+func TestGoTypesTestVariantsAndGenerics(t *testing.T) {
+	dir := t.TempDir()
+	writeMod(t, dir, "go.mod", "module tt\n\ngo 1.21\n")
+	writeMod(t, dir, "app/app.go", "package app\n\ntype Store interface{ Get() int }\n\nfunc Total(s Store) int { return s.Get() }\n")
+	writeMod(t, dir, "app/inner_test.go", "package app\n\nimport \"testing\"\n\nfunc TestInner(t *testing.T) {}\n")
+	writeMod(t, dir, "app/mock/store.go", "package mock\n\nimport \"tt/app\"\n\nvar _ app.Store = (*Store)(nil)\n\ntype Store struct{ n int }\n\nfunc NewStore(n int) *Store { return &Store{n} }\n\nfunc (s *Store) Get() int { return s.n }\n\nfunc (s *Store) Expect() *Store { return s }\n")
+	writeMod(t, dir, "app/total_test.go", "package app_test\n\nimport (\n\t\"testing\"\n\n\t\"tt/app\"\n\t\"tt/app/mock\"\n\t\"tt/ring\"\n)\n\nfunc TestTotal(t *testing.T) {\n\ts := mock.NewStore(2)\n\ts.Expect()\n\t_ = ring.New[int](4)\n\tif app.Total(s) != 2 {\n\t\tt.Fatal()\n\t}\n}\n")
+	writeMod(t, dir, "ring/ring.go", "package ring\n\ntype Ring[T any] struct{ items []T }\n\nfunc New[T any](n int) *Ring[T] { return &Ring[T]{make([]T, n)} }\n")
+
+	st, err := sqlite.Open(filepath.Join(dir, "index.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	if err := processing.IndexDir(st, "tt", "HEAD", dir, version.NormVer); err != nil {
+		t.Fatal(err)
+	}
+	callees := st.Snapshot("tt", "HEAD").Callees["app.TestTotal"]
+	for _, want := range []string{"app/mock.NewStore", "app/mock.Store.Expect", "ring.New", "app.Total"} {
+		found := false
+		for _, c := range callees {
+			if c.Name == want {
+				found = true
+				if c.ResolutionMethod != processing.MethodTypes {
+					t.Errorf("%s: want a go-types edge, got %+v", want, c)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("TestTotal must call %s; callees %+v", want, callees)
+		}
+	}
+}
