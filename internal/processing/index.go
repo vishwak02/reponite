@@ -116,6 +116,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		byLocal         map[string]ImportBinding
 	}
 	var classDecls []classDecl
+	jsMods := map[string]jsModCtx{} // JS/TS module package id -> its file's context (jstypes.go)
 	for _, f := range files {
 		lang := f.Lang
 		if lang == "" {
@@ -133,6 +134,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					}
 				}
 			}
+			jsMods[pkg] = jsModCtx{path: f.Path, lang: lang, imports: byLocal}
 		}
 		if lang == "java" {
 			// import a.b.C binds C to class C of package a.b
@@ -379,6 +381,13 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	// Python receiver typing (pytypes.go): a dotted type or function name is
 	// resolved in the context of the file that writes it
+	// JS/TS receiver typing (jstypes.go): classes' known fields
+	js := &jsTyper{classes: classes, mods: mods, modCtx: jsMods, fields: map[string]map[string]string{}, inRepo: inRepo}
+	for _, q := range order {
+		if c := byQID[q]; c.sym.Kind == "type" && c.sym.Recv == "" && len(c.sym.Vars) > 0 && langFamily(c.lang) == "js" {
+			js.fields[classKey(c.pkg, c.sym.Name)] = c.sym.Vars
+		}
+	}
 	py := &pyTyper{classes: classes, allDefs: allDefs, isMethod: x.isMethod, fields: map[string]map[string]string{}, returns: map[string]string{}}
 	py.ctx = func(q string) (pyCtx, bool) {
 		c, ok := byQID[q]
@@ -503,7 +512,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				// a bare call of the function's own binding is that value
 				kept := qcalls[:0:0]
 				for _, qc := range qcalls {
-					if qc.Qualifier == "" && c.sym.Vars[qc.Name] == jsLocalTag {
+					if qc.Qualifier == "" && c.sym.Vars[qc.Name] != "" {
 						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "local"})
 						continue
 					}
@@ -546,8 +555,10 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					receivers[qc.Name]++
 				}
 				for _, qc := range c.sym.QualifiedCalls {
+					// (a default import's Symbol is the name the module
+					// exports as default: var utils = {…}; export default utils)
 					b, ok := c.imports[qc.Qualifier]
-					if !ok || b.Default || b.Symbol == "" || qc.Chain != 2 {
+					if !ok || b.Symbol == "" || qc.Chain != 2 {
 						continue
 					}
 					mp, ok := mods.resolve(c.lang, c.path, b.Module)
@@ -575,6 +586,30 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 						}
 					}
 					sites = append(kept, site)
+				}
+				// ns.f() / <ns.Item /> on a named import that is a whole
+				// module passed on by a barrel (import * as ns; export { ns }):
+				// that module's f
+				for _, qc := range c.sym.QualifiedCalls {
+					b, ok := c.imports[qc.Qualifier]
+					if !ok || b.Default || b.Symbol == "" || qc.Chain != 2 {
+						continue
+					}
+					mp, ok := mods.resolve(c.lang, c.path, b.Module)
+					if !ok {
+						continue
+					}
+					np, ok := mods.resolveNamespace(mp, b.Symbol)
+					if !ok {
+						continue
+					}
+					kept := sites[:0]
+					for _, s := range sites {
+						if !(s.Name == qc.Name && (s.Kind == CallScoped && s.Scope == b.Symbol || s.Kind == CallMember && receivers[qc.Name] == 1)) {
+							kept = append(kept, s)
+						}
+					}
+					sites = append(kept, CallSite{Name: qc.Name, Kind: CallModule, Scope: np})
 				}
 				// f().m() on a function whose return class is known
 				hasReturn := func(pkg, name string) bool { return mods.returns[pkg][name] != "" }
@@ -604,12 +639,31 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					}
 					sites = append(kept, CallSite{Name: qc.Name, Kind: CallTyped, Scope: cls})
 				}
+				// x.f() on a receiver whose class the code states: that class's
+				// f; once every call of the name is typed, the guess made from
+				// the name alone goes
+				ctx := jsCtx{pkg: c.pkg, recv: c.sym.Recv, mod: jsModCtx{path: c.path, lang: c.lang, imports: c.imports}, vars: c.sym.Vars}
+				if typed, n := js.typedSites(ctx, c.sym.QualifiedCalls); len(typed) > 0 {
+					kept := sites[:0]
+					for _, s := range sites {
+						if !(s.Kind == CallMember && n[s.Name] > 0 && n[s.Name] == receivers[s.Name]) {
+							kept = append(kept, s)
+						}
+					}
+					sites = append(kept, typed...)
+				}
 				// a name a module passes on (barrel index files, export default
 				// of an import): the module that defines it
 				for i, s := range sites {
 					if s.Kind == CallModule && !nodeSet[qualifyModule(s.Scope, s.Name)] {
 						if p, n, ok := mods.resolveExport(s.Scope, s.Name, defined); ok {
 							sites[i].Scope, sites[i].Name = p, n
+						} else if b, ok := c.imports[s.Name]; ok && b.Default && b.Symbol == "" {
+							// a default import of a module that passes its
+							// default on (export { f as default } from './f')
+							if p, n, ok := mods.resolveExport(s.Scope, "default", defined); ok {
+								sites[i].Scope, sites[i].Name = p, n
+							}
 						}
 					}
 				}

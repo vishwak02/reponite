@@ -89,6 +89,9 @@ type QualifiedCall struct {
 	// Result: the callee is looked up on what a call returned — f().Do()
 	// (Qualifier f) or Cls.make().Do() (Qualifier Cls, Attr make).
 	Result bool
+	// Recv is a JS/TS member call's object as an expression the index can
+	// type (jstypes.go): this.items[], store.auth, scope; "" otherwise.
+	Recv string
 }
 
 func isCommentType(t string) bool { return strings.Contains(t, "comment") }
@@ -101,6 +104,7 @@ func ExtractGo(root content.AST, normVer int) []Symbol { return Extract(root, Go
 // associated with the declaration that immediately follows it.
 func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 	var out []Symbol
+	shadowed := tsShadowedTypes(root, r)
 	// enclosing carries the name of the class/type we're descending through, so
 	// class-based languages (Python/JS/TS/Java) qualify a method by its enclosing
 	// class the way Go qualifies by its receiver — keeping same-named methods on
@@ -130,6 +134,8 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 				// A bare type reference (`struct Foo x;`, forward declaration) —
 				// not a definition; emit nothing, keep walking.
 				walk(child, enclosing)
+			case shadowed != nil && enclosing == "" && containsStr(tsTypeOnlyDecls, t) && shadowed[t+"\x00"+nameOf(child, r)]:
+				// interface Item beside function Item: the value takes the id
 			case containsStr(r.TypeDecl, t):
 				out = append(out, typeSymbols(child, r, normVer, joinDoc(doc))...)
 				// Descend for nested methods, qualified by this type's name. Go-style
@@ -407,8 +413,11 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 		return nil
 	}
 	var fields map[string]string
-	if r.Name == "python" {
+	switch {
+	case r.Name == "python":
 		fields = pyClassFields(decl)
+	case langFamily(r.Name) == "js":
+		fields = jsClassFields(decl) // jstypes.go
 	}
 	shape := classShape(decl, r)
 	sym := Symbol{
@@ -456,7 +465,12 @@ func calleesWithRules(body content.AST, r LangRules) []string {
 func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 	seen := map[QualifiedCall]bool{}
 	var out []QualifiedCall
-	for _, call := range descendantsAny(body, r.CallTypes) {
+	calls := descendantsAny(body, r.CallTypes)
+	var recvs []string // JS/TS: each call's receiver expression (jstypes.go)
+	if langFamily(r.Name) == "js" {
+		recvs = jsCallRecvs(body, r.CallTypes)
+	}
+	for i, call := range calls {
 		var ids []string
 		if containsStr(jsxElementTypes, call.Type()) {
 			ids = jsxTag(call)
@@ -482,6 +496,9 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 				qc.Attr = ids[1] // Cls.make().Do()
 			}
 		}
+		if i < len(recvs) && qc.Chain >= 2 {
+			qc.Recv = recvs[i]
+		}
 		if qc.Qualifier == "" && r.Builtins[qc.Name] || seen[qc] { // db.set(), qs.filter(): a method, not the builtin
 			continue
 		}
@@ -492,9 +509,11 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 }
 
 // jsxTag returns the identifiers of a JSX element's tag when it names a
-// component: `<CartItem>` -> [CartItem], `<Form.Field>` -> [Form, Field]. An
-// intrinsic element (`<div>`, `<motion.div>` — lowercase first segment) or a
-// fragment renders no repo code and yields nil. Only the tag is read: the
+// component: `<CartItem>` -> [CartItem], `<Form.Field>` -> [Form, Field],
+// `<_Row>` -> [_Row]. An intrinsic element (`<div>`, `<my-widget>`; also
+// `<motion.div>` — lowercase first segment) or a fragment renders no repo
+// code and yields nil: as in the compiler, a tag is intrinsic when it starts
+// with a lowercase letter or holds a dash. Only the tag is read: the
 // attributes' identifiers (`onClick={save}`) are values, not the callee.
 func jsxTag(el content.AST) []string {
 	for _, c := range el.Children() {
@@ -504,7 +523,7 @@ func jsxTag(el content.AST) []string {
 		switch c.Type() {
 		case "identifier", "member_expression", "nested_identifier":
 			ids := identLeaves(c, []string{"identifier", "property_identifier"})
-			if len(ids) == 0 || ids[0] == "" || ids[0][0] < 'A' || ids[0][0] > 'Z' {
+			if len(ids) == 0 || ids[0] == "" || ids[0][0] >= 'a' && ids[0][0] <= 'z' || strings.Contains(ids[0], "-") {
 				return nil
 			}
 			return ids
@@ -822,6 +841,59 @@ func varFunction(decl content.AST) (string, content.AST) {
 	return name, nil
 }
 
+// tsTypeOnlyDecls are the TypeScript declarations that live only in the
+// type space.
+var tsTypeOnlyDecls = []string{"interface_declaration", "type_alias_declaration"}
+
+// tsShadowedTypes are the module-level interfaces and type aliases of a
+// TypeScript file that share their name with a module-level function, class
+// or function-valued variable of the file (keyed node type + "\x00" + name).
+// The two live in different spaces — `interface Item` and `function Item` —
+// but would share one id; calls and renders name the value, so the type
+// gives way.
+func tsShadowedTypes(root content.AST, r LangRules) map[string]bool {
+	if r.Name != "typescript" || root == nil {
+		return nil
+	}
+	values := map[string]bool{}
+	var types []content.AST
+	var scan func(n content.AST)
+	scan = func(n content.AST) {
+		for _, c := range n.Children() {
+			t := c.Type()
+			switch {
+			case t == "export_statement":
+				scan(c)
+			case containsStr(tsTypeOnlyDecls, t):
+				types = append(types, c)
+			case containsStr(r.FuncDecl, t), t == "class_declaration", t == "abstract_class_declaration":
+				if name := nameOf(c, r); name != "" {
+					values[name] = true
+				}
+			case t == "lexical_declaration", t == "variable_declaration":
+				for _, d := range c.Children() {
+					if d.Type() == "variable_declarator" {
+						if name, fn := varFunction(d); fn != nil && name != "" {
+							values[name] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	scan(root)
+	var out map[string]bool
+	for _, d := range types {
+		if name := nameOf(d, r); values[name] {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[d.Type()+"\x00"+name] = true
+		}
+	}
+	return out
+}
+
 // extractVarFunc builds the symbol for `const X = () => ...` (see VarFuncDecl).
 // An expression-bodied arrow has no statement_block: the expression is its body.
 func extractVarFunc(decl content.AST, r LangRules, normVer int, doc []byte, enclosing string) (Symbol, bool) {
@@ -971,60 +1043,12 @@ func firstDescendant(n content.AST, t string) content.AST {
 	return nil
 }
 
-// jsLocalTag marks a JS/TS function's own bindings in Symbol.Vars: its
-// parameters (destructured props included) and the names it declares. A bare
-// call of one (a hook's setter, a prop, a local arrow) is that value, never
+// jsLocalTag marks a JS/TS function's own bindings in Symbol.Vars whose
+// value is not known (jstypes.go encodes the others): its parameters
+// (destructured props included) and the names it declares. A bare call of
+// any binding (a hook's setter, a prop, a local arrow) is that value, never
 // a module-level definition or import of the same name.
 const jsLocalTag = "local"
-
-func jsLocals(fn content.AST) map[string]string {
-	out := map[string]string{}
-	var pattern func(n content.AST)
-	pattern = func(n content.AST) {
-		switch n.Type() {
-		case "identifier", "shorthand_property_identifier_pattern":
-			out[n.Text()] = jsLocalTag
-		case "assignment_pattern", "object_assignment_pattern":
-			if k := namedKids(n); len(k) > 0 {
-				pattern(k[0]) // the default value is not a binding
-			}
-		case "pair_pattern":
-			if k := namedKids(n); len(k) > 1 {
-				pattern(k[len(k)-1])
-			}
-		case "object_pattern", "array_pattern", "rest_pattern", "required_parameter", "optional_parameter", "formal_parameters":
-			for _, k := range namedKids(n) {
-				if k.Type() == "type_annotation" || k.Type() == "accessibility_modifier" {
-					continue
-				}
-				pattern(k)
-			}
-		}
-	}
-	var walk func(n content.AST)
-	walk = func(n content.AST) {
-		for _, c := range n.Children() {
-			switch c.Type() {
-			case "formal_parameters":
-				pattern(c)
-			case "variable_declarator":
-				if k := namedKids(c); len(k) > 0 {
-					pattern(k[0])
-				}
-			case "catch_clause":
-				if k := namedKids(c); len(k) > 0 && k[0].Type() != "statement_block" {
-					pattern(k[0])
-				}
-			}
-			walk(c)
-		}
-	}
-	walk(fn)
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
 
 func namedKids(n content.AST) []content.AST {
 	var out []content.AST
