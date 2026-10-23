@@ -59,6 +59,9 @@ type ParsedFile struct {
 	// Types are the file's C++ class/field/base/alias facts (cpptypes.go), for
 	// resolving member calls by the receiver's declared type. nil elsewhere.
 	Types *TypeFacts
+	// PyModule are a Python file's top-level assignments and type aliases
+	// (pyvalues.go). nil elsewhere.
+	PyModule *PyModuleFacts
 	// Load, when set, re-reads the file's content for storage; Content is
 	// then empty. A parsed source file's text is needed only when it is
 	// stored, so a large repo does not hold all of it until then.
@@ -116,6 +119,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		byLocal         map[string]ImportBinding
 	}
 	var classDecls []classDecl
+	pyModules := map[string]*pyModule{} // Python module facts, by package id
 	for _, f := range files {
 		lang := f.Lang
 		if lang == "" {
@@ -123,6 +127,11 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 		pkg := pkgOfFile(f.Path, lang)
 		byLocal := importsByLocal(moduleLevelImports(f.Imports, f.Symbols))
+		if lang == "python" {
+			if _, dup := pyModules[pkg]; !dup {
+				pyModules[pkg] = &pyModule{path: f.Path, facts: f.PyModule, imports: byLocal}
+			}
+		}
 		if langFamily(lang) == "js" {
 			// import X from './m' binds X to what m exports as default
 			for k, b := range byLocal {
@@ -379,13 +388,36 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	// Python receiver typing (pytypes.go): a dotted type or function name is
 	// resolved in the context of the file that writes it
-	py := &pyTyper{classes: classes, allDefs: allDefs, isMethod: x.isMethod, fields: map[string]map[string]string{}, returns: map[string]string{}}
+	py := &pyTyper{classes: classes, allDefs: allDefs, isMethod: x.isMethod, fields: map[string]map[string]string{},
+		modules: pyModules, vals: map[string]pyVal{}, busy: map[string]bool{}}
+	py.siteFn = func(p string, imports map[string]ImportBinding) func([]QualifiedCall) []CallSite {
+		return func(qcs []QualifiedCall) []CallSite {
+			modPkg := func(module string) (string, bool) { return mods.resolve("python", p, module) }
+			return sitesFromQualified(qcs, imports, "python", inRepoFor("python", p), modPkg)
+		}
+	}
+	type modKey struct{ dir, module string }
+	modMemo := map[modKey][2]string{}
+	py.resolveMod = func(p, module string) (string, bool) {
+		k := modKey{path.Dir(p), module}
+		if r, ok := modMemo[k]; ok {
+			return r[0], r[1] != ""
+		}
+		pkg, ok := mods.resolve("python", p, module)
+		r := [2]string{pkg, ""}
+		if ok {
+			r[1] = "y"
+		}
+		modMemo[k] = r
+		return pkg, ok
+	}
+	py.modExport = mods.resolveExport
 	py.ctx = func(q string) (pyCtx, bool) {
 		c, ok := byQID[q]
 		if !ok {
 			return pyCtx{}, false
 		}
-		return pyCtx{pkg: c.pkg, recv: c.sym.Recv, path: c.path, vars: c.sym.Vars, returns: c.sym.Returns, sites: func(qcs []QualifiedCall) []CallSite {
+		return pyCtx{pkg: c.pkg, recv: c.sym.Recv, path: c.path, vars: c.sym.Vars, returns: c.sym.Returns, imports: c.imports, sites: func(qcs []QualifiedCall) []CallSite {
 			modPkg := func(module string) (string, bool) { return mods.resolve(c.lang, c.path, module) }
 			return sitesFromQualified(qcs, c.imports, c.lang, inRepoFor(c.lang, c.path), modPkg)
 		}}, true
@@ -480,7 +512,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				kept := qcalls[:0:0]
 				for _, qc := range qcalls {
 					v, local := c.sym.Vars[qc.Name]
-					if qc.Qualifier == "" && local && !strings.HasPrefix(v, pyFixtureTag) {
+					if qc.Qualifier == "" && local && !strings.HasPrefix(v, pyFixtureTag) && v != pyNestedTag {
 						// a parameter or local called: whatever value it holds (a
 						// callable object, a function passed in) — never the module
 						// function that shares its name
@@ -491,7 +523,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 						kept = append(kept, qc)
 						continue
 					}
-					if fq := py.fixtureOf(qid, qc.Name); fq != "" && byQID[fq].sym.Returns == pyFactoryTag {
+					if fq := py.fixtureOf(qid, qc.Name); fq != "" && strings.HasPrefix(byQID[fq].sym.Returns, pyFactoryTag) {
 						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallModule, Scope: strings.TrimSuffix(fq, "."+qc.Name)})
 					} else {
 						localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "fixture"})

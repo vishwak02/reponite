@@ -122,7 +122,7 @@ func indexAndEdgesWith(t *testing.T, files map[string]string, units []PreciseUni
 			t.Fatal(err)
 		}
 		parsed = append(parsed, ParsedFile{Path: path, Content: src, Lang: rules.Name,
-			Symbols: Extract(root, rules, 1), Spans: spans, Imports: Imports(root, rules), Types: typeFactsFor(root, rules)})
+			Symbols: Extract(root, rules, 1), Spans: spans, Imports: Imports(root, rules), Types: typeFactsFor(root, rules), PyModule: pyModuleFacts(root, rules)})
 	}
 	m := storage.NewMem()
 	if err := indexFiles(m, "r", "v1", 1, parsed, nil, nil, nil, units); err != nil {

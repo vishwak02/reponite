@@ -259,6 +259,7 @@ func pyValueType(v content.AST) string {
 // (fixtures) are the pytest fixtures of their names.
 func pyVarTypes(fn content.AST, test bool) map[string]string {
 	vars := map[string]string{}
+	annotated := map[string]bool{}
 	if ps := firstChildAny(fn, []string{"parameters"}); ps != nil {
 		for _, p := range ps.Children() {
 			if test && p.Type() == "identifier" && p.Text() != "self" {
@@ -278,10 +279,9 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 					typ = c
 				}
 			}
-			if t := pyTypeRef(typ); name != "" && t != "" {
-				vars[name] = pyTypeTag + t
-			} else if e := pyElemRef(typ); name != "" && e != "" {
-				vars[name] = pyElemTag + e
+			if t := pyTypeEnc(typ); name != "" && t != "" {
+				vars[name] = t
+				annotated[name] = true
 			}
 		}
 	}
@@ -291,21 +291,45 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 	}
 	for _, a := range descendantsAny(body, []string{"assignment"}) {
 		left, typ, right := pyAssignParts(a)
-		if left == nil || left.Type() != "identifier" {
+		if left == nil {
+			continue
+		}
+		if left.Type() != "identifier" {
+			for _, id := range pyTargetNames(left) {
+				if _, ok := vars[id]; !ok {
+					vars[id] = pyLocalTag // a, b = ...: locals of unknown type
+				}
+			}
 			continue
 		}
 		name := left.Text()
-		if t := pyTypeRef(typ); t != "" {
-			vars[name] = pyTypeTag + t
-		} else if e := pyElemRef(typ); e != "" {
-			vars[name] = pyElemTag + e
-		} else if v := pyValueType(right); v != "" {
-			if _, annotated := vars[name]; !annotated || !strings.HasPrefix(vars[name], pyTypeTag) {
+		if t := pyTypeEnc(typ); t != "" {
+			vars[name] = t
+			annotated[name] = true
+		} else if v := pyExprEnc(right); v != "" && v != pyPathTag+name {
+			if !annotated[name] {
 				if strings.HasPrefix(v, pyTypeTag) {
 					v = pyNewTag + v[len(pyTypeTag):] // x = Cls(...): exactly Cls
 				}
 				vars[name] = v
 			}
+		} else if _, ok := vars[name]; !ok {
+			vars[name] = pyLocalTag
+		}
+	}
+	// (x := f()): bound like an assignment
+	for _, w := range descendantsAny(body, []string{"named_expression"}) {
+		k := namedKids(w)
+		if len(k) != 2 || k[0].Type() != "identifier" || annotated[k[0].Text()] {
+			continue
+		}
+		if v := pyExprEnc(k[1]); v != "" && v != pyPathTag+k[0].Text() {
+			if strings.HasPrefix(v, pyTypeTag) {
+				v = pyNewTag + v[len(pyTypeTag):]
+			}
+			vars[k[0].Text()] = v
+		} else if _, ok := vars[k[0].Text()]; !ok {
+			vars[k[0].Text()] = pyLocalTag
 		}
 	}
 	// for x in xs / [f(x) for x in xs]: x is an element of what xs holds
@@ -314,7 +338,7 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 		if left == nil || left.Type() != "identifier" || right == nil {
 			continue
 		}
-		if _, typed := vars[left.Text()]; typed {
+		if t, typed := vars[left.Text()]; typed && t != pyLocalTag {
 			continue
 		}
 		switch {
@@ -326,7 +350,110 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 			}
 		}
 	}
+	pyMarkLocals(body, vars)
+	// a name only a nested function or lambda binds is that scope's: in the
+	// function itself it is still the module's (a bare call of it is)
+	own := pyOwnBindings(body)
+	for k, v := range vars {
+		if v == pyLocalTag && !own[k] {
+			vars[k] = pyNestedTag
+		}
+	}
 	return vars
+}
+
+// pyOwnBindings are the names a function body binds in its own scope (not
+// in a nested function, lambda or class).
+func pyOwnBindings(body content.AST) map[string]bool {
+	own := map[string]bool{}
+	add := func(t content.AST) {
+		for _, id := range pyTargetNames(t) {
+			own[id] = true
+		}
+	}
+	var walk func(n content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			switch c.Type() {
+			case "function_definition", "lambda", "class_definition":
+				continue
+			case "assignment", "augmented_assignment":
+				if k := namedKids(c); len(k) > 0 {
+					add(k[0])
+				}
+			case "for_statement", "for_in_clause":
+				if left, _ := pyLoopParts(c); left != nil {
+					add(left)
+				}
+			case "as_pattern_target":
+				add(c)
+			case "named_expression":
+				if k := namedKids(c); len(k) > 0 {
+					add(k[0])
+				}
+			case "as_pattern":
+				if k := namedKids(c); len(k) > 1 {
+					add(k[len(k)-1])
+				}
+			}
+			walk(c)
+		}
+	}
+	walk(body)
+	return own
+}
+
+// pyMarkLocals marks every other name a function body binds as a local of
+// unknown type — a loop, with or except target, a nested function's or
+// lambda's parameter — so it never reads as the module-level name it
+// shadows; a name declared global or nonlocal is not the function's own.
+func pyMarkLocals(body content.AST, vars map[string]string) {
+	mark := func(t content.AST) {
+		for _, id := range pyTargetNames(t) {
+			if _, ok := vars[id]; !ok {
+				vars[id] = pyLocalTag
+			}
+		}
+	}
+	for _, l := range descendantsAny(body, []string{"for_statement", "for_in_clause"}) {
+		if left, _ := pyLoopParts(l); left != nil {
+			mark(left)
+		}
+	}
+	for _, t := range descendantsAny(body, []string{"as_pattern_target"}) {
+		mark(t)
+	}
+	for _, h := range descendantsAny(body, []string{"except_clause"}) {
+		for _, c := range h.Children() {
+			if c.Type() == "as_pattern" {
+				if k := namedKids(c); len(k) > 1 {
+					mark(k[len(k)-1])
+				}
+			}
+		}
+	}
+	for _, d := range descendantsAny(body, []string{"function_definition", "lambda"}) {
+		ps := firstChildAny(d, []string{"parameters", "lambda_parameters"})
+		if ps == nil {
+			continue
+		}
+		for _, prm := range namedKids(ps) {
+			id := prm
+			if prm.Type() != "identifier" {
+				id = firstChildAny(prm, []string{"identifier"})
+			}
+			if id != nil {
+				mark(id)
+			}
+		}
+	}
+	for _, g := range descendantsAny(body, []string{"global_statement", "nonlocal_statement"}) {
+		for _, id := range namedKids(g) {
+			if id.Type() == "identifier" && vars[id.Text()] == pyLocalTag {
+				delete(vars, id.Text())
+			}
+		}
+	}
 }
 
 // pyAssignParts splits `left [: type] = right`.
@@ -348,12 +475,19 @@ func pyAssignParts(a content.AST) (left, typ, right content.AST) {
 	return left, typ, right
 }
 
-// pyReturnType is the class a function returns: its return annotation, else
-// the class every `return Cls(...)` of its body constructs.
+// pyReturnType is what a function returns: its return annotation's class
+// (dotted as written), else what every `return` of its body gives, encoded
+// (a constructor's class as a dotted name; r:/m:/f:/c: values; s: for
+// `return self` / `return cls(...)`, an instance of the class the method is
+// called on). A return of nothing (None) is no class's.
 func pyReturnType(fn content.AST, fixture bool) string {
 	if fixture && pyFixtureFactory(fn) {
-		return pyFactoryTag // -> Callable[...]: the function it defines
+		// -> Callable[...]: the function it defines; calling it gives what
+		// that function returns
+		return pyFactoryTag + pyFactoryReturn(fn)
 	}
+	body := firstChildAny(fn, []string{"block"})
+	gen := body != nil && len(ownDescendants(body, []string{"yield"})) > 0
 	afterArrow := false
 	for _, c := range fn.Children() {
 		if c.Type() == "->" {
@@ -365,21 +499,29 @@ func pyReturnType(fn content.AST, fixture bool) string {
 				return t
 			}
 			if e := pyElemRef(c); e != "" {
+				if fixture && gen {
+					return e // a yield fixture hands the test what it yields: -> Iterator[Db]
+				}
 				return pyElemTag + e // -> list[Order]
 			}
-			return ""
+			return pyCallableRef(c) // -> Callable[..., Order]
 		}
 	}
-	body := firstChildAny(fn, []string{"block"})
-	if body == nil {
-		return ""
+	if body == nil || gen && !fixture {
+		return "" // calling a generator function gives the generator
+	}
+	first := ""
+	if ps := firstChildAny(fn, []string{"parameters"}); ps != nil {
+		if k := namedKids(ps); len(k) > 0 && k[0].Type() == "identifier" {
+			first = k[0].Text()
+		}
 	}
 	// a pytest fixture hands the test what it yields, too
 	kinds := []string{"return_statement"}
 	if fixture {
 		kinds = append(kinds, "yield")
 	}
-	cls := ""
+	ret := ""
 	var locals map[string]string
 	var inner map[string]bool // functions and lambdas the fixture defines
 	if fixture {
@@ -403,44 +545,137 @@ func pyReturnType(fn content.AST, fixture bool) string {
 				v = c
 			}
 		}
-		if v == nil && r.Type() == "yield" {
-			continue // a bare yield: the fixture only sets up and tears down
+		if v == nil || v.Type() == "none" {
+			continue // a bare return or yield: None
 		}
-		if fixture && v != nil && (v.Type() == "lambda" || v.Type() == "identifier" && inner[v.Text()]) {
+		if fixture && (v.Type() == "lambda" || v.Type() == "identifier" && inner[v.Text()]) {
 			factory = true
 			continue
 		}
-		t := pyValueType(v)
-		if v != nil && v.Type() == "identifier" {
+		t := ""
+		switch {
+		case v.Type() == "identifier" && v.Text() == "self" && first == "self":
+			t = pySelfRet // return self: the instance it is called on
+		case v.Type() == "call" && first == "cls" && pyCalleeName(v) == "cls":
+			t = pySelfRet // return cls(...): an instance of the class it is called on
+		case v.Type() == "identifier":
 			// app = Flask(...); ...; return app
 			if locals == nil {
 				locals = pyVarTypes(fn, fixture)
 			}
 			t = locals[v.Text()]
-			if strings.HasPrefix(t, pyNewTag) {
+			switch {
+			case t == "":
+				t = pyPathTag + v.Text() // a module-level name, or a parameter
+			case t == pyLocalTag:
+				t = ""
+			case t == pyNestedTag:
+				t = pyPathTag + v.Text()
+			case strings.HasPrefix(t, pyNewTag):
 				t = pyTypeTag + t[len(pyNewTag):]
 			}
+		default:
+			t = pyExprEnc(v)
 		}
-		if strings.HasPrefix(t, pyFixtureTag) && fixture && (cls == "" || cls == t) {
-			cls = t // a fixture handing on another fixture it receives
+		if strings.HasPrefix(t, pyFixtureTag) && fixture && (ret == "" || ret == t) {
+			ret = t // a fixture handing on another fixture it receives
 			continue
 		}
-		if !strings.HasPrefix(t, pyTypeTag) || cls != "" && cls != t[len(pyTypeTag):] {
-			return "" // a return of something else, or of two classes
+		if t == "" || ret != "" && ret != t {
+			return "" // a return of something else, or of two values
 		}
-		cls = t[len(pyTypeTag):]
+		ret = t
 	}
 	if factory {
-		if cls != "" {
+		if ret != "" {
 			return ""
 		}
-		return pyFactoryTag
+		return pyFactoryTag + pyFactoryReturn(fn)
 	}
-	return cls
+	if strings.HasPrefix(ret, pyTypeTag) {
+		return ret[len(pyTypeTag):]
+	}
+	return ret
+}
+
+// pyCalleeName is the bare name a call calls (f of f(...)), "" otherwise.
+func pyCalleeName(call content.AST) string {
+	for _, c := range call.Children() {
+		if c.IsNamed() {
+			if c.Type() == "identifier" {
+				return c.Text()
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// pyFactoryReturn is what calling the function a factory fixture hands the
+// test gives, encoded: the return of the one function (or lambda) it
+// returns, "" when unknown.
+func pyFactoryReturn(fn content.AST) string {
+	body := firstChildAny(fn, []string{"block"})
+	if body == nil {
+		return ""
+	}
+	defs := map[string]content.AST{}
+	for _, d := range descendantsAny(body, []string{"function_definition"}) {
+		if id := firstChildAny(d, []string{"identifier"}); id != nil {
+			defs[id.Text()] = d
+		}
+	}
+	lambdas := map[string]content.AST{}
+	for _, a := range descendantsAny(body, []string{"assignment"}) {
+		if k := namedKids(a); len(k) == 2 && k[0].Type() == "identifier" && k[1].Type() == "lambda" {
+			lambdas[k[0].Text()] = k[1]
+		}
+	}
+	lambdaRet := func(l content.AST) string {
+		if k := namedKids(l); len(k) > 0 {
+			return pyExprEnc(k[len(k)-1])
+		}
+		return ""
+	}
+	out := ""
+	for _, r := range ownDescendants(body, []string{"return_statement", "yield"}) {
+		var v content.AST
+		for _, c := range r.Children() {
+			if c.IsNamed() {
+				v = c
+			}
+		}
+		if v == nil {
+			continue
+		}
+		enc := ""
+		switch {
+		case v.Type() == "lambda":
+			enc = lambdaRet(v)
+		case v.Type() == "identifier" && lambdas[v.Text()] != nil:
+			enc = lambdaRet(lambdas[v.Text()])
+		case v.Type() == "identifier" && defs[v.Text()] != nil:
+			enc = pyReturnType(defs[v.Text()], false)
+			if enc != "" && !strings.Contains(enc, ":") {
+				if enc == "Self" {
+					enc = ""
+				} else {
+					enc = pyTypeTag + enc
+				}
+			}
+		}
+		if enc == "" || enc == pySelfRet || out != "" && out != enc {
+			return ""
+		}
+		out = enc
+	}
+	return out
 }
 
 // pyClassFields are the attributes a class's methods set on self (self.x =
-// Repo(...), self.x: Repo = ...), and its class-level annotations (x: Repo).
+// Repo(...), self.x: Repo = ..., self.x = repo with repo a parameter
+// annotated Repo), and its class-level annotations (x: Repo) and class
+// aliases (x = Repo: the class itself).
 func pyClassFields(class content.AST) map[string]string {
 	fields := map[string]string{}
 	body := firstChildAny(class, []string{"block"})
@@ -459,43 +694,90 @@ func pyClassFields(class content.AST) map[string]string {
 			if left == nil || left.Type() != "identifier" {
 				continue
 			}
-			if t := pyTypeRef(typ); t != "" {
-				fields[left.Text()] = pyTypeTag + t
+			if t := pyTypeEnc(typ); t != "" {
+				fields[left.Text()] = t
 			} else if v := pyValueType(right); strings.HasPrefix(v, pyTypeTag) {
 				fields[left.Text()] = v
+			} else if right != nil && (right.Type() == "identifier" || right.Type() == "attribute") {
+				if parts := dottedRef(right); len(parts) > 0 && isTypeName(parts[len(parts)-1]) {
+					fields[left.Text()] = pyClassObj + strings.Join(parts, ".")
+				}
 			}
 		}
 	}
-	for _, a := range descendantsAny(body, []string{"assignment"}) {
-		left, typ, right := pyAssignParts(a)
-		if left == nil || left.Type() != "attribute" {
-			continue
+	// self.x = ... in the methods: a method's own annotated parameters and
+	// typed locals say what a name assigned to the field is
+	var walk func(n content.AST, mv map[string]string)
+	walk = func(n content.AST, mv map[string]string) {
+		for _, ch := range n.Children() {
+			switch ch.Type() {
+			case "function_definition":
+				if mv == nil {
+					walk(ch, withPyParams(ch, pyVarTypes(ch, false), false)) // a method
+				} else {
+					walk(ch, mv) // a function nested in one
+				}
+				continue
+			case "class_definition":
+				walk(ch, nil)
+				continue
+			case "assignment":
+				pyFieldAssign(fields, ch, mv)
+			}
+			walk(ch, mv)
 		}
-		parts := dottedRef(left)
-		if len(parts) != 2 || parts[0] != "self" {
-			continue
-		}
-		v := ""
-		if t := pyTypeRef(typ); t != "" {
-			v = pyTypeTag + t
-		} else {
-			v = pyValueType(right)
-		}
-		if v == "" {
-			continue
-		}
-		if old, ok := fields[parts[1]]; ok && old != v {
-			fields[parts[1]] = "" // set to two different things: unknown
-			continue
-		}
-		fields[parts[1]] = v
 	}
+	walk(body, nil)
 	for k, v := range fields {
 		if v == "" {
 			delete(fields, k)
 		}
 	}
 	return fields
+}
+
+// pyFieldAssign records one self.x = ... of a class's method, whose own var
+// types are mv.
+func pyFieldAssign(fields map[string]string, a content.AST, mv map[string]string) {
+	left, typ, right := pyAssignParts(a)
+	if left == nil || left.Type() != "attribute" {
+		return
+	}
+	parts := dottedRef(left)
+	if len(parts) != 2 || parts[0] != "self" {
+		return
+	}
+	v := ""
+	if t := pyTypeEnc(typ); t != "" {
+		v = t
+	} else {
+		v = pyValueType(right)
+		if strings.HasPrefix(v, pyReturnTag) || strings.HasPrefix(v, pyMethodTag) {
+			// a call of the method's own parameter or local is no function of
+			// the module's
+			head := pyFirstSegment(strings.TrimPrefix(strings.TrimPrefix(v, pyReturnTag), pyMethodTag))
+			if _, local := mv[head]; local {
+				v = ""
+			}
+		}
+		if v == "" && right != nil && right.Type() == "identifier" {
+			// self.repo = repo: the parameter's annotated class
+			switch mt := mv[right.Text()]; {
+			case strings.HasPrefix(mt, pyTypeTag), strings.HasPrefix(mt, pyElemTag), strings.HasPrefix(mt, pyCallTag):
+				v = mt
+			case strings.HasPrefix(mt, pyNewTag):
+				v = pyTypeTag + mt[len(pyNewTag):]
+			}
+		}
+	}
+	if v == "" {
+		return
+	}
+	if old, ok := fields[parts[1]]; ok && old != v {
+		fields[parts[1]] = "" // set to two different things: unknown
+		return
+	}
+	fields[parts[1]] = v
 }
 
 // pyClassScope prefixes a CallTyped scope that is a class key of the
@@ -518,6 +800,8 @@ type pyCtx struct {
 	vars      map[string]string
 	returns   string
 	sites     func([]QualifiedCall) []CallSite
+	imports   map[string]ImportBinding // the names its file (and the function itself) imports
+	module    bool                     // a module's own top level: vars are its globals
 }
 
 // pyTyper resolves Python type names to classes of the repo, at index time.
@@ -529,8 +813,18 @@ type pyTyper struct {
 	classByName map[string][]string // class name -> class keys
 	funcByName  map[string][]string // module-level function name -> qids
 	reexport    func(pkg, name string) (string, string, bool)
-	fields      map[string]map[string]string
-	returns     map[string]string
+	fields      map[string]map[string]string // class key -> attribute -> class key (or pyExtField+library class)
+	// modules are the Python modules' top-level facts, by package id
+	modules map[string]*pyModule
+	// siteFn reads dotted names the way a file with these imports does
+	siteFn func(path string, imports map[string]ImportBinding) func([]QualifiedCall) []CallSite
+	// resolveMod is the package of the repo module an import in a file names
+	resolveMod func(path, module string) (string, bool)
+	// modExport follows a name a module passes on to the module defining it
+	modExport func(pkg, name string, defined func(pkg, name string) bool) (string, string, bool)
+	vals      map[string]pyVal // function qid -> what calling it gives (returnVal)
+	busy      map[string]bool  // returnVal in progress (a cycle)
+	cut       bool             // an evaluation hit a cycle or the depth bound: not memoized
 	// imported is the qid a module (by file path) binds name to with a
 	// from-import of a repo function ("" when none): a conftest gathering
 	// fixtures from other modules
@@ -660,50 +954,23 @@ func (p *pyTyper) function(c pyCtx, dotted string) string {
 
 // returnClass is the class key a function's return value is.
 func (p *pyTyper) returnClass(q string) string {
-	if k, ok := p.returns[q]; ok {
-		return k
+	saved := p.cut
+	v := p.returnVal(q, "", false, 0)
+	p.cut = saved
+	if v.kind == pyInst {
+		return v.cls
 	}
-	p.returns[q] = "" // a cycle reads as unknown
-	k := ""
-	if c, ok := p.ctx(q); ok && strings.HasPrefix(c.returns, pyFixtureTag) {
-		k = p.valueClass(c, c.returns)
-	} else if ok && c.returns != "" && !strings.HasPrefix(c.returns, pyElemTag) {
-		if c.returns == "Self" && c.recv != "" {
-			// -> Self (typing.Self): the class the method is called on; its own
-			// class stands for it
-			k, _ = p.classes.has(c.pkg, c.recv)
-		} else {
-			k = p.class(c, c.returns)
-		}
-	}
-	p.returns[q] = k
-	return k
+	return ""
 }
 
-// valueClass is the class key an encoded var type is, in ctx.
+// valueClass is the class key an encoded var type is, in ctx: an instance's
+// class.
 func (p *pyTyper) valueClass(c pyCtx, v string) string {
-	switch {
-	case strings.HasPrefix(v, pyTypeTag):
-		return p.class(c, v[len(pyTypeTag):])
-	case strings.HasPrefix(v, pyNewTag):
-		return p.class(c, v[len(pyNewTag):])
-	case strings.HasPrefix(v, pyReturnTag):
-		if q := p.function(c, v[len(pyReturnTag):]); q != "" {
-			return p.returnClass(q)
-		}
-	case strings.HasPrefix(v, pyFixtureTag):
-		if q := p.fixture(c, v[len(pyFixtureTag):]); q != "" {
-			return p.returnClass(q)
-		}
-	case strings.HasPrefix(v, pyIterTag):
-		return p.elemClass(c, v[len(pyIterTag):])
-	case strings.HasPrefix(v, pyMethodTag):
-		cls, m, _ := strings.Cut(v[len(pyMethodTag):], "#")
-		if k := p.class(c, cls); k != "" {
-			if q, ok := p.classes.method(k, m, false, p.allDefs); ok {
-				return p.returnClass(q)
-			}
-		}
+	saved := p.cut
+	val := p.eval(c, v, 0)
+	p.cut = saved
+	if val.kind == pyInst {
+		return val.cls
 	}
 	return ""
 }
@@ -764,10 +1031,41 @@ func (p *pyTyper) fixture(c pyCtx, name string) string {
 				return q
 			}
 		}
+		if q := p.pluginFixture(cf, name, 0); q != "" {
+			return q
+		}
 		if dir == "." || dir == "/" || dir == "" {
 			return ""
 		}
 	}
+}
+
+// pluginFixture is the fixture named name a module (by file path) brings in
+// through pytest_plugins: a function of that name in one of the plugin
+// modules, or in theirs.
+func (p *pyTyper) pluginFixture(file, name string, depth int) string {
+	if depth > 3 || p.resolveMod == nil {
+		return ""
+	}
+	m := p.modules[pkgOfFile(file, "python")]
+	if m == nil || m.facts == nil || m.path != file {
+		return ""
+	}
+	for _, mod := range m.facts.Plugins {
+		pkg, ok := p.resolveMod(file, mod)
+		if !ok {
+			continue
+		}
+		if q := qualifyModule(pkg, name); p.allDefs[q] && !p.isMethod[q] {
+			return q
+		}
+		if pm := p.modules[pkg]; pm != nil {
+			if q := p.pluginFixture(pm.path, name, depth+1); q != "" {
+				return q
+			}
+		}
+	}
+	return ""
 }
 
 // fieldClass is the class key of attribute attr on an instance of cls: set
@@ -792,27 +1090,39 @@ func (p *pyTyper) fieldType(cls, attr string) (key, ext string) {
 		if isExtBase(k) {
 			return "", ""
 		}
-		fs, done := p.fields[k]
-		if !done {
+		fs := p.fields[k]
+		if fs == nil {
 			fs = map[string]string{}
-			cq := qualifyModule(p.classes.pkg[k], p.classes.name[k])
-			if c, ok := p.ctx(cq); ok {
-				for f, v := range c.vars {
-					if fk := p.valueClass(c, v); fk != "" {
-						fs[f] = fk
-					} else if e := p.externalValue(c, v); e != "" {
-						fs[f] = pyExtField + e
-					}
-				}
-			}
 			p.fields[k] = fs
 		}
-		if fk, ok := fs[attr]; ok {
-			if strings.HasPrefix(fk, pyExtField) {
-				return "", fk[len(pyExtField):]
+		fk, done := fs[attr]
+		if !done {
+			cq := qualifyModule(p.classes.pkg[k], p.classes.name[k])
+			if c, ok := p.ctx(cq); ok {
+				if v, has := c.vars[attr]; has {
+					saved := p.cut
+					p.cut = false
+					if val := p.eval(c, v, 0); val.kind == pyInst {
+						fk = val.cls
+					} else if e := p.externalValue(c, v); e != "" {
+						fk = pyExtField + e
+					}
+					if !p.cut {
+						fs[attr] = fk
+					}
+					p.cut = saved
+				} else {
+					fs[attr] = ""
+				}
 			}
-			return fk, ""
 		}
+		if fk == "" {
+			continue
+		}
+		if strings.HasPrefix(fk, pyExtField) {
+			return "", fk[len(pyExtField):]
+		}
+		return fk, ""
 	}
 	return "", ""
 }
@@ -872,8 +1182,10 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 				typed = append(typed, CallSite{Name: qc.Name, Kind: CallExternal, Scope: ext})
 				continue
 			}
-			exact = strings.HasPrefix(v, pyNewTag)
-			switch cls = p.valueClass(c, v); {
+			if val := p.top(c, v); val.kind == pyInst {
+				cls, exact = val.cls, val.exact
+			}
+			switch {
 			case cls == "" || chain == 2:
 			case chain == 3 && qc.Attr != "":
 				cls = p.fieldClass(cls, qc.Attr) // x.repo.save(): the field's class
@@ -891,6 +1203,10 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 			}
 		}
 		if cls == "" {
+			if site, ok := p.inferredSite(c, qc); ok {
+				typed = append(typed, site)
+				continue
+			}
 			rest = append(rest, qc)
 			continue
 		}

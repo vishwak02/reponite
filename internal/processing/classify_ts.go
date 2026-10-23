@@ -150,7 +150,7 @@ func sourceOrText(in fileInput, repo string, normVer int, finish func(*ParsedFil
 		pf := ParsedFile{
 			Path: p, Lang: rules.Name, IsTest: IsTestPath(p),
 			Symbols: syms, Spans: spans, Imports: Imports(root, rules),
-			Types: typeFactsFor(root, rules), Load: load,
+			Types: typeFactsFor(root, rules), PyModule: pyModuleFacts(root, rules), Load: load,
 		}
 		if load == nil {
 			pf.Content = src

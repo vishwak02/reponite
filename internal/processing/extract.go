@@ -89,6 +89,9 @@ type QualifiedCall struct {
 	// Result: the callee is looked up on what a call returned — f().Do()
 	// (Qualifier f) or Cls.make().Do() (Qualifier Cls, Attr make).
 	Result bool
+	// Path is a Python callee's whole receiver when it is a plain dotted
+	// path of four or more names (a.b.c.Do(): "a.b.c"), for typing it.
+	Path string
 }
 
 func isCommentType(t string) bool { return strings.Contains(t, "comment") }
@@ -475,6 +478,9 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 		}
 		if len(ids) == 3 && ids[1] != callResult {
 			qc.Attr = ids[1]
+		}
+		if r.Name == "python" && len(ids) >= 4 && !containsStr(ids, callResult) {
+			qc.Path = strings.Join(ids[:len(ids)-1], ".")
 		}
 		if len(ids) >= 3 && ids[len(ids)-2] == callResult {
 			qc.Result = true
