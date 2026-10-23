@@ -85,6 +85,8 @@ type moduleIndex struct {
 var (
 	reConstNew = regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*new\s+([A-Z][\w$]*)\s*[(<]`)
 	reFuncRet  = regexp.MustCompile(`(?m)^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\([^()]*\)\s*(?::\s*([A-Z][\w$]*)\s*)?\{`)
+	// const f = (…) => new Cls(…): an instance of Cls (not async: a promise)
+	reArrowNew = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*new\s+([A-Z][\w$]*)\s*[(<]`)
 	reArrowRet = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\([^()]*\)\s*:\s*([A-Z][\w$]*)\s*=>`)
 	reTypedVar = regexp.MustCompile(`(?m)^(?:export\s+)?(?:let|var|const)\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Z][\w$]*)\s*[;=\n]`)
 	reReturnID = regexp.MustCompile(`\breturn\s+([A-Za-z_$][\w$]*)\s*;?\s*$`)
@@ -556,11 +558,19 @@ func jsReturnClasses(src string, instances map[string]string) map[string]string 
 	for _, m := range reArrowRet.FindAllStringSubmatch(src, -1) {
 		out[m[1]] = m[2]
 	}
+	for _, m := range reArrowNew.FindAllStringSubmatch(src, -1) {
+		if out[m[1]] == "" {
+			out[m[1]] = m[2]
+		}
+	}
 	for _, loc := range reFuncRet.FindAllStringSubmatchIndex(src, -1) {
 		name := src[loc[2]:loc[3]]
 		if loc[4] >= 0 {
 			out[name] = src[loc[4]:loc[5]]
 			continue
+		}
+		if strings.Contains(src[loc[0]:loc[2]], "async") {
+			continue // returns a promise of whatever its returns name
 		}
 		// the body: up to the first closing brace at the start of a line
 		body := src[loc[1]:]

@@ -178,3 +178,152 @@ export const Map = () => (
 	wantMethod(t, m, "src/layers/shapes/Circle.Circle.CircleLayer", MethodResolved)
 	wantMethod(t, m, "src/layers/shapes.Square", MethodResolved)
 }
+
+// A receiver whose class the code states — a parameter's annotation, a
+// constructed local, an annotated let, the caller's own instance under
+// another name, an element of a typed field — calls that class's method,
+// never the same-named method of another class.
+func TestTSReceiverTypedLocals(t *testing.T) {
+	files := map[string]string{
+		"src/shop/Slot.ts": `export default class Slot {
+  setState(s: number) { return s; }
+  reset() { return 0; }
+}`,
+		"src/shop/Shelf.ts": `import Slot from './Slot';
+export default class Shelf {
+  private slots: Array<Slot> = [];
+  private byKey: Record<string, Slot> = {};
+  private first?: Slot;
+  private second?: Slot;
+  setState(s: number) {
+    this.slots.forEach((slot) => slot.setState(s));
+    return s;
+  }
+  clearAll() {
+    for (const s of this.slots) {
+      s.reset();
+    }
+    Object.values(this.byKey).forEach((x) => x.reset());
+    [this.first, this.second].forEach((y) => y?.reset());
+    this.byKey['a']?.reset();
+  }
+  pick(a?: Slot, b?: Shelf) {
+    a?.setState(1);
+    b?.setState(2);
+    let fresh: Slot;
+    fresh = this.slots[0];
+    fresh.reset();
+    const made = new Slot();
+    made.setState(3);
+    const scope = this;
+    scope.clearAll();
+    this.slots.push(made);
+  }
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	set := edges["src/shop.Shelf.setState"]
+	wantMethod(t, set, "src/shop.Slot.setState", MethodTyped)
+	clr := edges["src/shop.Shelf.clearAll"]
+	wantMethod(t, clr, "src/shop.Slot.reset", MethodTyped)
+	p := edges["src/shop.Shelf.pick"]
+	wantMethod(t, p, "src/shop.Slot.setState", MethodTyped)
+	wantMethod(t, p, "src/shop.Shelf.setState", MethodTyped)
+	wantMethod(t, p, "src/shop.Slot.reset", MethodTyped)
+	wantMethod(t, p, "src/shop.Shelf.clearAll", MethodTyped)
+	wantMethod(t, p, "Array::push", MethodExternal)
+}
+
+// A field's class: its annotation, its initializer, a constructor parameter
+// property, or what the class's methods assign to it (plain JS); a
+// module-level instance's fields; what an imported function constructs.
+func TestTSFieldTyping(t *testing.T) {
+	files := map[string]string{
+		"src/store/accessor.ts": `export class Accessor<T> {
+  get(): T | undefined { return undefined; }
+}
+export class SiteAccessor extends Accessor<string> {
+  get = () => 'site';
+}
+export class Store {
+  auth = new Accessor<string>();
+  site = new SiteAccessor();
+}
+export const STORE = new Store();
+export const token = () => STORE.site.get();`,
+		"src/net/conn.ts": `class Conn {
+  on(ev: string) { return ev; }
+  close() { return 0; }
+}
+const open = (url: string) => new Conn();
+export default open;`,
+		"src/net/index.ts": `export class Index { get(k: string) { return k; } remove(k: string) { return k; } }`,
+		"src/net/session.ts": `import { Index } from './index';
+export class Session {
+  private index: Index;
+  constructor(private backup: Index) {
+    this.index = backup;
+  }
+  modify(k: string) {
+    this.index.get(k);
+    this.backup.remove(k);
+  }
+}`,
+		"src/net/client.js": `import open from './conn';
+export class Client {
+  constructor() {
+    this.ws = null;
+  }
+  connect() {
+    this.ws = open('x');
+    this.ws.on('open');
+    const self = this;
+    setTimeout(function () {
+      this.ws.close();
+    });
+    self.ws.close();
+  }
+}`,
+		"src/ui/login.ts": `import { STORE } from '../store/accessor';
+export function signIn() {
+  return STORE.auth.get();
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	wantMethod(t, edges["src/ui.login.signIn"], "src/store.accessor.Accessor.get", MethodTyped)
+	wantMethod(t, edges["src/store.accessor.token"], "src/store.accessor.SiteAccessor.get", MethodTyped)
+	m := edges["src/net.session.Session.modify"]
+	wantMethod(t, m, "src/net.Index.get", MethodTyped)
+	wantMethod(t, m, "src/net.Index.remove", MethodTyped)
+	c := edges["src/net.client.Client.connect"]
+	wantMethod(t, c, "src/net.conn.Conn.on", MethodTyped)
+	wantMethod(t, c, "src/net.conn.Conn.close", MethodTyped)
+}
+
+// What the code does not state is not guessed: a variable given two
+// classes, `this` inside a function that binds its own, a field a library
+// base class may declare.
+func TestTSReceiverTypingLimits(t *testing.T) {
+	files := map[string]string{
+		"src/a.ts": `import { Widget } from 'ui-lib';
+export class Cat { speak() { return 1; } }
+export class Dog { speak() { return 2; } }
+export class Panel extends Widget {
+  run(flag: boolean) {
+    let pet = new Cat();
+    if (flag) {
+      pet = new Dog();
+    }
+    pet.speak();
+    this.child.speak();
+  }
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	r := edges["src.a.Panel.run"]
+	for _, bad := range []string{"src.a.Cat.speak", "src.a.Dog.speak"} {
+		if m, ok := r[bad]; ok && m != MethodMember {
+			t.Errorf("speak typed on %s (%s): %v", bad, m, r)
+		}
+	}
+}

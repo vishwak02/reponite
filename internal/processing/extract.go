@@ -89,6 +89,9 @@ type QualifiedCall struct {
 	// Result: the callee is looked up on what a call returned — f().Do()
 	// (Qualifier f) or Cls.make().Do() (Qualifier Cls, Attr make).
 	Result bool
+	// Recv is a JS/TS member call's object as an expression the index can
+	// type (jstypes.go): this.items[], store.auth, scope; "" otherwise.
+	Recv string
 }
 
 func isCommentType(t string) bool { return strings.Contains(t, "comment") }
@@ -410,8 +413,11 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 		return nil
 	}
 	var fields map[string]string
-	if r.Name == "python" {
+	switch {
+	case r.Name == "python":
 		fields = pyClassFields(decl)
+	case langFamily(r.Name) == "js":
+		fields = jsClassFields(decl) // jstypes.go
 	}
 	shape := classShape(decl, r)
 	sym := Symbol{
@@ -459,7 +465,12 @@ func calleesWithRules(body content.AST, r LangRules) []string {
 func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 	seen := map[QualifiedCall]bool{}
 	var out []QualifiedCall
-	for _, call := range descendantsAny(body, r.CallTypes) {
+	calls := descendantsAny(body, r.CallTypes)
+	var recvs []string // JS/TS: each call's receiver expression (jstypes.go)
+	if langFamily(r.Name) == "js" {
+		recvs = jsCallRecvs(body, r.CallTypes)
+	}
+	for i, call := range calls {
 		var ids []string
 		if containsStr(jsxElementTypes, call.Type()) {
 			ids = jsxTag(call)
@@ -484,6 +495,9 @@ func qualifiedCallsWithRules(body content.AST, r LangRules) []QualifiedCall {
 			if len(ids) == 4 && ids[1] != callResult {
 				qc.Attr = ids[1] // Cls.make().Do()
 			}
+		}
+		if i < len(recvs) && qc.Chain >= 2 {
+			qc.Recv = recvs[i]
 		}
 		if qc.Qualifier == "" && r.Builtins[qc.Name] || seen[qc] { // db.set(), qs.filter(): a method, not the builtin
 			continue
@@ -1029,60 +1043,12 @@ func firstDescendant(n content.AST, t string) content.AST {
 	return nil
 }
 
-// jsLocalTag marks a JS/TS function's own bindings in Symbol.Vars: its
-// parameters (destructured props included) and the names it declares. A bare
-// call of one (a hook's setter, a prop, a local arrow) is that value, never
+// jsLocalTag marks a JS/TS function's own bindings in Symbol.Vars whose
+// value is not known (jstypes.go encodes the others): its parameters
+// (destructured props included) and the names it declares. A bare call of
+// any binding (a hook's setter, a prop, a local arrow) is that value, never
 // a module-level definition or import of the same name.
 const jsLocalTag = "local"
-
-func jsLocals(fn content.AST) map[string]string {
-	out := map[string]string{}
-	var pattern func(n content.AST)
-	pattern = func(n content.AST) {
-		switch n.Type() {
-		case "identifier", "shorthand_property_identifier_pattern":
-			out[n.Text()] = jsLocalTag
-		case "assignment_pattern", "object_assignment_pattern":
-			if k := namedKids(n); len(k) > 0 {
-				pattern(k[0]) // the default value is not a binding
-			}
-		case "pair_pattern":
-			if k := namedKids(n); len(k) > 1 {
-				pattern(k[len(k)-1])
-			}
-		case "object_pattern", "array_pattern", "rest_pattern", "required_parameter", "optional_parameter", "formal_parameters":
-			for _, k := range namedKids(n) {
-				if k.Type() == "type_annotation" || k.Type() == "accessibility_modifier" {
-					continue
-				}
-				pattern(k)
-			}
-		}
-	}
-	var walk func(n content.AST)
-	walk = func(n content.AST) {
-		for _, c := range n.Children() {
-			switch c.Type() {
-			case "formal_parameters":
-				pattern(c)
-			case "variable_declarator":
-				if k := namedKids(c); len(k) > 0 {
-					pattern(k[0])
-				}
-			case "catch_clause":
-				if k := namedKids(c); len(k) > 0 && k[0].Type() != "statement_block" {
-					pattern(k[0])
-				}
-			}
-			walk(c)
-		}
-	}
-	walk(fn)
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
 
 func namedKids(n content.AST) []content.AST {
 	var out []content.AST
