@@ -314,6 +314,13 @@ func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 					}
 					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})
 				}
+				for _, lc := range localClasses(w, r) {
+					// a class defined in the function body, and its methods
+					if ln, ok := lc.(tsNode); ok {
+						spans = append(spans, query.SymbolSpan{Name: nameOf(lc, r), StartLine: int(ln.n.StartPoint().Row) + 1, EndLine: int(ln.n.EndPoint().Row) + 1})
+						walk(ln.n)
+					}
+				}
 			case containsStr(r.VarFuncDecl, t):
 				if name, fn := varFunction(w); fn != nil && name != "" {
 					spans = append(spans, query.SymbolSpan{Name: name, StartLine: start, EndLine: end})

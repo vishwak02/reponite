@@ -40,6 +40,10 @@ type CallSite struct {
 	// argument — a local's declared type, an enumerator's enum (Reason::X ->
 	// Reason), #num/#str for literals, "" unknown
 	ArgTypes string
+	// File is the file the call is written in, set when one id joins the
+	// same-named definitions of several files (each program's main): each
+	// call is resolved as its own file sees the repo
+	File string
 }
 
 // CallTyped: a member call whose receiver's declared type is known (a
@@ -218,21 +222,82 @@ func scopeName(n content.AST) string {
 func declScope(fn content.AST, r LangRules) string {
 	d := declaratorOf(fn, r)
 	if d == nil {
+		// Cls::operator bool() const { … }: a conversion function has no
+		// function declarator, its scope is the qualified name's
+		if q := firstChildAny(fn, []string{"qualified_identifier"}); q != nil && conversionOperator(fn) != nil {
+			return lastScope(q)
+		}
 		return ""
 	}
-	q := firstDescBefore(d, "qualified_identifier", "parameter")
-	scope := ""
+	return lastScope(firstDescBefore(d, "qualified_identifier", "parameter"))
+}
+
+// declOuterScope is the scope an out-of-class definition's own class is
+// written in: void A::B::f() -> "A" ("" for void B::f()).
+func declOuterScope(fn content.AST, r LangRules) string {
+	var q content.AST
+	if d := declaratorOf(fn, r); d != nil {
+		q = firstDescBefore(d, "qualified_identifier", "parameter")
+	} else if conversionOperator(fn) != nil {
+		q = firstChildAny(fn, []string{"qualified_identifier"})
+	}
+	var scopes []string
 	for q != nil && q.Type() == "qualified_identifier" {
 		kids := q.Children()
 		if len(kids) == 0 {
 			break
 		}
 		if s := scopeName(kids[0]); s != "" {
-			scope = s
+			scopes = append(scopes, s)
 		}
 		q = kids[len(kids)-1]
 	}
-	return scope
+	if len(scopes) < 2 {
+		return ""
+	}
+	return scopes[len(scopes)-2]
+}
+
+// conversionOperator is a C++ definition's conversion function declarator
+// (operator bool() const), in-class or qualified out of class; nil if none.
+func conversionOperator(fn content.AST) content.AST {
+	if oc := firstChildAny(fn, []string{"operator_cast"}); oc != nil {
+		return oc
+	}
+	if q := firstChildAny(fn, []string{"qualified_identifier"}); q != nil {
+		for q != nil && q.Type() == "qualified_identifier" {
+			kids := q.Children()
+			if len(kids) == 0 {
+				return nil
+			}
+			q = kids[len(kids)-1]
+		}
+		if q != nil && q.Type() == "operator_cast" {
+			return q
+		}
+	}
+	return nil
+}
+
+// conversionName names a conversion function by the type it converts to,
+// as clang spells it: "operator bool", "operator const char *".
+func conversionName(oc content.AST) string {
+	var parts []string
+	var walk func(n content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			switch {
+			case c.Type() == "abstract_function_declarator":
+				return // the parameter list and its qualifiers
+			case len(c.Children()) == 0 || c.Type() == "primitive_type" || c.Type() == "type_identifier":
+				parts = append(parts, strings.TrimSpace(c.Text()))
+			default:
+				walk(c)
+			}
+		}
+	}
+	walk(oc)
+	return strings.Join(parts, " ")
 }
 
 // firstDescBefore finds the first descendant of type t, not looking past a
@@ -241,6 +306,9 @@ func firstDescBefore(n content.AST, t, stop string) content.AST {
 	for _, c := range n.Children() {
 		if strings.Contains(c.Type(), stop) {
 			return nil
+		}
+		if c.Type() == "template_argument_list" {
+			continue // f<ns::T>(…): a specialization's argument, not its scope
 		}
 		if c.Type() == t {
 			return c
@@ -612,8 +680,8 @@ func argTypeHints(args content.AST, vars map[string]string) string {
 		h := ""
 		switch a.Type() {
 		case "identifier":
-			if v := vars[a.Text()]; strings.HasPrefix(v, "v:") && !strings.Contains(v, "|") {
-				h = typeLeaf(v[2:])
+			if v := vars[a.Text()]; strings.HasPrefix(v, "v:") && !strings.ContainsAny(v, "| ") {
+				h = typeLeaf(v[2:]) // a declared type (v:T it is an element of T: below)
 			} else if e := recvExpr(a, vars); e != "" && !strings.Contains(e, ",") {
 				h = "e:" + e // a field, a parameter typed at index time
 			}
@@ -640,6 +708,14 @@ func argTypeHints(args content.AST, vars map[string]string) string {
 				h = parts[len(parts)-2]
 			}
 		case "call_expression", "compound_literal_expression":
+			if fn := a.Children(); len(fn) > 0 && fn[0].Type() == "qualified_identifier" {
+				if scope, name := scopeAndLeaf(fn[0]); scope == "std" && stdPassThrough[name] == "=" {
+					if e := recvExpr(a, vars); e != "" && !strings.Contains(e, ",") {
+						h = "e:" + e // std::move(x): x's type
+					}
+					break
+				}
+			}
 			// ros::Duration(s), Point{1, 2}: a temporary of that class
 			if fn := a.Children(); len(fn) > 0 {
 				switch fn[0].Type() {

@@ -39,6 +39,23 @@ type TypeFacts struct {
 	Nested map[string]bool
 	// Enums are the enumeration types this file defines
 	Enums map[string]bool
+	// Top are the classes this file defines at namespace scope (not nested
+	// in another class): what a bare class name written outside any class
+	// names
+	Top map[string]bool
+	// FuncReturns are the free functions this file declares or defines at
+	// namespace scope, by name, with their declared return type ("" unknown,
+	// or overloads returning different types)
+	FuncReturns map[string]string
+	// Members are the methods each class declares or defines ("Cls.m")
+	Members map[string]bool
+	// C: the facts of a C file (declarations and includes only)
+	C bool
+	// Opened are the namespaces ("a", "a::b") the file's code is written
+	// in or brings in with a using-directive
+	Opened map[string]bool
+	// NSAliases are the file's namespace aliases (namespace fm = a::b;)
+	NSAliases map[string]string
 	// FuncNS are the namespaces ("a::b", "" global) each free function this
 	// file declares or defines is in.
 	FuncNS map[string][]string
@@ -100,7 +117,27 @@ func typeFactsFor(root content.AST, r LangRules) *TypeFacts {
 	if r.Name == "java" && root != nil {
 		return JavaTypeFacts(root)
 	}
+	if r.Name == "c" && root != nil {
+		return cDeclFacts(root)
+	}
 	return CppTypeFacts(root, r)
+}
+
+// cDeclFacts is what a C file tells C++ code about the functions it can
+// call: its includes and the functions it declares (a C library's header
+// included by a C++ source), with their linkage. Its types stay out of the
+// C++ type table.
+func cDeclFacts(root content.AST) *TypeFacts {
+	full := CppTypeFacts(root, CppRules)
+	if full == nil {
+		return nil
+	}
+	tf := &TypeFacts{Includes: full.Includes, Declared: full.Declared, Internal: full.Internal, FuncNS: full.FuncNS,
+		C: true}
+	if len(tf.Includes) == 0 && len(tf.Declared) == 0 {
+		return nil
+	}
+	return tf
 }
 
 // CppTypeFacts collects a C++ file's class, field, base, alias and method
@@ -110,7 +147,8 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 		return nil
 	}
 	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{},
-		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}}
+		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}, Top: map[string]bool{},
+		FuncReturns: map[string]string{}, Members: map[string]bool{}, Opened: map[string]bool{}, NSAliases: map[string]string{}}
 	var nsStack []string // the named namespaces around the walk
 	inNS := func(name string, extra ...string) {
 		ns := strings.Join(append(append([]string(nil), nsStack...), extra...), "::")
@@ -123,6 +161,15 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 	var tdefaults []string        // the defaults of those parameters ("" none), in order
 	var tdefaultArgs [][]string   // each default's template arguments
 	external := map[string]bool{} // names this file also declares with external linkage
+	funcReturn := func(name, t string) {
+		if strings.HasPrefix(t, "f:") || strings.HasPrefix(t, "x:") || containsStr(tparams, t) {
+			t = "" // a template's parameter, or what auto deduces
+		}
+		if prev, ok := tf.FuncReturns[name]; ok && prev != t {
+			t = "" // overloads returning different types
+		}
+		tf.FuncReturns[name] = t
+	}
 	var walk func(n content.AST, class string)
 	walk = func(n content.AST, class string) {
 		for _, c := range n.Children() {
@@ -178,10 +225,26 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 				outer := nsStack
 				if id := firstChildAny(c, []string{"namespace_identifier", "nested_namespace_specifier"}); id != nil {
 					nsStack = append(append([]string(nil), nsStack...), strings.Split(strings.ReplaceAll(id.Text(), " ", ""), "::")...)
+					for k := range nsStack {
+						tf.Opened[strings.Join(nsStack[:k+1], "::")] = true
+					}
 				}
 				walk(c, class)
 				nsStack = outer
 				continue
+			case "namespace_alias_definition":
+				kids := namedKids(c)
+				if len(kids) == 2 && kids[0].Type() == "namespace_identifier" {
+					tf.NSAliases[kids[0].Text()] = strings.TrimPrefix(strings.ReplaceAll(kids[1].Text(), " ", ""), "::")
+				}
+				continue
+			case "using_declaration":
+				// using namespace a::b;: a::b's names are found from here
+				if firstChildAny(c, []string{"namespace"}) != nil {
+					if id := firstChildAny(c, []string{"identifier", "qualified_identifier", "namespace_identifier"}); id != nil {
+						tf.Opened[strings.ReplaceAll(id.Text(), " ", "")] = true
+					}
+				}
 			case "declaration":
 				if class == "" {
 					if d := firstChildAny(c, []string{"function_declarator", "pointer_declarator", "reference_declarator"}); d != nil {
@@ -192,6 +255,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 							if id := firstChildAny(fd, []string{"identifier", "operator_name"}); id != nil {
 								tf.Declared[id.Text()] = true
 								inNS(id.Text())
+								funcReturn(id.Text(), TypeName(firstChildAny(c, typeNodeTypes)))
 								if anon > 0 || hasStatic(c) {
 									tf.Internal[id.Text()] = true
 								} else {
@@ -205,12 +269,21 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 			switch c.Type() {
 			case "class_specifier", "struct_specifier":
 				body := firstChildAny(c, []string{"field_declaration_list"})
-				name := ""
+				name, outer := "", class
 				if id := firstChildAny(c, []string{"type_identifier"}); id != nil {
 					name = id.Text()
 				} else if q := firstChildAny(c, []string{"qualified_identifier"}); q != nil {
 					name = TypeName(q) // class Outer::Impl { … }: the nested class Impl
 					if i := strings.LastIndex(name, "::"); i >= 0 {
+						if outer == "" && body != nil && !externalScopes[name[:i]] {
+							// defined out of its class's body (a pimpl's
+							// class Widget::Impl in the source file): nested
+							// in Widget all the same
+							outer = name[:i]
+							if j := strings.LastIndex(outer, "::"); j >= 0 {
+								outer = outer[j+2:]
+							}
+						}
 						name = name[i+2:]
 					}
 				} else if tt := firstChildAny(c, []string{"template_type"}); tt != nil {
@@ -223,11 +296,13 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					walk(c, class)
 					continue
 				}
-				if anon > 0 && class == "" {
+				if anon > 0 && outer == "" {
 					tf.Internal[name] = true
 				}
-				if class != "" {
-					tf.Nested[class+"::"+name] = true
+				if outer != "" {
+					tf.Nested[outer+"::"+name] = true
+				} else {
+					tf.Top[name] = true
 				}
 				// this body's own facts; merged into the class of its name, and kept
 				// apart as Outer::Inner for a nested class (two classes may each
@@ -282,9 +357,12 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					}
 					for _, d := range fd.Children() {
 						if f := declaredName(d, "field_identifier"); f != "" {
-							cf.Fields[f] = t
-						} else if m := methodDeclName(d); m != "" && t != "" {
-							tf.Returns[name+"."+m] = t // in-class method declaration
+							cf.Fields[f] = arrayOf(d, t)
+						} else if m := methodDeclName(d); m != "" {
+							tf.Members[name+"."+m] = true
+							if t != "" {
+								tf.Returns[name+"."+m] = t // in-class method declaration
+							}
 						}
 					}
 				}
@@ -293,8 +371,8 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 				} else {
 					leaf.merge(cf)
 				}
-				if class != "" {
-					tf.Classes[class+"::"+name] = cf
+				if outer != "" {
+					tf.Classes[outer+"::"+name] = cf
 				}
 				walk(body, name)
 			case "function_definition":
@@ -314,6 +392,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					} else {
 						tf.Declared[n] = true
 						inNS(n)
+						funcReturn(n, t)
 						if anon > 0 || hasStatic(c) {
 							tf.Internal[n] = true
 						} else {
@@ -321,17 +400,23 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 						}
 					}
 				}
-				if d := declaratorOf(c, CppRules); d != nil && t != "" {
+				if d := declaratorOf(c, CppRules); d != nil {
 					cls, m := class, ""
 					if q := firstDescBefore(d, "qualified_identifier", "parameter"); q != nil {
-						kids := q.Children()
-						cls, m = scopeName(kids[0]), declaratorName(d, CppRules)
+						// void A::B::f(): a method of B (A only scopes it)
+						cls, m = lastScope(q), declaratorName(d, CppRules)
 					} else if class != "" {
 						m = declaratorName(d, CppRules)
 					}
 					if cls != "" && m != "" {
-						tf.Returns[cls+"."+m] = t
+						tf.Members[cls+"."+m] = true
+						if t != "" {
+							tf.Returns[cls+"."+m] = t
+						}
 					}
+				}
+				if lcs := localClasses(c, CppRules); len(lcs) > 0 {
+					walk(kidsNode{AST: c, kids: lcs}, "") // classes the body defines
 				}
 			case "alias_declaration":
 				if class == "" {
@@ -389,10 +474,35 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 	for n := range external {
 		delete(tf.Internal, n) // overloads of one name, some internal: the name is not
 	}
-	if len(tf.Classes) == 0 && len(tf.Aliases) == 0 && len(tf.Returns) == 0 && len(tf.Includes) == 0 && len(tf.Declared) == 0 && len(tf.Enums) == 0 {
+	if len(tf.Classes) == 0 && len(tf.Aliases) == 0 && len(tf.Returns) == 0 && len(tf.Includes) == 0 && len(tf.Declared) == 0 && len(tf.Enums) == 0 && len(tf.Members) == 0 && len(tf.NSAliases) == 0 {
 		return nil
 	}
 	return tf
+}
+
+// kidsNode is a node seen with only the given children.
+type kidsNode struct {
+	content.AST
+	kids []content.AST
+}
+
+func (k kidsNode) Children() []content.AST { return k.kids }
+
+// lastScope is the innermost scope a qualified name is written in:
+// A::B::f -> B, ns::Cls<T>::f -> Cls.
+func lastScope(q content.AST) string {
+	scope := ""
+	for q != nil && q.Type() == "qualified_identifier" {
+		kids := q.Children()
+		if len(kids) == 0 {
+			break
+		}
+		if s := scopeName(kids[0]); s != "" {
+			scope = s
+		}
+		q = kids[len(kids)-1]
+	}
+	return scope
 }
 
 // classMembers are a class body's member declarations, those inside
@@ -587,6 +697,22 @@ func declaredName(d content.AST, leaf string) string {
 	return ""
 }
 
+// arrayOf is t for a declarator of a T, "[]t" for one of an array of T
+// (T x[N]: x[i] is a T).
+func arrayOf(d content.AST, t string) string {
+	for d != nil && t != "" {
+		switch d.Type() {
+		case "array_declarator":
+			return "[]" + t
+		case "init_declarator", "bitfield_clause":
+			d = firstChildAny(d, []string{"array_declarator", "identifier", "field_identifier"})
+			continue
+		}
+		break
+	}
+	return t
+}
+
 // methodDeclName is the method an in-class declaration declares
 // (`const Req& getReq() const;`), or "".
 func methodDeclName(d content.AST) string {
@@ -740,7 +866,11 @@ var (
 	iterMembers = map[string]bool{"find": true, "begin": true, "end": true, "cbegin": true, "cend": true,
 		"rbegin": true, "rend": true, "lower_bound": true, "upper_bound": true}
 	elemMembers = map[string]bool{"at": true, "front": true, "back": true, "top": true}
-	passMembers = map[string]bool{"get": true, "lock": true, "value": true}
+	passMembers = map[string]bool{"get": true, "lock": true, "value": true, "value_or": true}
+	// stdPassThrough: std:: functions whose result is reached through their
+	// first argument — an iterator over it ("it"), or the argument itself
+	stdPassThrough = map[string]string{"begin": "it", "end": "it", "cbegin": "it", "cend": "it", "rbegin": "it",
+		"rend": "it", "next": "=", "prev": "=", "move": "=", "ref": "=", "cref": "=", "as_const": "=", "addressof": "="}
 )
 
 // recvExpr is the receiver expression of an object node, or "".
@@ -796,6 +926,26 @@ func recvExpr(n content.AST, vars map[string]string) string {
 			}
 		}
 		if len(k) > 0 && k[0].Type() == "qualified_identifier" {
+			if scope, name := scopeAndLeaf(k[0]); scope == "std" && stdPassThrough[name] != "" {
+				// std::begin(v) iterates v; std::next(it), std::move(x): their argument
+				for _, c := range k {
+					if c.Type() != "argument_list" {
+						continue
+					}
+					for _, a := range c.Children() {
+						if a.IsNamed() {
+							if base := recvExpr(a, vars); base != "" {
+								if stdPassThrough[name] == "it" {
+									return then(base, "it")
+								}
+								return base
+							}
+							return ""
+						}
+					}
+				}
+				return ""
+			}
 			if tf := firstChildAny(k[0], []string{"template_function"}); tf != nil {
 				if id := firstChildAny(tf, []string{"identifier"}); id != nil && id.Text() == "get" {
 					return tupleGet(tf, k, vars) // std::get<…>(t)
@@ -945,7 +1095,7 @@ func cppVarTypes(fn content.AST, r LangRules) map[string]string {
 			}
 			switch {
 			case !isAuto:
-				set(name, typed(t))
+				set(name, typed(arrayOf(d, t)))
 			case d.Type() == "identifier":
 				// if (auto x = f()) — a condition's declaration has no
 				// init_declarator: the value is the next named sibling.
@@ -1128,13 +1278,65 @@ type typeTable struct {
 	// how many classes nest one of that name (two: the bare name is ambiguous)
 	nested   map[string]bool
 	nestedIn map[string]int
-	enums    map[string]bool // enumeration type names
-	depth    int             // nesting of method returns being evaluated
+	nestedBy map[string][]string // Inner -> each Outer::Inner
+	enums    map[string]bool     // enumeration type names
+	top      map[string]bool     // classes some file defines at namespace scope
+	// funcReturns: a free function's return type by name ("" unknown or
+	// conflicting); funcNS the namespaces it is declared in; members every
+	// class's methods ("Cls.m")
+	funcReturns map[string]string
+	funcNS      map[string][]string
+	members     map[string]bool
+	// fileAliases are the namespace-level aliases each source file declares
+	// (its own, seen by no other file); file is the source file whose calls
+	// are being resolved
+	fileAliases map[string]map[string]string
+	file        string
+	depth       int // nesting of method returns being evaluated
+}
+
+// oneReturn is the return type the declarations of one Cls.m agree on: a
+// declaration and its definition (ns::T and T, auto returning a field),
+// else "" — two classes of one name (each test file's fixture) whose
+// methods return different types.
+func (tt *typeTable) oneReturn(vs []string) string {
+	if len(vs) == 1 {
+		return vs[0]
+	}
+	sort.Strings(vs)
+	out, deduced := "", ""
+	for _, v := range vs {
+		if strings.HasPrefix(v, "f:") || strings.HasPrefix(v, "x:") {
+			deduced = v // auto: what the body returns
+			continue
+		}
+		switch {
+		case out == "":
+			out = v
+		case tt.canon(tt.unscope(v)) == tt.canon(tt.unscope(out)):
+		case reScope.ReplaceAllString(v, "") == reScope.ReplaceAllString(out, ""):
+			// Item in the class body, Outer::Item out of it ([]Item,
+			// []Outer::Item): one type, the scoped spelling kept
+			if len(v) > len(out) {
+				out = v
+			}
+		default:
+			return ""
+		}
+	}
+	if out == "" {
+		return deduced
+	}
+	return out
 }
 
 func newTypeTable(files []ParsedFile) *typeTable {
 	tt := &typeTable{classes: map[string]*ClassFact{}, aliases: map[string]string{}, returns: map[string]string{}, derived: map[string][]string{}, aliasArgs: map[string][]string{},
-		nested: map[string]bool{}, nestedIn: map[string]int{}, enums: map[string]bool{}}
+		nested: map[string]bool{}, nestedIn: map[string]int{}, nestedBy: map[string][]string{}, enums: map[string]bool{}, top: map[string]bool{},
+		funcReturns: map[string]string{}, funcNS: map[string][]string{}, members: map[string]bool{},
+		fileAliases: map[string]map[string]string{}}
+	returns := map[string][]string{}
+	srcOf := map[string]string{} // class -> the source file defining it (one with aliases)
 	for _, f := range files {
 		if f.Types == nil {
 			continue
@@ -1148,6 +1350,9 @@ func newTypeTable(files []ParsedFile) *typeTable {
 			m.merge(cf)
 		}
 		for k, v := range f.Types.Aliases {
+			if isCSource(f.Path) && !strings.Contains(k, "::") {
+				continue // a source file's own alias: that file's (fileAliases)
+			}
 			tt.aliases[k] = v
 		}
 		for k, v := range f.Types.AliasArgs {
@@ -1156,15 +1361,49 @@ func newTypeTable(files []ParsedFile) *typeTable {
 		for k := range f.Types.Enums {
 			tt.enums[k] = true
 		}
+		for k := range f.Types.Top {
+			tt.top[k] = true
+		}
+		for k, v := range f.Types.FuncReturns {
+			if prev, ok := tt.funcReturns[k]; ok && prev != v {
+				v = "" // two files' functions of one name, typed differently
+			}
+			tt.funcReturns[k] = v
+		}
+		for k, nss := range f.Types.FuncNS {
+			for _, ns := range nss {
+				if !containsStr(tt.funcNS[k], ns) {
+					tt.funcNS[k] = append(tt.funcNS[k], ns)
+				}
+			}
+		}
+		for k := range f.Types.Members {
+			tt.members[k] = true
+		}
+		if isCSource(f.Path) && len(f.Types.Aliases) > 0 {
+			tt.fileAliases[f.Path] = f.Types.Aliases
+			for name := range f.Types.Classes {
+				if _, ok := srcOf[name]; !ok {
+					srcOf[name] = f.Path
+				}
+			}
+		}
 		for k := range f.Types.Nested {
 			if !tt.nested[k] {
 				tt.nested[k] = true
-				tt.nestedIn[k[strings.LastIndex(k, "::")+2:]]++
+				leaf := k[strings.LastIndex(k, "::")+2:]
+				tt.nestedIn[leaf]++
+				tt.nestedBy[leaf] = append(tt.nestedBy[leaf], k)
 			}
 		}
 		for k, v := range f.Types.Returns {
-			tt.returns[k] = v
+			if !containsStr(returns[k], v) {
+				returns[k] = append(returns[k], v)
+			}
 		}
+	}
+	for k, vs := range returns {
+		tt.returns[k] = tt.oneReturn(vs)
 	}
 	names := make([]string, 0, len(tt.classes))
 	for n := range tt.classes {
@@ -1173,6 +1412,7 @@ func newTypeTable(files []ParsedFile) *typeTable {
 	sort.Strings(names)
 	for _, n := range names {
 		seen := map[string]bool{}
+		tt.file = srcOf[n] // a source file's class may name its base by that file's alias
 		for _, b := range tt.classes[n].Bases {
 			if containsStr(tt.classes[n].TParams, b) {
 				continue // a type parameter: whatever the instantiation passes
@@ -1184,7 +1424,18 @@ func newTypeTable(files []ParsedFile) *typeTable {
 			}
 		}
 	}
+	tt.file = ""
 	return tt
+}
+
+// alias is what name aliases: the source file being resolved's own alias
+// first, then the headers' (and class members') ones.
+func (tt *typeTable) alias(name string) (string, bool) {
+	if a, ok := tt.fileAliases[tt.file][name]; ok {
+		return a, true
+	}
+	a, ok := tt.aliases[name]
+	return a, ok
 }
 
 // canon follows aliases and the FooPtr naming idiom to a class name.
@@ -1197,10 +1448,16 @@ func (tt *typeTable) canonN(t string, depth int) string {
 		return t // a container: its element type is canonical where it is read
 	}
 	for i := 0; i < 8 && t != ""; i++ {
+		if a, ok := tt.fileAliases[tt.file][t]; ok && a != t {
+			// an alias the source file being resolved declares: what the
+			// name means there, whatever another file defines under it
+			t = a
+			continue
+		}
 		if _, ok := tt.classes[t]; ok {
 			return t
 		}
-		a, ok := tt.aliases[t]
+		a, ok := tt.alias(t)
 		if !ok {
 			break
 		}
@@ -1210,8 +1467,14 @@ func (tt *typeTable) canonN(t string, depth int) string {
 		// Alias::Member: the member alias of the class Alias names
 		if i := strings.LastIndex(t, "::"); i > 0 && depth < 4 {
 			if sc := tt.canonN(t[:i], depth+1); sc != t[:i] {
-				if a, ok := tt.aliases[sc+"::"+t[i+2:]]; ok {
+				if a, ok := tt.alias(sc + "::" + t[i+2:]); ok {
+					if tt.nested[sc+"::"+a] {
+						return sc + "::" + a // a member alias of the class's own nested class
+					}
 					return tt.canonN(a, depth+1)
+				}
+				if tt.nested[sc+"::"+t[i+2:]] {
+					return sc + "::" + t[i+2:] // Alias::Nested: that class's nested class
 				}
 				if tt.classes[t[i+2:]] != nil {
 					return t[i+2:] // Alias::Nested: the nested class
@@ -1226,7 +1489,7 @@ func (tt *typeTable) canonN(t string, depth int) string {
 				if tt.classes[leaf] != nil {
 					return leaf
 				}
-				if _, ok := tt.aliases[leaf]; ok && depth < 4 {
+				if _, ok := tt.alias(leaf); ok && depth < 4 {
 					return tt.canonN(leaf, depth+1) // using X = ns::X: not followed in circles
 				}
 			}
@@ -1275,7 +1538,7 @@ func (tt *typeTable) nestedName(t, callerRecv string) string {
 	if tt.nested[sc+"::"+leaf] {
 		return sc + "::" + leaf
 	}
-	if a, ok := tt.aliases[sc+"::"+leaf]; ok {
+	if a, ok := tt.alias(sc + "::" + leaf); ok {
 		if tt.nested[sc+"::"+a] {
 			return sc + "::" + a
 		}
@@ -1283,10 +1546,11 @@ func (tt *typeTable) nestedName(t, callerRecv string) string {
 	return ""
 }
 
-// ambiguousNested: name is a class nested in two different classes, so the
-// bare name does not say which.
+// ambiguousNested: name is a class nested in two different classes, and no
+// class of that name is defined at namespace scope, so the bare name does
+// not say which.
 func (tt *typeTable) ambiguousNested(name string) bool {
-	return tt.nestedIn[name] > 1
+	return tt.nestedIn[name] > 1 && !tt.top[name]
 }
 
 // unscope drops the repo namespace from ns::Name when Name is a class or an
@@ -1295,7 +1559,7 @@ func (tt *typeTable) unscope(t string) string {
 	if tt.classes[t] != nil {
 		return t
 	}
-	if _, ok := tt.aliases[t]; ok {
+	if _, ok := tt.alias(t); ok {
 		return t
 	}
 	i := strings.LastIndex(t, "::")
@@ -1307,19 +1571,38 @@ func (tt *typeTable) unscope(t string) string {
 	if externalScopes[root] {
 		return t
 	}
-	if _, ok := tt.aliases[leaf]; ok || tt.classes[leaf] != nil {
+	if _, ok := tt.alias(leaf); ok || tt.classes[leaf] != nil {
 		return leaf
 	}
 	return t
 }
 
 // ownNested is t written inside class c: c's own nested class of that name
-// (std::unique_ptr<Impl> _impl in Foo is Foo::Impl), else t.
+// (std::unique_ptr<Impl> _impl in Foo is Foo::Impl), or that of a class c
+// is nested in (Foo::Handle's Impl is Foo::Impl), else t.
 func (tt *typeTable) ownNested(c, t string) string {
-	if tt.nested[c+"::"+t] {
-		return c + "::" + t
+	for i := 0; i < 4 && c != ""; i++ {
+		if tt.nested[c+"::"+t] {
+			return c + "::" + t
+		}
+		c = tt.enclosing(c)
 	}
 	return t
+}
+
+// enclosing is the class c is nested in ("" when c is not a nested class,
+// or the bare name nests in several classes).
+func (tt *typeTable) enclosing(c string) string {
+	if i := strings.LastIndex(c, "::"); i > 0 {
+		if tt.nested[c] {
+			return c[:i]
+		}
+		return ""
+	}
+	if ns := tt.nestedBy[c]; len(ns) == 1 && !tt.top[c] {
+		return ns[0][:strings.LastIndex(ns[0], "::")]
+	}
+	return ""
 }
 
 // inClass resolves t as written in a method of callerRecv: an alias the
@@ -1335,6 +1618,15 @@ func (tt *typeTable) inClass(t, callerRecv string) string {
 	}
 	if _, ok := tt.classAlias(t, callerRecv); ok {
 		return tt.inScope(t, callerRecv, 0) // aliases inside it too (std::array<MotorDriver, N>)
+	}
+	if head, rest, scoped := strings.Cut(t, "::"); scoped {
+		// typename Alias::Member with the class's own Alias: through it
+		if a, ok := tt.classAlias(head, callerRecv); ok {
+			if a == "" {
+				return "" // Alias is a template parameter: the instantiation's
+			}
+			return a + "::" + rest
+		}
 	}
 	return t
 }
@@ -1366,14 +1658,18 @@ func (tt *typeTable) inScope(t, c string, depth int) string {
 // is not the class template MotorDriver). An alias of a template
 // parameter's member type is the instantiation's: "".
 func (tt *typeTable) classAlias(t, cls string) (string, bool) {
-	for _, c := range tt.lineage(cls) {
+	cs, binds := tt.lineageBound(cls)
+	for i, c := range cs {
 		cf := tt.classes[c]
 		if cf == nil || len(cf.Aliases) == 0 {
 			continue
 		}
 		if a, ok := cf.Aliases[t]; ok {
-			if head, _, scoped := strings.Cut(a, "::"); scoped && containsStr(cf.TParams, head) {
-				return "", true
+			if head, _, _ := strings.Cut(a, "::"); containsStr(cf.TParams, head) {
+				if b := binds[i][head]; b != "" && !strings.Contains(a, "::") {
+					return b, true // using B = Param; in a base the class instantiates
+				}
+				return "", true // using B = Param; (or Param::X): the instantiation's
 			}
 			return a, true
 		}
@@ -1385,11 +1681,20 @@ func (tt *typeTable) classAlias(t, cls string) (string, bool) {
 // is one of its type parameters is the argument its instantiation passes
 // (using P = X<Real>; X<B> : B — P's base is Real).
 func (tt *typeTable) lineage(cls string) []string {
+	out, _ := tt.lineageBound(cls)
+	return out
+}
+
+// lineageBound is lineage with, for each class template on it, what its
+// type parameters are bound to there (nil: none known): CRTP's
+// Base<Derived> has T = Derived.
+func (tt *typeTable) lineageBound(cls string) ([]string, []map[string]string) {
 	type inst struct {
 		name string
 		args []string
 	}
 	var out []string
+	var binds []map[string]string
 	seen := map[string]bool{}
 	queue := []inst{{name: cls}}
 	for len(queue) > 0 {
@@ -1397,7 +1702,7 @@ func (tt *typeTable) lineage(cls string) []string {
 		queue = queue[1:]
 		name, args := tt.unscope(n.name), n.args
 		for i := 0; i < 8 && tt.classes[name] == nil; i++ {
-			a, ok := tt.aliases[name]
+			a, ok := tt.alias(name)
 			if !ok {
 				break
 			}
@@ -1412,6 +1717,7 @@ func (tt *typeTable) lineage(cls string) []string {
 		}
 		seen[c] = true
 		out = append(out, c)
+		binds = append(binds, nil)
 		cf := tt.classes[c]
 		if cf == nil {
 			continue
@@ -1440,6 +1746,14 @@ func (tt *typeTable) lineage(cls string) []string {
 			}
 			return t, nil
 		}
+		for _, p := range cf.TParams {
+			if b, _ := bind(p); b != p && b != "" {
+				if binds[len(binds)-1] == nil {
+					binds[len(binds)-1] = map[string]string{}
+				}
+				binds[len(binds)-1][p] = b
+			}
+		}
 		for _, b := range cf.Bases {
 			var bargs []string
 			for _, a := range cf.BaseArgs[b] {
@@ -1456,7 +1770,26 @@ func (tt *typeTable) lineage(cls string) []string {
 			queue = append(queue, inst{name: sibling(b), args: bargs})
 		}
 	}
-	return out
+	return out, binds
+}
+
+var (
+	reTypeWord = regexp.MustCompile(`[A-Za-z_]\w*`)
+	reScope    = regexp.MustCompile(`[A-Za-z_]\w*::`)
+)
+
+// substParams is type t with the template parameters m binds replaced
+// (T& with T = Derived is Derived; []T is []Derived).
+func substParams(t string, m map[string]string) string {
+	if len(m) == 0 || t == "" {
+		return t
+	}
+	return reTypeWord.ReplaceAllStringFunc(t, func(w string) string {
+		if b, ok := m[w]; ok {
+			return b
+		}
+		return w
+	})
 }
 
 func indexStr(xs []string, s string) int {
@@ -1488,9 +1821,15 @@ func (tt *typeTable) descendants(cls string) []string {
 
 // fieldType is the declared type of member field on cls or a base.
 func (tt *typeTable) fieldType(cls, field string) (string, bool) {
-	for _, c := range tt.lineage(cls) {
+	cs, binds := tt.lineageBound(cls)
+	for i, c := range cs {
 		if cf := tt.classes[c]; cf != nil {
 			if t, ok := cf.Fields[field]; ok {
+				if b := binds[i]; b != nil {
+					if s := substParams(t, b); s != t {
+						return s, true // a template base's field of a parameter's type
+					}
+				}
 				return tt.inScope(tt.ownNested(c, t), c, 0), true
 			}
 		}
@@ -1498,16 +1837,62 @@ func (tt *typeTable) fieldType(cls, field string) (string, bool) {
 	return "", false
 }
 
+// hasMember reports whether cls's lineage may define a method m: it
+// declares one, or a base is a class the repo does not define (a library's,
+// a template parameter) whose members are not known.
+func (tt *typeTable) hasMember(cls, m string) bool {
+	if tt.open(cls) {
+		return true
+	}
+	for _, c := range tt.lineage(cls) {
+		if tt.classes[c] == nil {
+			return true
+		}
+		if i := strings.LastIndex(c, "::"); i > 0 && tt.nested[c] {
+			c = c[i+2:]
+		}
+		if tt.members[c+"."+m] {
+			return true
+		}
+	}
+	return false
+}
+
+// funcReturn is the return type of the repo's free function name, when one
+// is declared; with scope set (ns::name), only a function declared in a
+// namespace ending in scope.
+func (tt *typeTable) funcReturn(name, scope string) string {
+	if scope != "" {
+		found := false
+		for _, ns := range tt.funcNS[name] {
+			if ns == scope || strings.HasSuffix(ns, "::"+scope) {
+				found = true
+			}
+		}
+		if !found {
+			return ""
+		}
+	}
+	return tt.funcReturns[name]
+}
+
 // methodReturn is the declared return type of cls.m on cls or a base (an
 // auto method returning a field: that field's type).
 func (tt *typeTable) methodReturn(cls, m string) string {
-	for _, c := range tt.lineage(cls) {
+	cs, binds := tt.lineageBound(cls)
+	for k, c := range cs {
 		if i := strings.LastIndex(c, "::"); i > 0 && tt.nested[c] {
 			c = c[i+2:] // a nested class's methods are recorded by its name
 		}
 		if t, ok := tt.returns[c+"."+m]; ok {
+			if b := binds[k]; b != nil && !strings.HasPrefix(t, "f:") && !strings.HasPrefix(t, "x:") {
+				if s := substParams(t, b); s != t {
+					return s // T& with() in a CRTP base Base<Derived>: Derived
+				}
+			}
 			if f, isField := strings.CutPrefix(t, "f:"); isField {
 				t, _ = tt.fieldType(c, f)
+				t = substParams(t, binds[k])
 			} else if x, isExpr := strings.CutPrefix(t, "x:"); isExpr {
 				if tt.depth > 4 {
 					return "" // a method's return evaluated through itself
@@ -1564,6 +1949,8 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 			t = tt.methodReturn(c, name)
 		} else if c := tt.canon(name); tt.classes[c] != nil {
 			t = c
+		} else if !externalScopes[scope] {
+			t = tt.funcReturn(name, scope) // ns::make(): what the repo's ns::make returns
 		}
 	case strings.HasPrefix(head, "t:"):
 		name := head[2:]
@@ -1571,6 +1958,11 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 			t = c
 		} else if callerRecv != "" {
 			t = tt.methodReturn(callerRecv, name)
+			if t == "" && !tt.hasMember(callerRecv, name) {
+				t = tt.funcReturn(name, "") // make() in a method: a free function
+			}
+		} else {
+			t = tt.funcReturn(name, "")
 		}
 	}
 	for _, op := range toks[1:] {
