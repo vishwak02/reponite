@@ -179,3 +179,52 @@ REGISTER(thing)
 		t.Errorf("b.get() is proven to Box<T>::get at line 3: %+v", e)
 	}
 }
+
+// Members a macro writes on one line share that line: each call carries its
+// definition's own name. A call through parentheses — ((obj).f)(…), as
+// googletest's EXPECT_CALL(obj, f) expands — has no callee name of its own
+// in clang; the member inside the parentheses is what it calls.
+func TestOwnerNamesAndParenthesizedCallee(t *testing.T) {
+	if err := Load(os.Getenv("REPONITE_LIBCLANG")); err != nil {
+		t.Skip(err)
+	}
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	src := filepath.Join(root, "rec/rec.cpp")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(src, []byte(`void write(int& s);
+void read(int& s);
+#define PERSIST(x) void save(int& s) const { write(s); } void load(int& s) { read(s); }
+struct Rec { PERSIST(a) int get(int k) const { return k; } };
+int use(const Rec& r) { return ((r).get)(1); }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Parse(root, src, []string{"-x", "c++", "-std=c++17"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := map[string]string{}
+	for _, c := range r.Calls {
+		if c.OwnerLine == 4 {
+			owners[c.Name] = c.OwnerName
+		}
+		if c.OwnerLine == 5 && c.Name == "get" && (c.Kind != 'B' || c.DeclLine != 4) {
+			t.Errorf("((r).get)(1) is bound to Rec::get: %+v", c)
+		}
+	}
+	if owners["write"] != "save" || owners["read"] != "load" {
+		t.Errorf("each call names its definition on the shared line: %v (%+v)", owners, r.Calls)
+	}
+	bound := false
+	for _, e := range link([]Result{r}, []string{MethodSynth}, nil) {
+		if e.CallerLine == 4 && e.Name == "read" && e.CallerName != "load" {
+			t.Errorf("an edge keeps its caller's name: %+v", e)
+		}
+		bound = bound || e.CallerLine == 5 && e.Name == "get" && e.CalleeLine == 4 && !e.Unbound
+	}
+	if !bound {
+		t.Error("the parenthesized call is proven")
+	}
+}

@@ -170,7 +170,7 @@ func (p *preciseFlags) driver(repo string) func(processing.PreciseSource) []proc
 		compdb := processing.PreciseUnit{Method: processing.MethodClang, Conf: processing.ConfClang}
 		synth := processing.PreciseUnit{Method: processing.MethodClangSynth, Conf: processing.ConfClangSynth}
 		for _, e := range out.Edges {
-			c := processing.PreciseCall{CallerPath: e.CallerPath, CallerLine: e.CallerLine, Name: e.Name,
+			c := processing.PreciseCall{CallerPath: e.CallerPath, CallerLine: e.CallerLine, CallerName: e.CallerName, Name: e.Name,
 				CalleePath: e.CalleePath, CalleeLine: e.CalleeLine, External: e.External, Unbound: e.Unbound, Virtual: e.Virtual,
 				RecvPath: e.RecvPath, RecvLine: e.RecvLine}
 			if e.Method == cxx.MethodCompdb {
