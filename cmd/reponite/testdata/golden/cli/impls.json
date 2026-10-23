@@ -1,0 +1,9 @@
+{
+  "base": "Order",
+  "impls": [],
+  "note": "no class at this ref derives from Order — check the name (the class, not a typedef), or the repo that implements it may not be indexed at the deployed ref — read [shop@HEAD]",
+  "_meta": {
+    "repo": "*",
+    "ref": "HEAD"
+  }
+}

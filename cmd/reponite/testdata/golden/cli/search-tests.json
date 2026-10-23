@@ -1,0 +1,20 @@
+[
+  {
+    "repo": "shop",
+    "name": "orders.Charge",
+    "ref": "HEAD",
+    "is_test": false
+  },
+  {
+    "repo": "shop",
+    "name": "orders.TestCharge",
+    "ref": "HEAD",
+    "is_test": true
+  },
+  {
+    "repo": "shop",
+    "name": "orders.TestChargeDeclined",
+    "ref": "HEAD",
+    "is_test": true
+  }
+]

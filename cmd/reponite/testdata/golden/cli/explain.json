@@ -1,0 +1,81 @@
+{
+  "target": "Charge",
+  "kind": "symbol",
+  "repo": "shop",
+  "ref": "HEAD",
+  "symbol": {
+    "symbol": "orders.Charge",
+    "repo": "shop",
+    "lang": "go",
+    "kind": "function",
+    "signature": "func Charge(o Order) error",
+    "doc": "Charge bills an order's card.",
+    "doc_line": 19,
+    "path": "orders/orders.go",
+    "start_line": 20,
+    "end_line": 26,
+    "exported": true,
+    "body": "func Charge(o Order) error {\n\tlog.Printf(\"charging order %s\", o.ID)\n\tif err := validateCard(o); err != nil {\n\t\treturn err\n\t}\n\treturn save(o)\n}",
+    "callers": [
+      {
+        "symbol": "server.handleOrders",
+        "path": "server/main.go",
+        "line": 17,
+        "resolution_method": "go-types",
+        "confidence": 1
+      }
+    ],
+    "callees": [
+      {
+        "symbol": "orders.save",
+        "path": "orders/orders.go",
+        "line": 37,
+        "resolution_method": "go-types",
+        "confidence": 1
+      },
+      {
+        "symbol": "orders.validateCard",
+        "path": "orders/orders.go",
+        "line": 28,
+        "resolution_method": "go-types",
+        "confidence": 1
+      },
+      {
+        "symbol": "Printf",
+        "resolution_method": "unresolved-external",
+        "confidence": 0.6,
+        "external": true
+      }
+    ],
+    "more_callers": 0,
+    "more_callees": 0,
+    "tests": [
+      {
+        "repo": "shop",
+        "path": "orders/orders_test.go",
+        "line": 5,
+        "in": "orders.TestCharge",
+        "calls": true
+      },
+      {
+        "repo": "shop",
+        "path": "orders/orders_test.go",
+        "line": 11,
+        "in": "orders.TestChargeDeclined",
+        "calls": true
+      }
+    ],
+    "edit": "reponite brief orders.Charge --repo shop   (full body + covering tests + compat, for editing)"
+  },
+  "truncated": false,
+  "next": [
+    "reponite brief orders.Charge --repo shop   (full body + covering tests + compat, for editing)",
+    "reponite explain server.handleOrders --repo shop   (a caller)",
+    "reponite usages Charge   (every call site with its line)",
+    "reponite blast-radius orders.Charge   (before changing it)"
+  ],
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

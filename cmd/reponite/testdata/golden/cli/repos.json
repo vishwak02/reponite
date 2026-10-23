@@ -1,0 +1,22 @@
+{
+  "repos": [
+    {
+      "repo": "shop",
+      "module": "example.com/shop",
+      "refs": [
+        {
+          "ref": "HEAD",
+          "symbols": 18,
+          "edges": 33,
+          "files": 7
+        },
+        {
+          "ref": "v1",
+          "symbols": 15,
+          "edges": 26,
+          "files": 6
+        }
+      ]
+    }
+  ]
+}

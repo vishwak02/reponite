@@ -1,0 +1,26 @@
+{
+  "symbol": "orders.Charge",
+  "repo": "shop",
+  "ref": "HEAD",
+  "path": "orders/orders.go",
+  "lines": "20-26",
+  "commits": [],
+  "total": 0,
+  "compat_history": [
+    {
+      "ref": "HEAD",
+      "present": true
+    },
+    {
+      "ref": "v1",
+      "present": true,
+      "verdict": "behavior_changed"
+    }
+  ],
+  "truncated": false,
+  "note": "ref HEAD was indexed from a working tree (no commit recorded); index it with --git to get history — compat history only",
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

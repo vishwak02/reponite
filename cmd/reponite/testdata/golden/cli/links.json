@@ -1,0 +1,12 @@
+{
+  "target": "orders/orders.go",
+  "refers_to": [],
+  "referred_by": [],
+  "note": "references written as data, not calls: path (a string resolving to a tracked file — relative, repo root, ROS package, Ansible role, unique suffix or unique file name), id (a large number or UUID defined as \"id\" in another file), template (Helm/Go-template include of a define), names-symbol (a configuration value naming a code symbol of the repo). Within one repo; resolved statically.",
+  "_meta": {
+    "Repo": "*",
+    "Ref": "HEAD",
+    "Warnings": null,
+    "Refs": null
+  }
+}

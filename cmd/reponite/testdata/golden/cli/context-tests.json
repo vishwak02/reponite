@@ -1,0 +1,49 @@
+{
+  "symbol": "orders.Charge",
+  "ref": "HEAD",
+  "callers": [
+    "orders.TestCharge",
+    "orders.TestChargeDeclined",
+    "server.handleOrders"
+  ],
+  "callees": [
+    "Printf",
+    "orders.save",
+    "orders.validateCard"
+  ],
+  "caller_edges": [
+    {
+      "name": "orders.TestCharge",
+      "is_test": true
+    },
+    {
+      "name": "orders.TestChargeDeclined",
+      "is_test": true
+    },
+    {
+      "name": "server.handleOrders",
+      "is_test": false
+    }
+  ],
+  "callee_edges": [
+    {
+      "name": "Printf",
+      "resolution_method": "unresolved-external",
+      "confidence": 0.6
+    },
+    {
+      "name": "orders.save",
+      "resolution_method": "go-types",
+      "confidence": 1
+    },
+    {
+      "name": "orders.validateCard",
+      "resolution_method": "go-types",
+      "confidence": 1
+    }
+  ],
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

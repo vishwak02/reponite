@@ -1,0 +1,9 @@
+{
+  "groups": [],
+  "endpoints": 0,
+  "note": "ROS communication graph: producers and consumers linked by the RUNTIME topic name (medium confidence). No launch files are indexed, so every name is taken as written — a remapped node will appear under its source name. A remap is associated to source by PACKAGE, which is a heuristic — a launch file names an executable, not a file — and a name remapped inconsistently within one package is reported launch-ambiguous rather than guessed. Producers can also live in packages that are not indexed at all; an empty producer list means none was FOUND, not that none exists. RPC/DDS wire topology is still inferred from source idioms only, names built by expressions no argument trace explains are counted unresolved, and msg_type is best-effort inference labeled by msg_type_source. — read [shop@HEAD]",
+  "_meta": {
+    "repo": "*",
+    "ref": "HEAD"
+  }
+}
