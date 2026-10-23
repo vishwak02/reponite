@@ -363,8 +363,10 @@ func jsImports(root content.AST) []ImportBinding {
 }
 
 // jsLoadedModule binds a module loaded into a variable: `const m = await
-// import('./m')` or `const m = require('./m')` (m's namespace), and
-// `const { a, b: c } = require('./m')` (its names).
+// import('./m')` or `const m = require('./m')` (m's namespace), `const {
+// a, b: c } = require('./m')` (its names), and `const [a, m] = await
+// Promise.all([import('./a'), import('./m')])` (each module's namespace, by
+// position).
 func jsLoadedModule(decl content.AST) []ImportBinding {
 	var target, value content.AST
 	for _, c := range decl.Children() {
@@ -386,27 +388,10 @@ func jsLoadedModule(decl content.AST) []ImportBinding {
 			}
 		}
 	}
-	if value.Type() != "call_expression" {
-		return nil
+	if target.Type() == "array_pattern" {
+		return jsLoadedModules(target, value)
 	}
-	var fn, args content.AST
-	for _, c := range value.Children() {
-		switch {
-		case c.Type() == "arguments":
-			args = c
-		case fn == nil && (c.Type() == "import" || c.Type() == "identifier"):
-			fn = c
-		}
-	}
-	if fn == nil || args == nil || fn.Type() == "identifier" && fn.Text() != "require" {
-		return nil
-	}
-	mod := ""
-	for _, a := range args.Children() {
-		if a.Type() == "string" {
-			mod = strings.Trim(a.Text(), "'\"`")
-		}
-	}
+	mod := jsLoadCall(value)
 	if mod == "" {
 		return nil
 	}
@@ -429,6 +414,60 @@ func jsLoadedModule(decl content.AST) []ImportBinding {
 		return out
 	}
 	return nil
+}
+
+// jsLoadCall is the module import('m') or require('m') loads; "" when
+// call is neither.
+func jsLoadCall(call content.AST) string {
+	if call.Type() != "call_expression" {
+		return ""
+	}
+	var fn, args content.AST
+	for _, c := range call.Children() {
+		switch {
+		case c.Type() == "arguments":
+			args = c
+		case fn == nil && (c.Type() == "import" || c.Type() == "identifier"):
+			fn = c
+		}
+	}
+	if fn == nil || args == nil || fn.Type() == "identifier" && fn.Text() != "require" {
+		return ""
+	}
+	mod := ""
+	for _, a := range args.Children() {
+		if a.Type() == "string" {
+			mod = strings.Trim(a.Text(), "'\"`")
+		}
+	}
+	return mod
+}
+
+// jsLoadedModules binds `[a, m] = await Promise.all([import('./a'),
+// import('./m')])`: each name the namespace of the module at its position.
+func jsLoadedModules(target, value content.AST) []ImportBinding {
+	k := namedKids(value)
+	if value.Type() != "call_expression" || len(k) != 2 || strings.ReplaceAll(k[0].Text(), " ", "") != "Promise.all" {
+		return nil
+	}
+	args := namedKids(k[1])
+	if len(args) != 1 || args[0].Type() != "array" {
+		return nil
+	}
+	loads := namedKids(args[0])
+	var out []ImportBinding
+	i := 0
+	for _, c := range target.Children() {
+		switch {
+		case c.Type() == ",":
+			i++ // [, m]: a hole skips a position
+		case c.Type() == "identifier" && i < len(loads):
+			if mod := jsLoadCall(loads[i]); mod != "" {
+				out = append(out, ImportBinding{Local: c.Text(), Module: mod})
+			}
+		}
+	}
+	return out
 }
 
 func jsImportStatement(stmt content.AST) []ImportBinding {

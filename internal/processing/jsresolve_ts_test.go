@@ -327,3 +327,24 @@ export class Panel extends Widget {
 		}
 	}
 }
+
+// const [a, store] = await Promise.all([import('./a'), import('./store')]):
+// each name is the module loaded at its position.
+func TestTSDynamicImportsInPromiseAll(t *testing.T) {
+	files := map[string]string{
+		"src/store/index.ts": `export const createStore = () => 1;`,
+		"src/main.ts":        `export const createStore = () => 2; export const start = () => 3;`,
+		"src/app.ts": `export async function boot() {
+  const [mainModule, , storeModule] = await Promise.all([import('./main'), import('./i18n'), import('./store')]);
+  mainModule.start();
+  storeModule.createStore();
+}`,
+	}
+	edges := indexAndEdges(t, files)
+	b := edges["src.app.boot"]
+	wantMethod(t, b, "src/store.createStore", MethodResolved)
+	wantMethod(t, b, "src.main.start", MethodResolved)
+	if _, bad := b["src.main.createStore"]; bad {
+		t.Errorf("pinned on src.main: %v", b)
+	}
+}
