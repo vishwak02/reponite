@@ -1,6 +1,7 @@
 package processing
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -21,6 +22,9 @@ const (
 	pyPathTag  = "f:" // f:<dotted path>: the value a name or attribute path holds (x = y, x = a.b)
 	pySelfRet  = "s:" // a method's return: an instance of the class it is called on (return cls(...), return self)
 	pyLocalTag = "l:" // a local name of unknown type: it shadows a global of that name
+	pyUnionTag = "u:" // u:<dotted class>,<dotted class>...: an instance of one of them
+	pyTupleTag = "j:" // j:<value>\x1e<value>...: a tuple of those values
+	pyItemTag  = "y:" // y:<i>:<value>: item i of a tuple value (a, b = f())
 	// pyNestedTag marks a name only a function nested in this one binds (its
 	// parameter, say): calls on it are not typed, a bare call of it in the
 	// function itself is the module's
@@ -246,7 +250,72 @@ func pyTypeEnc(t content.AST) string {
 	if e := pyElemRef(t); e != "" {
 		return pyElemTag + e
 	}
-	return pyCallableRef(t)
+	if c := pyCallableRef(t); c != "" {
+		return c
+	}
+	if u := pyUnionRefs(t); len(u) > 1 {
+		return pyUnionTag + strings.Join(u, ",")
+	}
+	return ""
+}
+
+// pyUnionRefs are the classes a union annotation names: A | B (| None),
+// Union[A, B], Optional[Union[A, B]], Annotated[A | B, ...]; nil unless
+// every member other than None names a class.
+func pyUnionRefs(t content.AST) []string {
+	t = firstNamed(t)
+	if t == nil {
+		return nil
+	}
+	var members []content.AST
+	var collect func(n content.AST) bool
+	collect = func(n content.AST) bool {
+		n = firstNamed(n)
+		if n == nil {
+			return false
+		}
+		switch n.Type() {
+		case "none":
+			return true
+		case "binary_operator":
+			k := namedKids(n)
+			if len(k) != 2 {
+				return false
+			}
+			return collect(k[0]) && collect(k[1])
+		case "subscript", "generic_type":
+			h, args := pyTypeHead(n)
+			if len(h) > 0 {
+				switch h[len(h)-1] {
+				case "Union":
+					for _, a := range args {
+						if !collect(a) {
+							return false
+						}
+					}
+					return true
+				case "Optional", "Annotated":
+					if len(args) > 0 {
+						return collect(args[0])
+					}
+				}
+			}
+		}
+		members = append(members, n)
+		return true
+	}
+	if !collect(t) {
+		return nil
+	}
+	var out []string
+	for _, m := range members {
+		r := pyTypeRef(m)
+		if r == "" {
+			return nil
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // pyTypeHead splits a generic type or subscript into its head's dotted name
@@ -294,8 +363,8 @@ func pyCallableRef(t content.AST) string {
 		return ""
 	}
 	switch h[len(h)-1] {
-	case "Optional":
-		if len(args) == 1 {
+	case "Optional", "Annotated":
+		if len(args) >= 1 {
 			return pyCallableRef(args[0])
 		}
 	case "Callable":
@@ -346,6 +415,24 @@ func pyExprEnc(v content.AST) string {
 		if parts := dottedRef(v); len(parts) > 0 {
 			return pyPathTag + strings.Join(parts, ".")
 		}
+	case "expression_list", "tuple":
+		// return a, b / x = (a, b): a tuple of what each item is
+		var items []string
+		known := false
+		for _, k := range namedKids(v) {
+			if k.Type() == "list_splat" || k.Type() == "parenthesized_list_splat" {
+				return ""
+			}
+			e := pyExprEnc(k)
+			if strings.Contains(e, pyTupleSep) {
+				e = "" // a tuple in a tuple: not followed
+			}
+			known = known || e != ""
+			items = append(items, e)
+		}
+		if known && len(items) > 1 {
+			return pyTupleTag + strings.Join(items, pyTupleSep)
+		}
 	case "conditional_expression":
 		// a if c else b: one value when both branches are
 		if k := namedKids(v); len(k) == 3 {
@@ -355,6 +442,35 @@ func pyExprEnc(v content.AST) string {
 		}
 	}
 	return ""
+}
+
+// pyTupleSep separates the items of a pyTupleTag value.
+const pyTupleSep = "\x1e"
+
+// pyTupleRef encodes a tuple[A, B] annotation as a tuple of those classes
+// (tuple[A, ...] is a sequence: pyElemRef).
+func pyTupleRef(t content.AST) string {
+	h, args := pyTypeHead(t)
+	if len(h) == 0 || h[len(h)-1] != "tuple" && h[len(h)-1] != "Tuple" || len(args) < 2 {
+		return ""
+	}
+	var items []string
+	known := false
+	for _, a := range args {
+		if a.Type() == "ellipsis" || strings.TrimSpace(a.Text()) == "..." {
+			return ""
+		}
+		e := pyTypeEnc(a)
+		if strings.Contains(e, pyTupleSep) {
+			e = ""
+		}
+		known = known || e != ""
+		items = append(items, e)
+	}
+	if !known {
+		return ""
+	}
+	return pyTupleTag + strings.Join(items, pyTupleSep)
 }
 
 // pyModule is a module's facts with what reading them needs.
@@ -373,7 +489,8 @@ type pyVal struct {
 	name  string // pyModuleV: its dotted name as imported, from file
 	from  string
 	ret   string // pyCallableV: what calling it gives, in rctx
-	rctx  *pyCtx
+	rctx  *pyCtx // pyCallableV, pyTupleV: where ret or items are written
+	items []string // pyTupleV: each item's value
 	fn    string // pyFuncV: the function's qid
 }
 
@@ -383,6 +500,7 @@ const (
 	pyModuleV   byte = 'm'
 	pyCallableV byte = 'f'
 	pyFuncV     byte = 'q'
+	pyTupleV    byte = 'j'
 )
 
 // eval is the value an encoded var type stands for, in ctx c.
@@ -428,6 +546,20 @@ func (p *pyTyper) eval(c pyCtx, v string, depth int) pyVal {
 		}
 	case pyPathTag:
 		return p.pathVal(c, rest, depth+1)
+	case pyTupleTag:
+		cc := c
+		return pyVal{kind: pyTupleV, items: strings.Split(rest, pyTupleSep), rctx: &cc}
+	case pyItemTag:
+		i, enc, ok := strings.Cut(rest, ":")
+		n, err := strconv.Atoi(i)
+		if !ok || err != nil {
+			return pyVal{}
+		}
+		if t := p.eval(c, enc, depth+1); t.kind == pyTupleV && n < len(t.items) && t.items[n] != "" {
+			r := p.eval(*t.rctx, t.items[n], depth+1)
+			r.exact = false
+			return r
+		}
 	}
 	return pyVal{}
 }
@@ -808,16 +940,7 @@ func (p *pyTyper) inferredSite(c pyCtx, qc QualifiedCall) (CallSite, bool) {
 	p.cut = false
 	switch recv.kind {
 	case pyInst:
-		if _, ok := p.classes.method(recv.cls, qc.Name, false, p.allDefs); !ok {
-			// a field holding a class: calling it constructs that class
-			if f := p.fieldVal(recv.cls, qc.Name, 0); f.kind == pyClassV {
-				return CallSite{Name: p.classes.name[f.cls], Kind: CallModule, Scope: p.classes.pkg[f.cls]}, true
-			}
-		}
-		if recv.exact {
-			return CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassNew + recv.cls}, true
-		}
-		return CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassScope + recv.cls}, true
+		return p.instanceSite(recv.cls, recv.exact, qc.Name), true
 	case pyClassV:
 		if recv.exact {
 			return CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassExact + recv.cls}, true

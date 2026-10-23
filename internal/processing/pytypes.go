@@ -2,6 +2,7 @@ package processing
 
 import (
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/vishwak02/reponite/internal/content"
@@ -75,7 +76,7 @@ func pyElemRef(t content.AST) string {
 			return ""
 		}
 		switch last := h[len(h)-1]; {
-		case last == "Optional" && len(args) == 1:
+		case last == "Optional" && len(args) == 1, last == "Annotated":
 			return pyElemRef(args[0])
 		case pyContainers[last]:
 			if last == "tuple" || last == "Tuple" {
@@ -169,6 +170,12 @@ func pyTypeRef(t content.AST) string {
 		}
 		if head != nil && len(args) == 1 {
 			if h := dottedRef(head); len(h) > 0 && h[len(h)-1] == "Optional" {
+				return pyTypeRef(args[0])
+			}
+		}
+		if head != nil && len(args) > 0 {
+			// Annotated[X, metadata...] is X
+			if h := dottedRef(head); len(h) > 0 && h[len(h)-1] == "Annotated" {
 				return pyTypeRef(args[0])
 			}
 		}
@@ -295,9 +302,21 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 			continue
 		}
 		if left.Type() != "identifier" {
-			for _, id := range pyTargetNames(left) {
-				if _, ok := vars[id]; !ok {
-					vars[id] = pyLocalTag // a, b = ...: locals of unknown type
+			// a, b = f(): item i of what the value is
+			names := pyTargetNames(left)
+			v := ""
+			if (left.Type() == "pattern_list" || left.Type() == "tuple_pattern") && len(names) == len(namedKids(left)) {
+				v = pyExprEnc(right)
+			}
+			for i, id := range names {
+				switch {
+				case annotated[id]:
+				case v != "" && !strings.Contains(v, pyPathTag+id):
+					vars[id] = pyItemTag + strconv.Itoa(i) + ":" + v
+				default:
+					if _, ok := vars[id]; !ok {
+						vars[id] = pyLocalTag // locals of unknown type
+					}
 				}
 			}
 			continue
@@ -333,22 +352,35 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 		}
 	}
 	// for x in xs / [f(x) for x in xs]: x is an element of what xs holds
+	// (two loops of one name over different values — a comprehension has
+	// its own scope — make it unknown)
+	loops := map[string]string{}
 	for _, l := range descendantsAny(body, []string{"for_statement", "for_in_clause"}) {
 		left, right := pyLoopParts(l)
 		if left == nil || left.Type() != "identifier" || right == nil {
 			continue
 		}
-		if t, typed := vars[left.Text()]; typed && t != pyLocalTag {
-			continue
-		}
+		name := left.Text()
+		v := ""
 		switch {
 		case right.Type() == "identifier":
-			vars[left.Text()] = pyIterTag + "v:" + right.Text()
+			v = pyIterTag + "v:" + right.Text()
 		case right.Type() == "call":
-			if v := pyValueType(right); strings.HasPrefix(v, pyReturnTag) {
-				vars[left.Text()] = pyIterTag + v
+			if r := pyValueType(right); strings.HasPrefix(r, pyReturnTag) {
+				v = pyIterTag + r
 			}
 		}
+		if prev, seen := loops[name]; seen {
+			if prev != v && vars[name] == prev {
+				vars[name] = pyLocalTag
+			}
+			continue
+		}
+		loops[name] = v
+		if t, typed := vars[name]; typed && t != pyLocalTag || v == "" {
+			continue
+		}
+		vars[name] = v
 	}
 	pyMarkLocals(body, vars)
 	// a name only a nested function or lambda binds is that scope's: in the
@@ -504,7 +536,10 @@ func pyReturnType(fn content.AST, fixture bool) string {
 				}
 				return pyElemTag + e // -> list[Order]
 			}
-			return pyCallableRef(c) // -> Callable[..., Order]
+			if f := pyCallableRef(c); f != "" {
+				return f // -> Callable[..., Order]
+			}
+			return pyTupleRef(c) // -> tuple[Order, Line]
 		}
 	}
 	if body == nil || gen && !fixture {
@@ -682,6 +717,7 @@ func pyClassFields(class content.AST) map[string]string {
 	if body == nil {
 		return fields
 	}
+	declared := map[string]bool{} // annotated at class level (x: Repo): what is assigned does not change it
 	for _, st := range body.Children() {
 		if st.Type() != "expression_statement" {
 			continue
@@ -696,11 +732,28 @@ func pyClassFields(class content.AST) map[string]string {
 			}
 			if t := pyTypeEnc(typ); t != "" {
 				fields[left.Text()] = t
+				declared[left.Text()] = true
 			} else if v := pyValueType(right); strings.HasPrefix(v, pyTypeTag) {
 				fields[left.Text()] = v
 			} else if right != nil && (right.Type() == "identifier" || right.Type() == "attribute") {
 				if parts := dottedRef(right); len(parts) > 0 && isTypeName(parts[len(parts)-1]) {
 					fields[left.Text()] = pyClassObj + strings.Join(parts, ".")
+				}
+			}
+		}
+	}
+	// @property def x(self) -> Repo: reading x calls it
+	if cname := firstChildAny(class, []string{"identifier"}); cname != nil {
+		for _, st := range body.Children() {
+			if st.Type() != "decorated_definition" || !pyIsProperty(st) {
+				continue
+			}
+			if fn := firstChildAny(st, []string{"function_definition"}); fn != nil {
+				if id := firstChildAny(fn, []string{"identifier"}); id != nil {
+					if _, ok := fields[id.Text()]; !ok {
+						fields[id.Text()] = pyMethodTag + cname.Text() + "#" + id.Text()
+						declared[id.Text()] = true
+					}
 				}
 			}
 		}
@@ -722,7 +775,7 @@ func pyClassFields(class content.AST) map[string]string {
 				walk(ch, nil)
 				continue
 			case "assignment":
-				pyFieldAssign(fields, ch, mv)
+				pyFieldAssign(fields, declared, ch, mv)
 			}
 			walk(ch, mv)
 		}
@@ -736,15 +789,34 @@ func pyClassFields(class content.AST) map[string]string {
 	return fields
 }
 
+// pyIsProperty: a decorated method read as an attribute (@property,
+// @cached_property, @functools.cached_property).
+func pyIsProperty(d content.AST) bool {
+	for _, c := range d.Children() {
+		if c.Type() != "decorator" {
+			continue
+		}
+		k := namedKids(c)
+		if len(k) == 0 {
+			continue
+		}
+		parts := dottedRef(k[0])
+		if len(parts) > 0 && (parts[len(parts)-1] == "property" || parts[len(parts)-1] == "cached_property") {
+			return true
+		}
+	}
+	return false
+}
+
 // pyFieldAssign records one self.x = ... of a class's method, whose own var
 // types are mv.
-func pyFieldAssign(fields map[string]string, a content.AST, mv map[string]string) {
+func pyFieldAssign(fields map[string]string, declared map[string]bool, a content.AST, mv map[string]string) {
 	left, typ, right := pyAssignParts(a)
 	if left == nil || left.Type() != "attribute" {
 		return
 	}
 	parts := dottedRef(left)
-	if len(parts) != 2 || parts[0] != "self" {
+	if len(parts) != 2 || parts[0] != "self" || declared[parts[1]] {
 		return
 	}
 	v := ""
@@ -1144,15 +1216,22 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 			if qc.Result && qc.Chain == 4 && qc.Attr != "" {
 				// User.lookup(x).validate(): the method lookup returns, on the
 				// class (Cls.make()) or on a typed value (repo.find())
-				owner := ""
+				owner, ownerExact := "", false
 				if ok {
-					owner = p.valueClass(c, v)
+					if val := p.top(c, v); val.kind == pyInst || val.kind == pyClassV {
+						owner, ownerExact = val.cls, val.exact
+					}
 				} else if isTypeName(qc.Qualifier) {
-					owner = p.class(c, qc.Qualifier)
+					owner, ownerExact = p.class(c, qc.Qualifier), true
 				}
 				if owner != "" {
 					if q, found := p.classes.method(owner, qc.Attr, false, p.allDefs); found {
-						cls = p.returnClass(q)
+						saved := p.cut
+						if r := p.returnVal(q, owner, ownerExact, 0); r.kind == pyInst {
+							// return cls(...) on Cls itself: exactly Cls
+							cls, exact, chain = r.cls, r.exact, 2
+						}
+						p.cut = saved
 					}
 				}
 				break
@@ -1175,6 +1254,19 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 			}
 			if !ok {
 				break
+			}
+			if u, isUnion := strings.CutPrefix(v, pyUnionTag); isUnion && chain == 2 {
+				// x: A | B: the method of whichever class it is
+				var sites []CallSite
+				for _, m := range strings.Split(u, ",") {
+					if k := p.class(c, m); k != "" {
+						sites = append(sites, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassScope + k})
+					}
+				}
+				if len(sites) > 0 {
+					typed = append(typed, sites...)
+					continue
+				}
 			}
 			if ext := p.externalValue(c, v); ext != "" {
 				// a library object's method (or its attribute's: spinner.green.ok()),
@@ -1210,15 +1302,29 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 			rest = append(rest, qc)
 			continue
 		}
-		if exact && chain == 2 {
-			// an instance the function constructs is that class, never a
-			// subclass: no override can run in its place
-			typed = append(typed, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassNew + cls})
-			continue
-		}
-		typed = append(typed, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassScope + cls})
+		typed = append(typed, p.instanceSite(cls, exact && chain == 2, qc.Name))
 	}
 	return rest, typed
+}
+
+// instanceSite is the call of name on an instance of class cls (exactly
+// that class, or it or a subclass): its method — or, when the class holds a
+// class there instead (factory = OrderFactory), that class's constructor.
+func (p *pyTyper) instanceSite(cls string, exact bool, name string) CallSite {
+	if _, ok := p.classes.method(cls, name, false, p.allDefs); !ok {
+		saved := p.cut
+		f := p.fieldVal(cls, name, 0)
+		p.cut = saved
+		if f.kind == pyClassV {
+			return CallSite{Name: p.classes.name[f.cls], Kind: CallModule, Scope: p.classes.pkg[f.cls]}
+		}
+	}
+	if exact {
+		// an instance the function constructs is that class, never a
+		// subclass: no override can run in its place
+		return CallSite{Name: name, Kind: CallTyped, Scope: pyClassNew + cls}
+	}
+	return CallSite{Name: name, Kind: CallTyped, Scope: pyClassScope + cls}
 }
 
 // ownDescendants are the nodes of the given types in n that belong to n's

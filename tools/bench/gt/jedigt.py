@@ -126,11 +126,20 @@ def main():
                     targets = jedi.Script(src, path=full, project=project).goto(line, col, follow_imports=True)
             except Exception:  # jedi gives up on some constructs
                 targets = []
+            # a parameter (cls(...) in a classmethod, call_next(request)):
+            # goto stops at its name, on the def line, which by_place would
+            # read as the enclosing function itself; what it holds is the
+            # caller's value, so the call is undetermined
+            targets = [t for t in targets if t.type != "param"]
             if targets and all(t.type == "statement" for t in targets):
                 # a name bound by assignment (`_aggs = es.aggs`, a tuple of
                 # them): goto stops at the assignment, the value is the callee
                 try:
                     inferred = script.infer(line, col)
+                    if not inferred:
+                        # as for goto: a fresh script may name what the
+                        # shared one's built-up state gave up on
+                        inferred = jedi.Script(src, path=full, project=project).infer(line, col)
                 except Exception:
                     inferred = []
                 if inferred and all(t.type in ("function", "class") for t in inferred):
