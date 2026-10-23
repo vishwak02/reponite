@@ -413,7 +413,18 @@ func scanCode(src string, fn func(start, end int) int) {
 				j++
 			}
 			if j < len(src) && (src[j] == '"' || src[j] == '\'') && isLiteralPrefix(src[i:j]) {
-				i = j // u8"…", L'x', R"(…)": the literal is read next
+				if strings.HasSuffix(src[i:j], "R") && src[j] == '"' {
+					// R"d( … )d": nothing inside ends it but )d"
+					if open := strings.IndexByte(src[j:], '('); open > 0 {
+						if k := strings.Index(src[j+open:], ")"+src[j+1:j+open]+"\""); k >= 0 {
+							i = j + open + k + open + 1
+							continue
+						}
+					}
+					i = len(src)
+					continue
+				}
+				i = j // u8"…", L'x': the literal is read next
 				continue
 			}
 			i = max(fn(i, j), j)

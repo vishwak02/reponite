@@ -225,3 +225,21 @@ func TestSubstituteMacroVariadicComma(t *testing.T) {
 		t.Errorf("__VA_OPT__ empty: %q", got)
 	}
 }
+
+func TestScanCodeSkipsLiteralsAndDirectives(t *testing.T) {
+	src := "#define A(x) \\\n  B(x)\nint f() { /* C */ auto s = R\"q(D \" E)q\"; // F\n return G(\"H\", 'I'); }\n"
+	var got []string
+	scanCode(src, func(start, end int) int {
+		got = append(got, src[start:end])
+		return end
+	})
+	want := []string{"int", "f", "auto", "s", "return", "G"}
+	if len(got) != len(want) {
+		t.Fatalf("identifiers %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("identifiers %v, want %v", got, want)
+		}
+	}
+}
