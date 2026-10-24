@@ -1,52 +1,47 @@
 // A searchable repo picker: the fleet runs to a hundred-plus repos, too many
-// for a plain select.
-import { useState } from "react";
-import * as Popover from "@radix-ui/react-popover";
-import { Command } from "cmdk";
-import { Check, ChevronsUpDown, FolderGit2 } from "lucide-react";
+// for a plain select. The list (a popover over cmdk) loads the first time the
+// button is pointed at, focused or clicked, so it stays out of the app shell.
+import { lazy, Suspense, useState } from "react";
+import { ChevronsUpDown } from "lucide-react";
 import { useScope } from "@/lib/scope";
-import { cn, fmt, tint } from "@/lib/utils";
+import { tint } from "@/lib/utils";
+
+const loadMenu = () => import("./RepoMenu");
+const RepoMenu = lazy(loadMenu);
 
 export function RepoPicker() {
-  const { repos, repo, setRepo, overview } = useScope();
+  const { repo } = useScope();
   const [open, setOpen] = useState(false);
-  const syms = new Map(overview.map((o) => [o.repo, Math.max(0, ...o.refs.map((r) => r.symbols ?? 0))]));
+  const [wanted, setWanted] = useState(false);
+  const want = () => {
+    loadMenu();
+    setWanted(true);
+  };
+  const button = (loaded: boolean) => (
+    <button
+      onPointerEnter={loaded ? undefined : want}
+      onFocus={loaded ? undefined : want}
+      onClick={
+        loaded
+          ? undefined
+          : () => {
+              want();
+              setOpen(true);
+            }
+      }
+      aria-label="Choose repository"
+      className="flex h-8 min-w-[180px] max-w-[260px] items-center gap-2 rounded-md border border-input bg-card px-2.5 text-sm shadow-sm hover:bg-muted"
+    >
+      <span className="size-2 shrink-0 rounded-full" style={{ background: repo ? tint(repo) : undefined }} />
+      <span className="truncate font-medium">{repo || "Select repo"}</span>
+      <ChevronsUpDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
+    </button>
+  );
+  if (!wanted) return button(false);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <button className="flex h-8 min-w-[180px] max-w-[260px] items-center gap-2 rounded-md border border-input bg-card px-2.5 text-sm shadow-sm hover:bg-muted">
-          <span className="size-2 shrink-0 rounded-full" style={{ background: repo ? tint(repo) : undefined }} />
-          <span className="truncate font-medium">{repo || "Select repo"}</span>
-          <ChevronsUpDown className="ml-auto size-3.5 shrink-0 text-muted-foreground" />
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content align="start" sideOffset={6} className="z-50 w-[320px] overflow-hidden rounded-lg border bg-popover shadow-xl animate-fade-in">
-          <Command>
-            <Command.Input autoFocus placeholder={`Filter ${repos.length} repos…`} className="h-10 w-full border-b bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground" />
-            <Command.List className="max-h-[360px] overflow-y-auto p-1">
-              <Command.Empty className="px-3 py-6 text-center text-sm text-muted-foreground">No repo matches.</Command.Empty>
-              {repos.map((r) => (
-                <Command.Item
-                  key={r}
-                  value={r}
-                  onSelect={() => {
-                    setRepo(r);
-                    setOpen(false);
-                  }}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm data-[selected=true]:bg-muted"
-                >
-                  <FolderGit2 className="size-3.5" style={{ color: tint(r) }} />
-                  <span className="truncate">{r}</span>
-                  <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{fmt(syms.get(r))}</span>
-                  <Check className={cn("size-3.5", r === repo ? "opacity-100" : "opacity-0")} />
-                </Command.Item>
-              ))}
-            </Command.List>
-          </Command>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+    <Suspense fallback={button(false)}>
+      <RepoMenu open={open} setOpen={setOpen} trigger={button(true)} />
+    </Suspense>
   );
 }
 

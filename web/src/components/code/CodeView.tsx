@@ -2,8 +2,9 @@
 // largest dependency), and each language mode only when a file needs it.
 import { useEffect, useState } from "react";
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
-import { Decoration, lineNumbers, type DecorationSet } from "@codemirror/view";
-import { RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
+import { Decoration, gutter, GutterMarker, lineNumbers, type DecorationSet } from "@codemirror/view";
+import { RangeSet, RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
+import type { CallSite } from "@/lib/callsites";
 import { langFor, type Lang } from "@/lib/lang";
 import { useScope } from "@/lib/scope";
 
@@ -53,7 +54,38 @@ function markLines(from: number, to: number): Extension {
   return field;
 }
 
-export default function CodeView({ code, path, firstLine = 1, maxHeight = "70vh", mark, editable, onChange }: { code: string; path: string; firstLine?: number; maxHeight?: string; mark?: [number, number]; editable?: boolean; onChange?: (v: string) => void }) {
+// a dot in the gutter at each call site, coloured by the edge's provenance
+class CallMarker extends GutterMarker {
+  constructor(readonly site: CallSite) {
+    super();
+  }
+  eq(o: CallMarker) {
+    return o.site.tier === this.site.tier && o.site.title === this.site.title;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-callsite cm-callsite-" + this.site.tier;
+    el.title = this.site.title;
+    return el;
+  }
+}
+
+// sites' lines are absolute; the shown text starts at firstLine
+function callGutter(sites: CallSite[], firstLine: number): Extension {
+  return gutter({
+    class: "cm-callgutter",
+    markers: (view) => {
+      const b = new RangeSetBuilder<GutterMarker>();
+      for (const s of [...sites].sort((a, z) => a.line - z.line)) {
+        const n = s.line - firstLine + 1;
+        if (n >= 1 && n <= view.state.doc.lines) b.add(view.state.doc.line(n).from, view.state.doc.line(n).from, new CallMarker(s));
+      }
+      return b.finish() as RangeSet<GutterMarker>;
+    },
+  });
+}
+
+export default function CodeView({ code, path, firstLine = 1, maxHeight = "70vh", mark, editable, onChange, sites }: { code: string; path: string; firstLine?: number; maxHeight?: string; mark?: [number, number]; editable?: boolean; onChange?: (v: string) => void; sites?: CallSite[] }) {
   const { dark } = useScope();
   const mode = useMode(path);
   return (
@@ -71,7 +103,7 @@ export default function CodeView({ code, path, firstLine = 1, maxHeight = "70vh"
       readOnly={!editable}
       maxHeight={maxHeight}
       basicSetup={{ lineNumbers: false, foldGutter: true, highlightActiveLine: false, highlightActiveLineGutter: false }}
-      extensions={[...mode, lineNumbers({ formatNumber: (n) => String(n + firstLine - 1) }), EditorView.lineWrapping, ...(mark ? [markLines(mark[0], mark[1])] : [])]}
+      extensions={[...mode, ...(sites?.length ? [callGutter(sites, firstLine)] : []), lineNumbers({ formatNumber: (n) => String(n + firstLine - 1) }), EditorView.lineWrapping, ...(mark ? [markLines(mark[0], mark[1])] : [])]}
     />
   );
 }

@@ -17,6 +17,8 @@ const answers: Record<string, unknown> = {
   topics: { groups: [], endpoints: 0 },
   links: { target: "", refers_to: [], referred_by: [] },
   brief: { symbol: "orders.Charge", ref: "HEAD", target: { name: "Charge", path: "orders/orders.go", start_line: 20, end_line: 26 }, callers: [], callees: [] },
+  "v2/explain": { target: "orders.Charge", kind: "symbol", repo: "shop", ref: "HEAD", symbol: { symbol: "orders.Charge", repo: "shop", kind: "function", path: "orders/orders.go", start_line: 20, end_line: 26, callers: [{ symbol: "server.handleOrders", path: "server/main.go", line: 17, resolution_method: "go-types", confidence: 1 }], callees: [] } },
+  "v2/investigate": { question: "q", findings: [{ repo: "shop", path: "orders/orders.go", symbol: "orders.Charge", line: 20, score: 0.5 }] },
 };
 
 function stubFetch() {
@@ -75,7 +77,10 @@ describe("pages", () => {
     ["/diff", "Diff", null],
     ["/verify", "Verify an edit", null],
     ["/symbol", "Symbol", null],
-    ["/symbol?repo=shop&ref=HEAD&s=orders.Charge", "Charge", "brief"],
+    ["/symbol?repo=shop&ref=HEAD&s=orders.Charge", "Charge", "v2/explain"],
+    ["/ask", "Ask", null],
+    ["/ask?q=how+is+an+order+charged", "Ask", "v2/investigate"],
+    ["/flow?entry=POST+%2Forders", "Flow", null],
     ["/graph", "Call graph", null],
   ] as const) {
     it(`${path} renders`, async () => {

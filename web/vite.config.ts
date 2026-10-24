@@ -9,12 +9,19 @@ import react from "@vitejs/plugin-react";
 // only by the pages that use it; CodeMirror's language modes stay out of it,
 // so each is its own chunk, fetched for the file being shown.
 const LAZY_UI = new Set(["@radix-ui/react-tabs", "@radix-ui/react-roving-focus", "@radix-ui/react-collection", "@radix-ui/react-direction"]);
+// The command menus (the ⌘K palette and the repo picker's list) and what only
+// they use: loaded on first use, not with the shell.
+const MENU = new Set([
+  "cmdk", "@radix-ui/react-dialog", "@radix-ui/react-popover", "@radix-ui/react-focus-guards", "@radix-ui/react-focus-scope",
+  "react-remove-scroll", "react-remove-scroll-bar", "aria-hidden", "use-sidecar", "use-callback-ref", "react-style-singleton", "get-nonce", "tslib",
+]);
 const VENDOR: [string, (pkg: string) => boolean][] = [
   ["react", (p) => ["react", "react-dom", "scheduler", "react-router", "react-router-dom", "@remix-run/router", "use-sync-external-store"].includes(p)],
   ["query", (p) => p.startsWith("@tanstack/")],
-  // the shell's popover, tooltip and command menu (the Symbol page's tabs load
-  // with that page)
-  ["ui", (p) => (p.startsWith("@radix-ui/") && !LAZY_UI.has(p)) || p.startsWith("@floating-ui/") || ["cmdk", "react-remove-scroll", "react-remove-scroll-bar", "aria-hidden", "use-sidecar", "use-callback-ref", "react-style-singleton", "get-nonce", "tslib"].includes(p)],
+  // the shell's tooltip and the primitives the menus share with it (the
+  // Symbol page's tabs load with that page)
+  ["ui", (p) => (p.startsWith("@radix-ui/") && !LAZY_UI.has(p) && !MENU.has(p)) || p.startsWith("@floating-ui/")],
+  ["menu", (p) => MENU.has(p)],
   ["codemirror", (p) => (p.startsWith("@codemirror/") && !p.startsWith("@codemirror/lang-")) || p.startsWith("@uiw/") || ["@lezer/common", "@lezer/highlight", "@lezer/lr", "style-mod", "w3c-keyname", "crelt"].includes(p)],
   ["flow", (p) => p.startsWith("@xyflow/") || p.startsWith("d3-") || ["zustand", "classcat"].includes(p)],
   ["sigma", (p) => p === "sigma" || p.startsWith("graphology")],

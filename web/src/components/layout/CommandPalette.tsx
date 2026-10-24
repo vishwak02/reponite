@@ -5,10 +5,10 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
-import { Braces, CornerDownLeft, FlaskConical, Search } from "lucide-react";
+import { Braces, CornerDownLeft, FlaskConical, Search, Sparkles } from "lucide-react";
 import { searchSymbols } from "@/lib/api";
 import { useScope } from "@/lib/scope";
-import { symbolHref } from "@/lib/routes";
+import { askHref, symbolHref } from "@/lib/routes";
 import { shortName, tint } from "@/lib/utils";
 import { NAV } from "./nav";
 
@@ -67,6 +67,13 @@ export default function CommandPalette({ open, setOpen }: { open: boolean; setOp
             <Command.List className="max-h-[56vh] overflow-y-auto p-1.5">
               {dq.length >= 2 && hits.isFetching && !hits.data && <div className="px-3 py-6 text-center text-sm text-muted-foreground">Searching…</div>}
               {dq.length >= 2 && hits.data?.length === 0 && <div className="px-3 py-6 text-center text-sm text-muted-foreground">No symbol matches “{dq}”.</div>}
+              {/\s/.test(q.trim()) && (
+                <Command.Item value={"ask " + q} onSelect={() => go(askHref(q.trim()))} className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm data-[selected=true]:bg-muted">
+                  <Sparkles className="size-4 text-primary" />
+                  <span className="truncate">Ask: {q.trim()}</span>
+                  <CornerDownLeft className="ml-auto size-3.5 text-muted-foreground" />
+                </Command.Item>
+              )}
               {hits.data && hits.data.length > 0 && (
                 <Command.Group heading="Symbols" className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-[11px] [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground">
                   {hits.data.slice(0, 60).map((h) => (

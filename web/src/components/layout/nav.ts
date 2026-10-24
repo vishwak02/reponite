@@ -1,10 +1,11 @@
-import { Boxes, Braces, FileStack, GitCompare, LayoutDashboard, Link2, Network, Radio, Share2, ShieldCheck, TextSearch } from "lucide-react";
+import { Boxes, Braces, FileStack, GitCompare, LayoutDashboard, Link2, Network, Radio, Share2, ShieldCheck, Sparkles, TextSearch } from "lucide-react";
 
 export const NAV = [
   {
     label: "Fleet",
     items: [
       { to: "/", label: "Overview", icon: LayoutDashboard, hint: "repos, refs, size" },
+      { to: "/ask", label: "Ask", icon: Sparkles, hint: "a question, with evidence" },
       { to: "/fleet", label: "Fleet map", icon: Share2, hint: "who imports whom" },
       { to: "/topics", label: "Topics", icon: Radio, hint: "ROS pub/sub, services" },
       { to: "/coverage", label: "Coverage", icon: FileStack, hint: "what was indexed" },
