@@ -41,7 +41,8 @@ Per-adapter checks (mirror CI):
 - `cmd/reponite`       — CLI; index-backed commands + `mcp`/`watch` under build tags
 
 ## CI
-`.github/workflows/go.yml` runs 5 jobs: `core` (pure — also builds/tests the stdlib-only `neural` adapter), `sqlite`, `treesitter`, `mcp`, `e2e`.
+`.github/workflows/go.yml` runs: `core` (pure — also builds/tests the stdlib-only `neural` adapter), `sqlite`, `treesitter`, `mcp`, `e2e` (with the CLI/MCP golden test, `cmd/reponite/golden_test.go`), `web` (the dashboard builds to exactly the committed `internal/interfaces/webui/dist`, vitest, `size-limit` budgets — `make web-check`), `web-e2e` (Playwright smoke of every route — `make web-e2e`), `bench`.
+After any change under `web/`, run `make web` and commit the rebuilt dist.
 `release.yml` builds binaries on `v*` tags. Keep all jobs green.
 
 ⚠ **Run the full matrix, not just `go test ./...`.** A file's build tag must cover every

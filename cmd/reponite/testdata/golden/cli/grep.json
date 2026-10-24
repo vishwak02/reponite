@@ -1,0 +1,13 @@
+{
+  "matches": [
+    {
+      "repo": "shop",
+      "path": "orders/orders.go",
+      "line": 11,
+      "text": "var ErrDeclined = errors.New(\"card declined\")"
+    }
+  ],
+  "total": 1,
+  "truncated": false,
+  "scanned": 1
+}

@@ -1,0 +1,10 @@
+{
+  "path": "orders/orders.go",
+  "safe": true,
+  "impacts": [],
+  "note": "no confirmed callers break — signature changes/removals have no in-graph call sites (RPC/HTTP/dynamic still invisible)",
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

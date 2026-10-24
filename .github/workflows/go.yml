@@ -71,6 +71,53 @@ jobs:
       - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java github.com/smacker/go-tree-sitter/c github.com/smacker/go-tree-sitter/cpp github.com/smacker/go-tree-sitter/rust github.com/smacker/go-tree-sitter/bash github.com/fsnotify/fsnotify github.com/go-git/go-git/v5 golang.org/x/tools
       - run: go build -tags "sqlite treesitter" ./...
       - run: go test -tags "sqlite treesitter" ./internal/e2e/
+      # the CLI's and MCP server's answers for a fixture repo, byte for byte
+      - run: go get github.com/mark3labs/mcp-go
+      - run: go test -tags "sqlite treesitter mcp" -run Golden ./cmd/reponite/
+
+  web:
+    name: dashboard (build matches the committed dist, unit tests, bundle budgets)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11.0' # pinned: the .br/.gz assets depend on its zlib/brotli
+      - run: npm ci
+      - run: npm run build
+      - name: committed dist is current
+        run: |
+          git status --porcelain -- ../internal/interfaces/webui/dist
+          test -z "$(git status --porcelain -- ../internal/interfaces/webui/dist)" || { echo "internal/interfaces/webui/dist is stale: run make web and commit it"; exit 1; }
+      - run: npm test
+      - run: npm run size
+
+  web-e2e:
+    name: dashboard smoke (Playwright, every route against reponite serve)
+    runs-on: ubuntu-latest
+    env:
+      GOFLAGS: -mod=mod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11.0'
+      - run: go get modernc.org/sqlite github.com/smacker/go-tree-sitter github.com/smacker/go-tree-sitter/golang github.com/smacker/go-tree-sitter/python github.com/smacker/go-tree-sitter/javascript github.com/smacker/go-tree-sitter/typescript/typescript github.com/smacker/go-tree-sitter/typescript/tsx github.com/smacker/go-tree-sitter/java github.com/smacker/go-tree-sitter/c github.com/smacker/go-tree-sitter/cpp github.com/smacker/go-tree-sitter/rust github.com/smacker/go-tree-sitter/bash github.com/go-git/go-git/v5 golang.org/x/tools
+      - run: go build -tags "sqlite treesitter" -o bin/reponite ./cmd/reponite
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run e2e
+        working-directory: web
+        env:
+          REPONITE_BIN: ${{ github.workspace }}/bin/reponite
 
   bench:
     name: accuracy benchmark (tools/bench, gated)

@@ -1,0 +1,44 @@
+{
+  "symbol": "orders.Charge",
+  "repo": "shop",
+  "ref": "HEAD",
+  "tests": [
+    {
+      "repo": "shop",
+      "path": "orders/orders_test.go",
+      "line": 5,
+      "name": "TestCharge",
+      "handle": "orders.TestCharge",
+      "framework": "go",
+      "depth": 1,
+      "how": "call_graph",
+      "command": "go test ./orders -run '^(TestCharge)$'"
+    },
+    {
+      "repo": "shop",
+      "path": "orders/orders_test.go",
+      "line": 11,
+      "name": "TestChargeDeclined",
+      "handle": "orders.TestChargeDeclined",
+      "framework": "go",
+      "depth": 1,
+      "how": "call_graph",
+      "command": "go test ./orders -run '^(TestChargeDeclined)$'"
+    }
+  ],
+  "commands": [
+    {
+      "repo": "shop",
+      "framework": "go",
+      "tests": 2,
+      "command": "go test ./orders -run '^(TestCharge|TestChargeDeclined)$'"
+    }
+  ],
+  "total": 2,
+  "truncated": false,
+  "note": "tests reaching Charge within 3 call hops (call_graph; http = through a request the test sends to the route serving it) or naming it in a test file (reference: an import-free mention — a call the graph missed, a mock target, a JS/TS test block); framework detected per file",
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

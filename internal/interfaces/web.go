@@ -8,10 +8,10 @@
 package interfaces
 
 import (
-	"io"
 	"io/fs"
 	"net/http"
 	"strconv"
+	"sync"
 
 	"github.com/vishwak02/reponite/internal/query"
 )
@@ -39,34 +39,63 @@ type WebHandler struct {
 	// Ranker overrides the semantic rung for /api/investigate (ADR-020);
 	// injected by the neural build when configured, nil = term-idf default.
 	Ranker query.SemanticRanker
+	// Compact writes answers as single-line JSON (the browser does not read
+	// the indentation the CLI formatters produce). Web only: the MCP path's
+	// CompactOutput is a separate switch.
+	Compact bool
+	// DataVersion names the current state of the index (FileVersion over the
+	// store files); it changes on every write, by this process or another.
+	// nil = unknown, and answers then carry no ETag.
+	DataVersion func() string
+
+	// refIdentity's and dbStatsFor's memos, each valid for one data version
+	idMu         sync.Mutex
+	idVersion    string
+	ids          map[[2]string]string
+	statsVersion string
+	stats        map[string]dbStats
+	answers      *answerMemo
 }
 
 // Routes returns the handler's mux (dashboard at /, JSON under /api/*).
 func (h *WebHandler) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
+	if h.answers == nil {
+		h.answers = newAnswerMemo(64 << 20)
+	}
 	mux.HandleFunc("/", h.index)
-	mux.Handle("/assets/", immutable(http.FileServer(http.FS(appDist))))
-	mux.HandleFunc("/api/repos", h.apiRepos)
-	mux.HandleFunc("/api/overview", h.apiOverview)
-	mux.HandleFunc("/api/refs", h.apiRefs)
-	mux.HandleFunc("/api/search", h.apiSearch)
-	mux.HandleFunc("/api/context", h.apiContext)
-	mux.HandleFunc("/api/brief", h.apiBrief)
-	mux.HandleFunc("/api/compat", h.apiCompat)
-	mux.HandleFunc("/api/diff", h.apiDiff)
-	mux.HandleFunc("/api/rootcause", h.apiRootcause)
-	mux.HandleFunc("/api/ximpact", h.apiXImpact)
-	mux.HandleFunc("/api/blast_radius", h.apiBlastRadius)
-	mux.HandleFunc("/api/investigate", h.apiInvestigate)
-	mux.HandleFunc("/api/usages", h.apiUsages)
-	mux.HandleFunc("/api/topics", h.apiTopics)
-	mux.HandleFunc("/api/verify_edit", h.apiVerifyEdit)
-	mux.HandleFunc("/api/grep", h.apiGrep)
-	mux.HandleFunc("/api/graph", h.apiGraph)
-	mux.HandleFunc("/api/links", h.apiLinks)
-	mux.HandleFunc("/api/coverage", h.apiCoverage)
-	mux.HandleFunc("/api/fleetmap", h.apiFleetMap)
-	mux.HandleFunc("/api/file", h.apiFile)
+	mux.Handle("/assets/", assetHandler(appDist))
+	for _, rt := range []struct {
+		path string
+		kind apiKind
+		fn   http.HandlerFunc
+	}{
+		{"/api/repos", apiGet, h.apiRepos},
+		{"/api/overview", apiGet, h.apiOverview},
+		{"/api/refs", apiGet, h.apiRefs},
+		{"/api/search", apiGet, h.apiSearch},
+		{"/api/context", apiGet, h.apiContext},
+		// brief blames the working repo's git HEAD, which can move without
+		// the index changing; investigate may consult an embeddings endpoint
+		{"/api/brief", apiGetLive, h.apiBrief},
+		{"/api/compat", apiGet, h.apiCompat},
+		{"/api/diff", apiGet, h.apiDiff},
+		{"/api/rootcause", apiGet, h.apiRootcause},
+		{"/api/ximpact", apiGet, h.apiXImpact},
+		{"/api/blast_radius", apiGet, h.apiBlastRadius},
+		{"/api/investigate", apiGetLive, h.apiInvestigate},
+		{"/api/usages", apiGet, h.apiUsages},
+		{"/api/topics", apiGet, h.apiTopics},
+		{"/api/verify_edit", apiGetOrPost, h.apiVerifyEdit},
+		{"/api/grep", apiGet, h.apiGrep},
+		{"/api/graph", apiGet, h.apiGraph},
+		{"/api/links", apiGet, h.apiLinks},
+		{"/api/coverage", apiGet, h.apiCoverage},
+		{"/api/fleetmap", apiGet, h.apiFleetMap},
+		{"/api/file", apiGet, h.apiFile},
+	} {
+		mux.Handle(rt.path, h.api(rt.kind, rt.fn))
+	}
 	return mux
 }
 
@@ -89,7 +118,7 @@ func (h *WebHandler) repoOr(r *http.Request) string {
 // apiRepos lists every repo in the store (the team-server landing data).
 func (h *WebHandler) apiRepos(w http.ResponseWriter, r *http.Request) {
 	body, err := ReposJSON(h.Store.Repos())
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiOverview returns the index summary for every repo — per-ref logical stats
@@ -97,7 +126,7 @@ func (h *WebHandler) apiRepos(w http.ResponseWriter, r *http.Request) {
 // row counts (the dashboard's Overview/database view).
 func (h *WebHandler) apiOverview(w http.ResponseWriter, r *http.Request) {
 	body, err := OverviewJSON(query.Overview(h.Store), h.dbStatsFor)
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // dbStatsFor returns a repo's database path + table counts if its backing store
@@ -108,10 +137,39 @@ func (h *WebHandler) dbStatsFor(repo string) (string, map[string]int64) {
 	if h.RepoStores != nil {
 		st = h.RepoStores[repo]
 	}
-	if ds, ok := st.(DBStater); ok {
+	ds, ok := st.(DBStater)
+	if !ok {
+		return "", nil
+	}
+	// counting every table's rows is most of the Overview's time; the counts
+	// hold until the next write, so they are kept for one data version
+	var v string
+	if h.DataVersion != nil {
+		v = h.DataVersion()
+	}
+	if v == "" {
 		return ds.DBStats()
 	}
-	return "", nil
+	h.idMu.Lock()
+	if h.statsVersion != v {
+		h.statsVersion, h.stats = v, map[string]dbStats{}
+	}
+	got, ok := h.stats[repo]
+	h.idMu.Unlock()
+	if !ok {
+		got.path, got.tables = ds.DBStats()
+		h.idMu.Lock()
+		if h.statsVersion == v {
+			h.stats[repo] = got
+		}
+		h.idMu.Unlock()
+	}
+	return got.path, got.tables
+}
+
+type dbStats struct {
+	path   string
+	tables map[string]int64
 }
 
 // index serves the dashboard app. It routes in the URL fragment, so every
@@ -131,14 +189,6 @@ func (h *WebHandler) index(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// immutable marks the app's content-hashed assets cacheable for good.
-func immutable(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		next.ServeHTTP(w, r)
-	})
-}
-
 func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {
 	repo := h.repoOr(r)
 	refs := h.Store.Refs(repo)
@@ -147,7 +197,7 @@ func (h *WebHandler) apiRefs(w http.ResponseWriter, r *http.Request) {
 		refs = append([]string{"HEAD"}, refs...)
 	}
 	body, err := RefsJSON(repo, refs)
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
@@ -158,13 +208,16 @@ func (h *WebHandler) apiSearch(w http.ResponseWriter, r *http.Request) {
 		repo = query.FleetRepo
 	}
 	hits := query.SearchName(h.Store, repo, ref, q.Get("q"), q.Get("tests") == "true")
+	if gone(r) {
+		return
+	}
 	if len(hits) == 0 && q.Get("q") != "" {
 		body, err := SuggestJSON("symbol", q.Get("q"), query.Suggest(h.Store, query.FleetRepo, ref, q.Get("q"), 6))
-		writeJSON(w, body, err)
+		h.writeJSON(w, body, err)
 		return
 	}
 	body, err := SearchJSON(hits)
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiVerifyEdit reports what breaks if the posted content replaces path.
@@ -176,6 +229,10 @@ func (h *WebHandler) apiVerifyEdit(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	repo, ref := h.repoOr(r), h.refOr(r)
 	path := q.Get("path")
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest) // a body over the size bound, or malformed
+		return
+	}
 	newContent := r.FormValue("content") // body param (POST) or query
 	var oldContent string
 	for _, f := range h.Store.Files(repo, ref) {
@@ -186,8 +243,11 @@ func (h *WebHandler) apiVerifyEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	old := h.ParseSymbols(path, oldContent)
 	nw := h.ParseSymbols(path, newContent)
+	if gone(r) {
+		return
+	}
 	body, err := VerifyEditJSON(query.VerifyEdit(h.Store, repo, ref, path, old, nw))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiGrep runs a lexical/regex search (?pattern=&fixed=&limit=&offset=),
@@ -198,8 +258,11 @@ func (h *WebHandler) apiGrep(w http.ResponseWriter, r *http.Request) {
 	if repo == "" {
 		repo = query.FleetRepo
 	}
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", maxGrepMatches)
 	offset, _ := strconv.Atoi(q.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
 	res, err := query.GrepRepo(h.Store, repo, h.refOr(r), q.Get("pattern"),
 		query.GrepOptions{Fixed: q.Get("fixed") == "true", Limit: limit, Offset: offset})
 	if err != nil {
@@ -207,7 +270,7 @@ func (h *WebHandler) apiGrep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := GrepJSON(res)
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiUsages returns every call site of a symbol, call-graph-confirmed.
@@ -218,7 +281,7 @@ func (h *WebHandler) apiUsages(w http.ResponseWriter, r *http.Request) {
 		repo = query.FleetRepo
 	}
 	body, err := UsagesJSON(query.Usages(h.Store, repo, h.refOr(r), q.Get("symbol")))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiTopics returns the ROS communication graph (fleet-wide), or one topic's
@@ -231,11 +294,11 @@ func (h *WebHandler) apiTopics(w http.ResponseWriter, r *http.Request) {
 	}
 	if topic := q.Get("topic"); topic != "" {
 		body, err := TopicsJSON(query.Topic(h.Store, repo, h.refOr(r), topic))
-		writeJSON(w, body, err)
+		h.writeJSON(w, body, err)
 		return
 	}
 	body, err := TopicsJSON(query.CommGraph(h.Store, repo, h.refOr(r)))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiInvestigate answers a natural-language question with a cited dossier.
@@ -245,9 +308,9 @@ func (h *WebHandler) apiInvestigate(w http.ResponseWriter, r *http.Request) {
 	if repo == "" {
 		repo = query.FleetRepo
 	}
-	budget, _ := strconv.Atoi(q.Get("budget"))
+	budget := budgetParam(r)
 	body, err := InvestigateJSON(query.InvestigateWith(h.Store, repo, h.refOr(r), q.Get("q"), budget, h.Ranker))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiBlastRadius returns the pre-edit impact dossier for a symbol (§2 macro).
@@ -257,24 +320,27 @@ func (h *WebHandler) apiBlastRadius(w http.ResponseWriter, r *http.Request) {
 	sym := q.Get("symbol")
 	if len(query.ResolveSymbol(h.Store, repo, ref, sym)) == 0 {
 		body, err := SuggestJSON("symbol", sym, query.Suggest(h.Store, query.FleetRepo, ref, sym, 6))
-		writeJSON(w, body, err)
+		h.writeJSON(w, body, err)
+		return
+	}
+	if gone(r) {
 		return
 	}
 	body, err := BlastRadiusJSON(query.BlastRadius(h.Store, repo, ref, sym))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiContext(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	body, err := ContextJSON(query.Context(h.Store, h.repoOr(r), h.refOr(r), q.Get("symbol"), q.Get("tests") == "true"))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiBrief(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	budget, _ := strconv.Atoi(q.Get("budget"))
+	budget := budgetParam(r)
 	body, err := BriefJSON(query.Brief(h.Store, h.repoOr(r), h.refOr(r), q.Get("symbol"), budget, h.Intent))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiCompat(w http.ResponseWriter, r *http.Request) {
@@ -291,7 +357,7 @@ func (h *WebHandler) apiCompat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := CompatJSON(rep)
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiDiff(w http.ResponseWriter, r *http.Request) {
@@ -299,19 +365,19 @@ func (h *WebHandler) apiDiff(w http.ResponseWriter, r *http.Request) {
 	min, _ := strconv.ParseFloat(q.Get("confidence_min"), 64)
 	opt := query.DiffOptions{ChangedOnly: q.Get("changed_only") == "true", Package: q.Get("package"), MinConfidence: min}
 	body, err := DiffJSON(query.DiffRefsBy(h.Store, h.repoOr(r), q.Get("from"), q.Get("to"), opt))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiRootcause(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	body, err := RootCauseJSON(query.RootCauseBy(h.Store, h.repoOr(r), q.Get("symbol"), q.Get("from"), q.Get("to")))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 func (h *WebHandler) apiXImpact(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	body, err := XImpactJSON(query.XImpact(h.Store, q.Get("symbol"), q.Get("ref")))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiGraph returns a symbol's call-graph neighborhood (nodes + edges) for the
@@ -319,9 +385,9 @@ func (h *WebHandler) apiXImpact(w http.ResponseWriter, r *http.Request) {
 func (h *WebHandler) apiGraph(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	depth, _ := strconv.Atoi(q.Get("depth"))
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	limit := intParam(r, "limit", maxGraphNodes)
 	body, err := snakeJSON(query.CallGraph(h.Store, h.repoOr(r), h.refOr(r), q.Get("symbol"), depth, limit, q.Get("tests") == "true", q.Get("external") == "true"))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiLinks returns the data references to and from a file or symbol, or
@@ -334,12 +400,15 @@ func (h *WebHandler) apiLinks(w http.ResponseWriter, r *http.Request) {
 	}
 	target := q.Get("target")
 	res := query.LinksFor(h.Store, repo, h.refOr(r), target)
+	if gone(r) {
+		return
+	}
 	if target == "" {
 		// no target: every link of the repo, for the dashboard's file graph
 		res.RefersTo = query.Links(h.Store, repo, h.refOr(r))
 	}
 	body, err := snakeJSON(res)
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiCoverage returns what each repo's index stored and skipped.
@@ -349,7 +418,7 @@ func (h *WebHandler) apiCoverage(w http.ResponseWriter, r *http.Request) {
 		repo = query.FleetRepo
 	}
 	body, err := snakeJSON(query.Coverage(h.Store, repo, h.refOr(r)))
-	writeJSON(w, body, err)
+	h.writeJSON(w, body, err)
 }
 
 // apiFile returns one stored file's content (the dashboard's file view and
@@ -368,7 +437,7 @@ func (h *WebHandler) apiFile(w http.ResponseWriter, r *http.Request) {
 				Path    string `json:"path"`
 				Content string `json:"content"`
 			}{f.Path, f.Content})
-			writeJSON(w, body, err)
+			h.writeJSON(w, body, err)
 			return
 		}
 	}
@@ -378,14 +447,5 @@ func (h *WebHandler) apiFile(w http.ResponseWriter, r *http.Request) {
 // apiFleetMap returns every repo with the cross-repo links between them.
 func (h *WebHandler) apiFleetMap(w http.ResponseWriter, r *http.Request) {
 	body, err := FleetMapJSON(query.FleetMap(h.Store, h.refOr(r), 1<<20))
-	writeJSON(w, body, err)
-}
-
-func writeJSON(w http.ResponseWriter, body string, err error) {
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	io.WriteString(w, body)
+	h.writeJSON(w, body, err)
 }

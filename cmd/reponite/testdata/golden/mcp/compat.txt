@@ -1,0 +1,1 @@
+{"symbol":"orders.Charge","origin":{"repo":"shop","ref":"HEAD"},"verdicts":[{"repo":"shop","ref":"v1","verdict":"behavior_changed","confidence":0.6,"direct_confidence":0.6,"detail":"identical signature; resolved call graph differs","changed_callees":["~orders.validateCard"]}],"_meta":{"repo":"shop","ref":"HEAD"}}

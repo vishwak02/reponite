@@ -9,7 +9,7 @@ import { api, type DiffResult, type XImpact } from "@/lib/api";
 import { useScope } from "@/lib/scope";
 import { cn, fmt, shortName } from "@/lib/utils";
 import { Page } from "@/components/layout/AppShell";
-import { symbolHref } from "@/components/layout/CommandPalette";
+import { symbolHref } from "@/lib/routes";
 import { Badge, Confidence } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

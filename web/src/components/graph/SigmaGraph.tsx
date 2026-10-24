@@ -1,9 +1,11 @@
 // A WebGL force-directed graph (Sigma + ForceAtlas2) for maps too large to
-// draw as boxes: the fleet's repos, every topic. Hover lights a node's
-// neighborhood; click selects.
+// draw as boxes: the fleet's repos, every topic. ForceAtlas2 runs in a Web
+// Worker and the map settles on screen, so input is never blocked. Hover
+// lights a node's neighborhood; click selects.
 import { useEffect, useRef } from "react";
 import Graph from "graphology";
-import forceAtlas2 from "graphology-layout-forceatlas2";
+import { inferSettings } from "graphology-layout-forceatlas2";
+import FA2Layout from "graphology-layout-forceatlas2/worker";
 import Sigma from "sigma";
 import { EdgeArrowProgram, EdgeRectangleProgram } from "sigma/rendering";
 import { useScope } from "@/lib/scope";
@@ -30,7 +32,6 @@ export default function SigmaGraph({ nodes, edges, selected, onSelect, height, a
       g.addNode(v.id, { label: v.label, size: v.size, color: v.color, x: Math.cos(a) * 100 + Math.random(), y: Math.sin(a) * 100 + Math.random() });
     });
     for (const e of edges) if (g.hasNode(e.from) && g.hasNode(e.to) && e.from !== e.to && !g.hasEdge(e.from, e.to)) g.addEdge(e.from, e.to, { size: e.size, color: e.color, label: e.label });
-    forceAtlas2.assign(g, { iterations: Math.min(600, 150 + 4000 / Math.sqrt(n)), settings: { ...forceAtlas2.inferSettings(g), barnesHutOptimize: n > 400, gravity: 1, scalingRatio: 8, slowDown: 2 } });
 
     const fg = cssColor("--foreground");
     const s = new Sigma(g, box.current, {
@@ -86,7 +87,13 @@ export default function SigmaGraph({ nodes, edges, selected, onSelect, height, a
     s.on("clickNode", ({ node }) => onSel.current?.(node));
     s.on("clickStage", () => onSel.current?.(null));
     sig.current = s;
+    // settle the layout off the main thread for a time that grows with the map
+    const fa2 = new FA2Layout(g, { settings: { ...inferSettings(g), barnesHutOptimize: n > 400, gravity: 1, scalingRatio: 8, slowDown: 2 } });
+    fa2.start();
+    const settle = setTimeout(() => fa2.stop(), Math.min(5000, 1200 + 3 * n));
     return () => {
+      clearTimeout(settle);
+      fa2.kill();
       s.kill();
       sig.current = null;
     };

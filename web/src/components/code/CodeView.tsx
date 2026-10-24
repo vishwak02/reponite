@@ -1,32 +1,41 @@
 // Read-only source with highlighting; loaded lazily (CodeMirror is the
-// largest dependency).
+// largest dependency), and each language mode only when a file needs it.
+import { useEffect, useState } from "react";
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
-import { cpp } from "@codemirror/lang-cpp";
-import { python } from "@codemirror/lang-python";
-import { javascript } from "@codemirror/lang-javascript";
-import { go } from "@codemirror/lang-go";
-import { java } from "@codemirror/lang-java";
-import { rust } from "@codemirror/lang-rust";
-import { yaml } from "@codemirror/lang-yaml";
-import { json } from "@codemirror/lang-json";
-import { xml } from "@codemirror/lang-xml";
 import { Decoration, lineNumbers, type DecorationSet } from "@codemirror/view";
 import { RangeSetBuilder, StateField, type Extension } from "@codemirror/state";
+import { langFor, type Lang } from "@/lib/lang";
 import { useScope } from "@/lib/scope";
 
-function lang(path: string) {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  if (["c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "ino", "cu"].includes(ext)) return [cpp()];
-  if (["py", "pyx", "pyi"].includes(ext)) return [python()];
-  if (["js", "jsx", "mjs", "cjs"].includes(ext)) return [javascript({ jsx: true })];
-  if (["ts", "tsx"].includes(ext)) return [javascript({ jsx: true, typescript: true })];
-  if (ext === "go") return [go()];
-  if (["java", "kt"].includes(ext)) return [java()];
-  if (ext === "rs") return [rust()];
-  if (["yaml", "yml"].includes(ext)) return [yaml()];
-  if (ext === "json") return [json()];
-  if (["xml", "launch", "urdf", "xacro", "sdf", "html"].includes(ext)) return [xml()];
-  return [];
+const modes: Record<Lang, () => Promise<Extension>> = {
+  cpp: () => import("@codemirror/lang-cpp").then((m) => m.cpp()),
+  python: () => import("@codemirror/lang-python").then((m) => m.python()),
+  javascript: () => import("@codemirror/lang-javascript").then((m) => m.javascript({ jsx: true })),
+  typescript: () => import("@codemirror/lang-javascript").then((m) => m.javascript({ jsx: true, typescript: true })),
+  go: () => import("@codemirror/lang-go").then((m) => m.go()),
+  java: () => import("@codemirror/lang-java").then((m) => m.java()),
+  rust: () => import("@codemirror/lang-rust").then((m) => m.rust()),
+  yaml: () => import("@codemirror/lang-yaml").then((m) => m.yaml()),
+  json: () => import("@codemirror/lang-json").then((m) => m.json()),
+  xml: () => import("@codemirror/lang-xml").then((m) => m.xml()),
+};
+
+// the file's language mode, once its chunk has loaded (plain text until then)
+function useMode(path: string): Extension[] {
+  const lang = langFor(path);
+  const [mode, setMode] = useState<{ lang: Lang; ext: Extension } | null>(null);
+  useEffect(() => {
+    if (!lang || mode?.lang === lang) return;
+    let live = true;
+    modes[lang]().then(
+      (ext) => live && setMode({ lang, ext }),
+      () => {}, // highlighting is optional: a failed chunk leaves plain text
+    );
+    return () => {
+      live = false;
+    };
+  }, [lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  return mode && mode.lang === lang ? [mode.ext] : [];
 }
 
 // marks lines [from, to] (1-based, in the shown text) and scrolls them into view
@@ -46,6 +55,7 @@ function markLines(from: number, to: number): Extension {
 
 export default function CodeView({ code, path, firstLine = 1, maxHeight = "70vh", mark, editable, onChange }: { code: string; path: string; firstLine?: number; maxHeight?: string; mark?: [number, number]; editable?: boolean; onChange?: (v: string) => void }) {
   const { dark } = useScope();
+  const mode = useMode(path);
   return (
     <CodeMirror
       onCreateEditor={(view) => {
@@ -61,7 +71,7 @@ export default function CodeView({ code, path, firstLine = 1, maxHeight = "70vh"
       readOnly={!editable}
       maxHeight={maxHeight}
       basicSetup={{ lineNumbers: false, foldGutter: true, highlightActiveLine: false, highlightActiveLineGutter: false }}
-      extensions={[...lang(path), lineNumbers({ formatNumber: (n) => String(n + firstLine - 1) }), EditorView.lineWrapping, ...(mark ? [markLines(mark[0], mark[1])] : [])]}
+      extensions={[...mode, lineNumbers({ formatNumber: (n) => String(n + firstLine - 1) }), EditorView.lineWrapping, ...(mark ? [markLines(mark[0], mark[1])] : [])]}
     />
   );
 }

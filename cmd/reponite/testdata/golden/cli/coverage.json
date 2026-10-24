@@ -1,0 +1,40 @@
+{
+  "repos": [
+    {
+      "repo": "shop",
+      "ref": "HEAD",
+      "stored": 7,
+      "skipped": 0,
+      "kinds": [
+        {
+          "kind": ".go",
+          "stored": 3
+        },
+        {
+          "kind": ".mod",
+          "stored": 1
+        },
+        {
+          "kind": ".py",
+          "stored": 1
+        },
+        {
+          "kind": ".ts",
+          "stored": 1
+        },
+        {
+          "kind": ".tsx",
+          "stored": 1
+        }
+      ],
+      "skips_recorded": true
+    }
+  ],
+  "note": "stored = files the index keeps (searchable; parsed or with sections where the format is known). skipped = tracked files it does not keep, with the reason; a directory entry stands for everything under it. A repo indexed before skips were recorded shows skips_recorded false — re-index it to see them.",
+  "_meta": {
+    "Repo": "*",
+    "Ref": "HEAD",
+    "Warnings": null,
+    "Refs": null
+  }
+}
