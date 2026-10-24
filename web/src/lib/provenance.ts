@@ -4,15 +4,17 @@
 //               build's flags)
 //   typed     — resolved through a declared type, an import or a moniker,
 //               not compiled
-//   guessed   — matched by name (one definition of that name in scope, one
-//               class defining that member), or an external leaf
+//   named     — the only definition of that name the caller can see
+//   guessed   — matched by name only (one class defining that member), a
+//               possible override, or an external leaf
 //   ambiguous — several definitions match; the edge may be any of them
 
-export type Tier = "proven" | "typed" | "guessed" | "ambiguous";
+export type Tier = "proven" | "typed" | "named" | "guessed" | "ambiguous";
 
 export const TIER_LABEL: Record<Tier, string> = {
   proven: "compiler-proven",
   typed: "typed",
+  named: "name match",
   guessed: "guessed",
   ambiguous: "ambiguous",
 };
@@ -20,17 +22,17 @@ export const TIER_LABEL: Record<Tier, string> = {
 export const TIER_HINT: Record<Tier, string> = {
   proven: "a compiler bound this call",
   typed: "resolved through a declared type, an import or a symbol moniker",
+  named: "the only definition of that name the caller can see",
   guessed: "matched by name, not by type",
   ambiguous: "several definitions match this call",
 };
 
-export const TIERS: Tier[] = ["proven", "typed", "guessed", "ambiguous"];
+export const TIERS: Tier[] = ["proven", "typed", "named", "guessed", "ambiguous"];
 
 const PROVEN = /^(?:go-types|clang[-_]|tsc(?:-|$)|scip-typed)/;
 const TYPED = new Set(["receiver-typed", "receiver-class", "scip-resolved", "import-resolved", "xrepo-import", "tsconfig", "sequelize-typescript"]);
-const GUESSED = new Set([
-  "name-resolved",
-  "member-name-resolved",
+const NAMED = new Set(["name-resolved"]);
+const GUESSED = new Set([  "member-name-resolved",
   "virtual-override",
   "xrepo-override",
   "xrepo-base-call",
@@ -51,6 +53,7 @@ export function tierOf(method?: string, confidence?: number): Tier {
   if (m === "ambiguous" || (c > 0 && c < 0.55)) return "ambiguous";
   if (PROVEN.test(m)) return c >= 0.95 || confidence == null ? "proven" : "typed";
   if (TYPED.has(m)) return "typed";
+  if (NAMED.has(m)) return "named";
   if (GUESSED.has(m)) return "guessed";
   return c >= 0.8 ? "typed" : "guessed";
 }

@@ -112,5 +112,6 @@
 .cm-callsite { display: block; width: 7px; height: 7px; border-radius: 9999px; cursor: help; }
 .cm-callsite-proven { background: hsl(var(--ok)); }
 .cm-callsite-typed { background: hsl(var(--primary)); }
+.cm-callsite-named { background: transparent; box-shadow: inset 0 0 0 1.5px hsl(var(--primary)); }
 .cm-callsite-guessed { background: transparent; box-shadow: inset 0 0 0 1.5px hsl(var(--warn)); }
 .cm-callsite-ambiguous { background: transparent; box-shadow: inset 0 0 0 1.5px hsl(var(--bad) / .8); border-radius: 2px; }

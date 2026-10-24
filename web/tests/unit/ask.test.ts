@@ -128,8 +128,10 @@ describe("tierOf", () => {
     expect(tierOf("scip-resolved", 0.95)).toBe("typed");
     expect(tierOf("import-resolved", 0.75)).toBe("typed");
   });
-  it("maps name matches and external leaves to guessed", () => {
-    expect(tierOf("name-resolved", 0.9)).toBe("guessed");
+  it("maps the only visible definition of a name to a name match", () => {
+    expect(tierOf("name-resolved", 0.9)).toBe("named");
+  });
+  it("maps member-name matches, overrides and external leaves to guessed", () => {
     expect(tierOf("member-name-resolved", 0.7)).toBe("guessed");
     expect(tierOf("virtual-override", 0.6)).toBe("guessed");
     expect(tierOf("unresolved-external", 0.6)).toBe("guessed");

@@ -7,12 +7,13 @@ import { cn } from "@/lib/utils";
 const TONE: Record<Tier, string> = {
   proven: "bg-ok/15 text-ok",
   typed: "bg-primary/15 text-primary",
+  named: "bg-primary/10 text-foreground/80",
   guessed: "bg-warn/15 text-warn",
   ambiguous: "bg-bad/15 text-bad",
 };
 
 // solid, dashed, dotted, faint: the same strokes as the graph edges
-export const TIER_DASH: Record<Tier, string | undefined> = { proven: undefined, typed: "3.5 2", guessed: "1.2 2.2", ambiguous: "1 3.5" };
+export const TIER_DASH: Record<Tier, string | undefined> = { proven: undefined, typed: "3.5 2", named: "2.5 2", guessed: "1.2 2.2", ambiguous: "1 3.5" };
 
 export function TierStroke({ tier, className }: { tier: Tier; className?: string }) {
   return (

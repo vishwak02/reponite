@@ -1,0 +1,1 @@
+import{k as a,r as c}from"./react-CnC2XnM9.js";import{u as f}from"./index-CodOlh3B.js";function u(){const[e,o]=a(),t=f(),r=e.get("repo")||t.repo,s=e.get("ref")||t.ref,p=e.get("s")||"";return c.useEffect(()=>{e.get("repo")&&e.get("repo")!==t.repo&&t.setRepo(e.get("repo"))},[e.get("repo")]),{repo:r,ref:s,s:p,tab:e.get("tab")||"explain",sp:e,setSp:o}}export{u};
