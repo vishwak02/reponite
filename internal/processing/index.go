@@ -521,6 +521,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				kept := qcalls[:0:0]
 				for _, qc := range qcalls {
 					v, local := c.sym.Vars[qc.Name]
+					if qc.Qualifier == "" && local && x.isTest[qid] && (strings.HasPrefix(v, pyCallTag) || strings.HasPrefix(v, pyTypeTag)) {
+						// a test's parameter annotated as the callable its fixture
+						// hands it (maker: Callable[[], Order]): still the fixture's
+						if fq := py.fixtureOf(qid, qc.Name); fq != "" && strings.HasPrefix(byQID[fq].sym.Returns, pyFactoryTag) {
+							localSites = append(localSites, CallSite{Name: qc.Name, Kind: CallModule, Scope: strings.TrimSuffix(fq, "."+qc.Name)})
+							continue
+						}
+					}
 					if qc.Qualifier == "" && local && !strings.HasPrefix(v, pyFixtureTag) && v != pyNestedTag {
 						// a parameter or local called: whatever value it holds (a
 						// callable object, a function passed in) — never the module

@@ -74,13 +74,24 @@ def builder(session):
 `,
 		"shop/conftest.py": `pytest_plugins = ["shop.fixtures.builders"]
 `,
-		"shop/tests/test_orders.py": `def test_commit(builder):
+		"shop/tests/test_orders.py": `from collections.abc import Callable
+from shop.fixtures.builders import Builder
+
+def test_commit(builder):
+    b = builder()
+    b.commit()
+
+def test_annotated(builder: Callable[[], Builder]):
     b = builder()
     b.commit()
 `,
 	}
 	edges := indexAndEdges(t, files)
-	wantMethod(t, edges["shop/tests.test_orders.test_commit"], "shop/fixtures.builders.Builder.commit", MethodTyped)
+	for _, fn := range []string{"test_commit", "test_annotated"} {
+		e := edges["shop/tests.test_orders."+fn]
+		wantMethod(t, e, "shop/fixtures.builders.Builder.commit", MethodTyped)
+		wantMethod(t, e, "shop/fixtures.builders.builder", MethodResolved) // the fixture's factory runs
+	}
 }
 
 // A classmethod returning cls(...) gives an instance of the class it is
