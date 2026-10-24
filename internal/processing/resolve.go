@@ -228,9 +228,12 @@ type siteIndex struct {
 	vis        *cppVisibility
 	inNS       [2]string // C++ ns::f(): the written outermost and innermost namespace
 	callerPath string
-	defPath    map[string]string
-	recvOf     map[string]string
-	alsoIn     map[string][]string // further files defining a merged C/C++ id
+	// callerOuter: the class an out-of-class C++ definition names its own
+	// class in (void Outer::Inner::f(): Outer)
+	callerOuter string
+	defPath     map[string]string
+	recvOf      map[string]string
+	alsoIn      map[string][]string // further files defining a merged C/C++ id
 	// splits: a C/C++ class name's twins Cls@file (two classes of one name)
 	splits map[string][]string
 }
@@ -248,6 +251,80 @@ func (x siteIndex) recvDefs(cls, name string) []string {
 		return own // the caller's own file's class shadows the others
 	}
 	return out
+}
+
+// declaredWith narrows free functions of one name that the caller's file
+// can all name (two packages' copies, both declared in a header of the same
+// path) to those whose file includes the declaring header the caller sees:
+// the call binds to that declaration, and the declaration to the definition
+// compiled with it.
+func (x siteIndex) declaredWith(cands []string) []string {
+	if x.vis == nil || x.callerPath == "" || len(cands) < 2 {
+		return cands
+	}
+	var keep []string
+	for _, q := range cands {
+		if r := strings.SplitN(x.recvOf[q], "@", 2)[0]; r != "" && (x.types == nil || x.types.classes[r] != nil) {
+			return cands // a class's method (T ns::f() is scoped by a namespace)
+		}
+		for _, p := range append([]string{x.defPath[q]}, x.alsoIn[q]...) {
+			if x.vis.declaredBy(x.callerPath, p, BaseName(q)) {
+				keep = append(keep, q)
+				break
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return cands
+	}
+	return keep
+}
+
+// setFile points the type table at the file call site s is written in, for
+// the aliases only that file declares.
+func (x siteIndex) setFile(s CallSite) {
+	if x.types == nil {
+		return
+	}
+	x.types.file = x.callerPath
+	if s.File != "" {
+		x.types.file = s.File
+	}
+}
+
+// ownNestedClass is Outer::cls for a method of a class cls that several
+// classes nest (each source file's pimpl Impl): the one whose definition the
+// caller's file holds or includes; "" when not exactly one.
+func (x siteIndex) ownNestedClass(cls string) string {
+	if x.vis == nil || x.types == nil || x.callerPath == "" {
+		return ""
+	}
+	for _, n := range x.types.nestedBy[cls] {
+		if containsStr(x.vis.homes[n], x.callerPath) && len(x.vis.homes[n]) == 1 {
+			own := 0 // the class the caller's own file defines
+			for _, m := range x.types.nestedBy[cls] {
+				if containsStr(x.vis.homes[m], x.callerPath) {
+					own++
+				}
+			}
+			if own == 1 {
+				return n
+			}
+		}
+	}
+	seen := x.vis.seen(x.callerPath)
+	found := ""
+	for _, n := range x.types.nestedBy[cls] {
+		for _, h := range x.vis.homes[n] {
+			if h == x.callerPath || seen[h] {
+				if found != "" && found != n {
+					return ""
+				}
+				found = n
+			}
+		}
+	}
+	return found
 }
 
 // visibleOnly keeps the definitions the caller's file can name.
@@ -309,7 +386,21 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 	best := map[string]CallSite{}
 	var order []string
 	typeRecv, _, _ := strings.Cut(callerRecv, "@") // Cls@file is class Cls for its fields and bases
+	if x.callerOuter != "" && x.types != nil && x.types.nested[x.callerOuter+"::"+typeRecv] {
+		// void Outer::Inner::f(): written in Outer's nested Inner
+		typeRecv = x.callerOuter + "::" + typeRecv
+	} else if langFamily(lang) == "c" && x.types != nil && x.types.ambiguousNested(typeRecv) {
+		// a method of Outer::Impl: its fields and its own name are that
+		// class's, not every Impl's
+		if n := x.ownNestedClass(typeRecv); n != "" {
+			typeRecv = n
+		}
+	}
+	if x.types != nil {
+		defer func(f string) { x.types.file = f }(x.types.file)
+	}
 	for _, s := range sites {
+		x.setFile(s)
 		if lang == "rust" || lang == "java" {
 			s = declaredTypeSite(s, typeRecv, x)
 		} else {
@@ -319,11 +410,17 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 		if s.Kind == CallTyped || s.Kind == CallModule || s.Kind == CallScoped || s.Kind == CallExternal || s.Scope == superScope {
 			key = s.Name + "\x00" + s.Scope // w.step() and p.step() on two classes: two targets
 		}
+		if s.Kind == CallScoped && s.Root != s.Scope {
+			key += "\x00" + s.Root // a::conv::f() and b::conv::f(): two namespaces
+		}
 		if s.NArgs > 0 {
 			key += "\x00" + strconv.Itoa(s.NArgs) // f(a) and f(a, b): two overloads
 		}
 		if s.ArgTypes != "" {
 			key += "\x00" + s.ArgTypes // f(Reason::X) and f(action): two overloads
+		}
+		if s.File != "" {
+			key += "\x00" + s.File // two files' same-named functions: each its own calls
 		}
 		cur, ok := best[key]
 		if !ok {
@@ -347,9 +444,15 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			out[i] = c // one call typed, another not: the typed claim stands
 		}
 	}
+	ownPath := x.callerPath
 	for _, key := range order {
 		s := best[key]
 		name := s.Name
+		x.callerPath = ownPath
+		if s.File != "" {
+			x.callerPath = s.File // the file this call is written in
+		}
+		x.setFile(s)
 		x.nargs = s.NArgs
 		x.argTypes = s.ArgTypes
 		x.inNS = [2]string{}
@@ -518,6 +621,16 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				}
 				continue
 			}
+			if x.vis != nil && langFamily(lang) == "c" {
+				// fm::f() with namespace fm = a::b: a::b::f()
+				if target := x.vis.nsAlias(x.callerPath, s.Root); target != "" {
+					segs := strings.Split(target, "::")
+					if s.Root == s.Scope {
+						s.Scope = segs[len(segs)-1]
+					}
+					s.Root = segs[0]
+				}
+			}
 			if externalScopes[s.Root] {
 				add(query.Callee{Name: s.Root + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 				continue
@@ -618,6 +731,11 @@ func cPlainCallee(name string, x siteIndex) query.Callee {
 		}
 		cands = append(cands, q)
 	}
+	if x.inNS[0] != "" && x.vis != nil {
+		if inner := x.vis.innermostNS(x.callerPath, x.visibleOnly(cands), name, x.inNS[0], x.inNS[1], x.defPath, x.alsoIn); inner != nil {
+			cands = inner
+		}
+	}
 	if q, ok := pickOne(cands, x); ok {
 		return query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved}
 	}
@@ -638,17 +756,20 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 	if t == "" {
 		return s
 	}
+	if x.types.ambiguousNested(t) && strings.HasSuffix(callerRecv, "::"+t) {
+		t = callerRecv // Impl written in a method of Outer::Impl: the class itself
+	}
 	if strings.HasPrefix(t, "[]") || strings.HasPrefix(t, "map[") || strings.HasPrefix(t, "pair[") {
 		t = "std::container" // a container's own member: size, insert, push_back, …
 	}
 	if x.types.nested[t] {
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
 	}
 	if root, _, scoped := strings.Cut(t, "::"); scoped && !externalScopes[root] && x.types.classes[t] == nil {
 		return s // Cls::Alias the table cannot follow: the type is not known
 	}
 	if strings.Contains(t, "::") || x.types.classes[t] != nil {
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
 	}
 	return s // a type the ref does not define (template parameter, using-imported library type)
 }
@@ -675,7 +796,11 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 		}
 		defs := x.recvDefs(leaf, name)
 		for _, tw := range x.splits[leaf] {
-			defs = append(defs, x.byRecv[tw+"."+name]...)
+			for _, q := range x.byRecv[tw+"."+name] {
+				if !containsStr(defs, q) { // the caller's own file's twin is already in
+					defs = append(defs, q)
+				}
+			}
 		}
 		if nested != "" && x.vis != nil {
 			defs = x.vis.ofNested(defs, nested, x.defPath, x.alsoIn)
@@ -787,6 +912,7 @@ func pickOne(all []string, x siteIndex) (string, bool) {
 		}
 	}
 	cands = x.visibleOnly(cands)
+	cands = x.declaredWith(cands)
 	if x.nargs > 0 && len(cands) > 0 {
 		// only definitions taking the call's argument count. An
 		// out-of-line definition leaves its defaults to the declaration, so
@@ -945,9 +1071,9 @@ func declaredTypeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		if t == "" {
 			t = "extern"
 		}
-		return CallSite{Name: s.Name, Kind: CallExternal, Scope: t, NArgs: s.NArgs}
+		return CallSite{Name: s.Name, Kind: CallExternal, Scope: t, NArgs: s.NArgs, File: s.File}
 	case t != "":
-		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes}
+		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
 	}
 	return s
 }

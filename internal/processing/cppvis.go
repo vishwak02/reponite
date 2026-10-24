@@ -10,6 +10,8 @@ package processing
 
 import (
 	"path"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -33,6 +35,7 @@ func newCppVisibility(files []ParsedFile) *cppVisibility {
 	v := &cppVisibility{facts: map[string]*TypeFacts{}, includes: map[string][]string{},
 		closure: map[string]map[string]bool{}, incl: map[string]map[string]bool{}, homes: map[string][]string{}, declares: map[string][]string{}, defaults: map[string]int{}}
 	byBase := map[string][]string{} // file basename -> C/C++ files
+	pk := newCatkinPackages(files)
 	n := 0
 	for _, f := range files {
 		if langFamily(f.Lang) != "c" {
@@ -64,7 +67,7 @@ func newCppVisibility(files []ParsedFile) *cppVisibility {
 	}
 	for p, tf := range v.facts {
 		for _, inc := range tf.Includes {
-			v.includes[p] = append(v.includes[p], resolveInclude(p, inc, byBase)...)
+			v.includes[p] = append(v.includes[p], resolveInclude(p, inc, byBase, pk)...)
 		}
 	}
 	return v
@@ -73,7 +76,7 @@ func newCppVisibility(files []ParsedFile) *cppVisibility {
 // resolveInclude maps an #include path to the repo files it can name: the
 // file relative to the includer when there is one, else every file whose path
 // ends with it (include directories are not known here).
-func resolveInclude(from, inc string, byBase map[string][]string) []string {
+func resolveInclude(from, inc string, byBase map[string][]string, pk *catkinPackages) []string {
 	cands := byBase[path.Base(inc)]
 	if len(cands) == 0 {
 		return nil
@@ -90,19 +93,123 @@ func resolveInclude(from, inc string, byBase map[string][]string) []string {
 	}
 	if len(out) > 1 {
 		// two packages ship a header of that name: the build lists the
-		// including package's own include directories first — the nearest
-		best, keep := -1, []string(nil)
+		// including package's own include directories first, then those of
+		// the packages it depends on (package.xml), each nearest first
+		tier := pk.tiers(from)
+		bestTier, best, keep := 1<<30, -1, []string(nil)
 		for _, c := range out {
+			t, ok := tier[pk.packageOf(c)]
+			if !ok {
+				t = len(tier) + 1
+			}
 			switch n := sharedDirs(from, c); {
-			case n > best:
-				best, keep = n, []string{c}
-			case n == best:
+			case t < bestTier || t == bestTier && n > best:
+				bestTier, best, keep = t, n, []string{c}
+			case t == bestTier && n == best:
 				keep = append(keep, c)
 			}
 		}
 		out = keep
 	}
 	return out
+}
+
+// catkinPackages are the ROS (catkin/ament) packages of a tree, from their
+// package.xml: a package's build sees its own include directories, then
+// those of the packages it depends on.
+type catkinPackages struct {
+	deps  map[string][]string // package dir -> the dirs of the packages it depends on
+	dirOf map[string]string   // package name -> its dir
+	pkgOf map[string]string   // directory -> its package's dir ("" none)
+	tier  map[string]map[string]int
+}
+
+var (
+	rePkgName = regexp.MustCompile(`<name>\s*([^<\s]+)\s*</name>`)
+	rePkgDep  = regexp.MustCompile(`<(?:build_)?depend>\s*([^<\s]+)\s*</`)
+)
+
+func newCatkinPackages(files []ParsedFile) *catkinPackages {
+	pk := &catkinPackages{deps: map[string][]string{}, dirOf: map[string]string{}, pkgOf: map[string]string{}, tier: map[string]map[string]int{}}
+	names := map[string][]string{} // package dir -> the names it depends on
+	for _, f := range files {
+		if path.Base(f.Path) != "package.xml" || f.Content == "" {
+			continue
+		}
+		m := rePkgName.FindStringSubmatch(f.Content)
+		if m == nil {
+			continue
+		}
+		d := path.Dir(f.Path)
+		pk.dirOf[m[1]] = d
+		pk.deps[d] = nil
+		for _, dm := range rePkgDep.FindAllStringSubmatch(f.Content, -1) {
+			names[d] = append(names[d], dm[1])
+		}
+	}
+	for d, ns := range names {
+		sort.Strings(ns) // the build lists them by name
+		for _, n := range ns {
+			if dd, ok := pk.dirOf[n]; ok {
+				pk.deps[d] = append(pk.deps[d], dd)
+			}
+		}
+	}
+	return pk
+}
+
+// packageOf is the dir of the package holding file ("" none).
+func (pk *catkinPackages) packageOf(file string) string {
+	if pk == nil || len(pk.deps) == 0 {
+		return ""
+	}
+	d := path.Dir(file)
+	if p, ok := pk.pkgOf[d]; ok {
+		return p
+	}
+	found := ""
+	for x := d; ; x = path.Dir(x) {
+		if _, ok := pk.deps[x]; ok {
+			found = x
+			break
+		}
+		if x == "." || x == "/" || x == "" {
+			break
+		}
+	}
+	pk.pkgOf[d] = found
+	return found
+}
+
+// tiers orders the packages file's build sees headers of: its own (0), then
+// its dependencies, breadth first.
+func (pk *catkinPackages) tiers(file string) map[string]int {
+	own := pk.packageOf(file)
+	if own == "" {
+		return nil
+	}
+	if t, ok := pk.tier[own]; ok {
+		return t
+	}
+	t := map[string]int{}
+	seen := map[string]bool{own: true}
+	queue, order := []string{own}, 0
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		if _, ok := t[p]; !ok {
+			t[p] = order
+		}
+		order++
+		for _, d := range pk.deps[p] {
+			if !seen[d] {
+				seen[d] = true
+				queue = append(queue, d)
+			}
+		}
+	}
+	pk.tier[own] = t
+	return t
 }
 
 // sharedDirs is how many leading directories paths a and b have in common.
@@ -208,7 +315,7 @@ func (v *cppVisibility) visible(caller, def, recv, name string) bool {
 	if v == nil || caller == def {
 		return true
 	}
-	if v.facts[caller] == nil {
+	if v.facts[caller] == nil || v.facts[caller].C {
 		return true // a file without C++ facts (C, a parse failure): no claim
 	}
 	cls, _, _ := strings.Cut(recv, "@")
@@ -251,6 +358,97 @@ func (v *cppVisibility) visible(caller, def, recv, name string) bool {
 		}
 	}
 	return false
+}
+
+// declaredBy reports whether file def includes (or is) a file declaring
+// name that code in caller sees.
+func (v *cppVisibility) declaredBy(caller, def, name string) bool {
+	seen, defIncl := v.seen(caller), v.included(def)
+	for _, d := range v.declares[name] {
+		if seen[d] && (d == def || defIncl[d]) && v.sameNamespace(d, def, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// nsAlias is what namespace alias name means in file: an alias the file
+// or a header it sees declares ("" none, or two different ones).
+func (v *cppVisibility) nsAlias(file, name string) string {
+	if f := v.facts[file]; f != nil && f.NSAliases[name] != "" {
+		return f.NSAliases[name]
+	}
+	out := ""
+	for h := range v.seen(file) {
+		if f := v.facts[h]; f != nil && f.NSAliases[name] != "" {
+			if out != "" && out != f.NSAliases[name] {
+				return ""
+			}
+			out = f.NSAliases[name]
+		}
+	}
+	return out
+}
+
+// sameNamespace: files a and b declare name in a common namespace (a file
+// without namespace facts makes no claim).
+func (v *cppVisibility) sameNamespace(a, b, name string) bool {
+	fa, fb := v.facts[a], v.facts[b]
+	if a == b || fa == nil || fb == nil || len(fa.FuncNS[name]) == 0 || len(fb.FuncNS[name]) == 0 {
+		return true
+	}
+	for _, ns := range fa.FuncNS[name] {
+		if containsStr(fb.FuncNS[name], ns) {
+			return true
+		}
+	}
+	return false
+}
+
+// innermostNS narrows the definitions a call root::…::scope::name can mean
+// to those C++ name lookup finds first from the caller's file: the root
+// namespace is looked up from the namespaces the file is written in (and
+// brings in), innermost first, so app::conv::f from inside namespace app is
+// app::conv::f, not a top-level conv::f; nil when that does not decide.
+func (v *cppVisibility) innermostNS(caller string, cands []string, name, root, scope string, defPath map[string]string, alsoIn map[string][]string) []string {
+	cf := v.facts[caller]
+	if cf == nil || len(cands) < 2 {
+		return nil
+	}
+	best, depth := []string(nil), -1
+	for _, q := range cands {
+		d := -1
+		for _, p := range append([]string{defPath[q]}, alsoIn[q]...) {
+			df := v.facts[p]
+			if df == nil || len(df.FuncNS[name]) == 0 {
+				return nil // a definition without namespace facts: no claim
+			}
+			for _, ns := range df.FuncNS[name] {
+				segs := strings.Split(ns, "::")
+				if segs[len(segs)-1] != scope {
+					continue
+				}
+				for k, sg := range segs {
+					if sg != root {
+						continue
+					}
+					if prefix := strings.Join(segs[:k], "::"); prefix == "" || cf.Opened[prefix] {
+						d = max(d, k)
+					}
+				}
+			}
+		}
+		switch {
+		case d > depth:
+			best, depth = []string{q}, d
+		case d == depth && d >= 0:
+			best = append(best, q)
+		}
+	}
+	if depth < 0 || len(best) == len(cands) {
+		return nil
+	}
+	return best
 }
 
 // internal: the definition belongs to its own source file (internal
