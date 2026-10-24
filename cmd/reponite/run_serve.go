@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/vishwak02/reponite/internal/interfaces"
 	"github.com/vishwak02/reponite/internal/processing"
@@ -53,15 +54,34 @@ func serveCommand(args []string) {
 	if defaulted > 0 {
 		fmt.Printf("reponite serve: %d repo(s) have no HEAD indexed and are read at their newest indexed ref (--refs repo=ref chooses)\n", defaulted)
 	}
+	// the index files: any write to them (a re-index beside the server)
+	// changes every answer's ETag
+	var dbPaths []string
+	for _, dir := range dirs {
+		dbPaths = append(dbPaths, dbPathFor(dir))
+	}
 	h := &interfaces.WebHandler{
 		Store: store, Repo: repos[0], Intent: processing.NewGitIntent(dirs[0]), RepoStores: repoStores,
 		ParseSymbols: func(path, content string) []query.EditedSymbol {
 			return processing.ParseEditedSymbols(path, content, version.NormVer)
 		},
-		Ranker: semanticRanker(),
+		Ranker:      semanticRanker(),
+		Compact:     true,
+		DataVersion: func() string { return interfaces.FileVersion(dbPaths...) },
+	}
+	// Bounded reads and an idle limit keep a stalled client from holding a
+	// connection; the write bound is generous, since a first fleet-wide answer
+	// on a large index can take a while to compute.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           h.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 	fmt.Printf("reponite serve: http://%s  (repos %v)\n", addr, repos)
-	if err := http.ListenAndServe(addr, h.Routes()); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		fail(err)
 	}
 }

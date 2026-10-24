@@ -1,0 +1,1 @@
+{"total":0,"truncated":false,"note":"no data models recognized at this ref (recognized: Django, DRF serializers, SQLAlchemy/SQLModel, Pydantic, dataclasses, TypeORM/MikroORM/sequelize-typescript, Prisma, GORM, SQL DDL (.sql), protobuf) — the repo may use another framework, or not be indexed — read [shop@HEAD]","_meta":{"repo":"*","ref":"HEAD"}}

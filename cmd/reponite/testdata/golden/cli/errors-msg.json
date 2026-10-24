@@ -1,0 +1,12 @@
+{
+  "query": "card",
+  "mode": "message",
+  "producers": [],
+  "total": 0,
+  "truncated": false,
+  "note": "no raise/throw/error value/HTTP error response at this ref produces this, and no JSON/YAML catalogue defines it — it may come from a dependency, another repo or version, or be built dynamically — NOTHING READ: no repo is indexed at the requested ref ([shop@declined]) — index it (reponite index \u003cdir\u003e \u003cref\u003e --git \u003crev\u003e) or pass --ref / --refs repo=ref",
+  "_meta": {
+    "repo": "*",
+    "ref": "declined"
+  }
+}

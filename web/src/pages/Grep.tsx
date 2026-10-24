@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { useScope } from "@/lib/scope";
 import { cn, fmt } from "@/lib/utils";
 import { Page } from "@/components/layout/AppShell";
-import { symbolHref } from "@/components/layout/CommandPalette";
+import { symbolHref } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";

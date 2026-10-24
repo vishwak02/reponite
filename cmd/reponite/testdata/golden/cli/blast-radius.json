@@ -1,0 +1,62 @@
+{
+  "symbol": "orders.Charge",
+  "repo": "shop",
+  "summary": "1 in-repo caller(s), 2 fleet caller(s) across 1 repo(s), 2 covering test(s)",
+  "modules": [
+    "example.com/shop"
+  ],
+  "contract_changed": false,
+  "definitions": [
+    {
+      "repo": "shop",
+      "ref": "HEAD",
+      "symbol": "orders.Charge",
+      "module": "example.com/shop",
+      "signature_hash": "sha256:3a57f2998d47ba5ba54dbe065a34f973fc4565404c709414c8e23c06a8858558"
+    },
+    {
+      "repo": "shop",
+      "ref": "v1",
+      "symbol": "orders.Charge",
+      "module": "example.com/shop",
+      "signature_hash": "sha256:3a57f2998d47ba5ba54dbe065a34f973fc4565404c709414c8e23c06a8858558"
+    }
+  ],
+  "in_repo_callers": [
+    "server.handleOrders"
+  ],
+  "fleet_callers": [
+    {
+      "repo": "shop",
+      "ref": "HEAD",
+      "caller": "server.handleOrders",
+      "module": "example.com/shop/orders",
+      "resolution_method": "import-resolved",
+      "confidence": 0.75
+    },
+    {
+      "repo": "shop",
+      "ref": "v1",
+      "caller": "server.handleOrders",
+      "module": "example.com/shop/orders",
+      "resolution_method": "import-resolved",
+      "confidence": 0.75
+    }
+  ],
+  "covering_tests": [
+    "orders.TestCharge",
+    "orders.TestChargeDeclined"
+  ],
+  "compat_across_refs": [
+    {
+      "ref": "v1",
+      "verdict": "behavior_changed",
+      "confidence": 0.6
+    }
+  ],
+  "note": "impact = in-repo callers + fleet callers (source call graph; RPC/HTTP invisible) + covering tests + cross-ref contract",
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

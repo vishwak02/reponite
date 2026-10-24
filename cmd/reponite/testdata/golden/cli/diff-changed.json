@@ -1,0 +1,56 @@
+{
+  "repo": "shop",
+  "from": "v1",
+  "to": "HEAD",
+  "changes": [
+    {
+      "name": "orders.Charge",
+      "change": "behavior_changed",
+      "confidence": 0.6
+    },
+    {
+      "name": "orders.Refund",
+      "change": "added",
+      "confidence": 1
+    },
+    {
+      "name": "orders.TestCharge",
+      "change": "behavior_changed",
+      "confidence": 0.6
+    },
+    {
+      "name": "orders.TestChargeDeclined",
+      "change": "behavior_changed",
+      "confidence": 0.6
+    },
+    {
+      "name": "orders.limit",
+      "change": "added",
+      "confidence": 1
+    },
+    {
+      "name": "orders.validateCard",
+      "change": "behavior_changed",
+      "confidence": 1
+    },
+    {
+      "name": "server.handleOrders",
+      "change": "behavior_changed",
+      "confidence": 0.6
+    },
+    {
+      "name": "web/src.OrderButton",
+      "change": "added",
+      "confidence": 1
+    },
+    {
+      "name": "web/src.api.formatTotal",
+      "change": "shape_changed",
+      "confidence": 1
+    }
+  ],
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

@@ -3,9 +3,9 @@ import { Link } from "react-router-dom";
 import { Braces } from "lucide-react";
 import { shortName } from "@/lib/utils";
 import { Page } from "@/components/layout/AppShell";
-import { symbolHref } from "@/components/layout/CommandPalette";
+import { symbolHref } from "@/lib/routes";
 import { Empty, Skeleton } from "@/components/ui/skeleton";
-import { useSymbolParams } from "./Symbol";
+import { useSymbolParams } from "@/lib/symbolParams";
 
 const CallGraph = lazy(() => import("@/components/graph/CallGraph"));
 

@@ -1,0 +1,52 @@
+{
+  "mode": "catalogue",
+  "producers": [
+    {
+      "repo": "shop",
+      "path": "orders/orders.go",
+      "line": 11,
+      "kind": "error_value",
+      "type": "ErrDeclined",
+      "message": "card declined"
+    },
+    {
+      "repo": "shop",
+      "path": "server/main.go",
+      "line": 20,
+      "in": "handleOrders",
+      "kind": "http_response",
+      "status": 400,
+      "message": "bad order"
+    },
+    {
+      "repo": "shop",
+      "path": "tools/report.py",
+      "line": 13,
+      "in": "summarize",
+      "kind": "raise",
+      "type": "ValueError",
+      "message": "no orders to report"
+    }
+  ],
+  "types": [
+    {
+      "repo": "shop",
+      "type": "ErrDeclined",
+      "produced": 2,
+      "handled": 1
+    },
+    {
+      "repo": "shop",
+      "type": "ValueError",
+      "produced": 1,
+      "handled": 0
+    }
+  ],
+  "total": 6,
+  "truncated": false,
+  "note": "error catalogue: types (produced = raise/throw/constructor sites, handled = except/catch naming it; status = HTTP status it maps to) and producing sites with a message — read [shop@HEAD]",
+  "_meta": {
+    "repo": "*",
+    "ref": "HEAD"
+  }
+}

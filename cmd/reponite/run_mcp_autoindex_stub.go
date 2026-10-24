@@ -21,9 +21,10 @@ func newSymbolParser() func(path, content string) []query.EditedSymbol { return 
 // autoIndexOnMount is a no-op in MCP builds without the tree-sitter indexer
 // (`-tags "sqlite mcp"`); it warns so an empty index isn't mistaken for a broken
 // server. Build with `make cli` (adds -tags treesitter) for index/refresh on mount.
-func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
+func autoIndexOnMount(st *sqlite.Store, repo, dir string) (stop func()) {
 	if len(st.Refs(repo)) > 0 {
-		return
+		return func() {}
 	}
 	fmt.Fprintf(os.Stderr, "reponite: no index for %q and this build lacks the indexer; run `reponite index %s` (or use the full `make cli` binary).\n", repo, dir)
+	return func() {}
 }

@@ -208,8 +208,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			} else if dup && langFamily(lang) == "c" && langFamily(prev.lang) == "c" && (s.Recv == "" || classBodyIn(f, s.Recv)) {
 				// f defined in two files of one directory (each program's main,
 				// two files' static helpers): one id calls what either calls —
-				// before, the later file's body replaced the earlier one's
-				s = mergeOverload(prev.sym, s)
+				// before, the later file's body replaced the earlier one's —
+				// each call resolved in its own file
+				s = mergeOverload(withSiteFile(prev.sym, prev.path), withSiteFile(s, f.Path))
 				defPath = prev.path
 				alsoIn[qid] = append(alsoIn[qid], f.Path)
 			}
@@ -482,6 +483,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		nodes = append(nodes, Node{ID: qid, SymbolHash: c.symbolHash})
 		var callees []query.Callee
 		x.callerTest, x.caller, x.callerPath = x.isTest[qid], qid, c.path
+		x.callerOuter = c.sym.RecvOuter
 		v := viewFor(c.lang)
 		x.nodeSet, x.byBase = v.nodeSet, v.byBase
 		nodeSet, byBase := v.nodeSet, v.byBase
@@ -933,6 +935,23 @@ func mergeOverload(a, b Symbol) Symbol {
 		a.Vars = vars
 	}
 	return a
+}
+
+// withSiteFile marks the call sites of s not yet attributed to a file as
+// written in file p.
+func withSiteFile(s Symbol, p string) Symbol {
+	if len(s.CallSites) == 0 {
+		return s
+	}
+	sites := make([]CallSite, len(s.CallSites))
+	for i, cs := range s.CallSites {
+		if cs.File == "" {
+			cs.File = p
+		}
+		sites[i] = cs
+	}
+	s.CallSites = sites
+	return s
 }
 
 // nameGoInits gives each Go init function its file's name (init@config for

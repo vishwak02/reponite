@@ -1,0 +1,198 @@
+{
+  "repo": "shop",
+  "ref": "HEAD",
+  "module": "example.com/shop",
+  "languages": [
+    {
+      "lang": "go",
+      "files": 3,
+      "symbols": 11
+    },
+    {
+      "lang": "typescript",
+      "files": 2,
+      "symbols": 4
+    },
+    {
+      "lang": "python",
+      "files": 1,
+      "symbols": 3
+    }
+  ],
+  "files": 7,
+  "symbols": 18,
+  "edges": 33,
+  "entry_points": [
+    {
+      "kind": "main",
+      "name": "server",
+      "framework": "go",
+      "repo": "shop",
+      "path": "server/main.go",
+      "line": 12,
+      "count": 0
+    },
+    {
+      "kind": "main",
+      "name": "tools/report.py",
+      "framework": "python",
+      "repo": "shop",
+      "path": "tools/report.py",
+      "line": 21,
+      "count": 0
+    },
+    {
+      "kind": "http",
+      "name": "net/http routes",
+      "framework": "net/http",
+      "repo": "shop",
+      "path": "server/main.go",
+      "line": 13,
+      "detail": "1 routes in 1 files; started at server/main.go:14",
+      "items": [
+        "* /api/orders"
+      ],
+      "count": 1
+    }
+  ],
+  "modules": [
+    {
+      "path": "orders",
+      "files": 2,
+      "symbols": 7,
+      "fan_in": 2,
+      "purpose": "Package orders bills and stores customer orders.",
+      "source": "orders/orders.go:1"
+    },
+    {
+      "path": "web/src",
+      "files": 2,
+      "symbols": 4,
+      "fan_in": 0
+    },
+    {
+      "path": "tools",
+      "files": 1,
+      "symbols": 3,
+      "fan_in": 0
+    },
+    {
+      "path": "server",
+      "files": 1,
+      "symbols": 2,
+      "fan_in": 0
+    }
+  ],
+  "hubs": [
+    {
+      "symbol": "orders.Charge",
+      "path": "orders/orders.go",
+      "line": 20,
+      "in": 1,
+      "out": 2
+    },
+    {
+      "symbol": "orders.save",
+      "path": "orders/orders.go",
+      "line": 37,
+      "in": 2,
+      "out": 0
+    },
+    {
+      "symbol": "orders.validateCard",
+      "path": "orders/orders.go",
+      "line": 28,
+      "in": 1,
+      "out": 1
+    },
+    {
+      "symbol": "tools.report.summarize",
+      "path": "tools/report.py",
+      "line": 10,
+      "in": 1,
+      "out": 1
+    },
+    {
+      "symbol": "web/src.OrderButton",
+      "path": "web/src/OrderButton.tsx",
+      "line": 4,
+      "in": 0,
+      "out": 2
+    },
+    {
+      "symbol": "orders.Port",
+      "path": "orders/orders.go",
+      "line": 49,
+      "in": 1,
+      "out": 0
+    },
+    {
+      "symbol": "orders.limit",
+      "path": "orders/orders.go",
+      "line": 35,
+      "in": 1,
+      "out": 0
+    },
+    {
+      "symbol": "tools.report.load_orders",
+      "path": "tools/report.py",
+      "line": 5,
+      "in": 1,
+      "out": 0
+    },
+    {
+      "symbol": "web/src.api.formatTotal",
+      "path": "web/src/api.ts",
+      "line": 11,
+      "in": 1,
+      "out": 0
+    },
+    {
+      "symbol": "web/src.api.placeOrder",
+      "path": "web/src/api.ts",
+      "line": 6,
+      "in": 1,
+      "out": 0
+    },
+    {
+      "symbol": "orders.Refund",
+      "path": "orders/orders.go",
+      "line": 43,
+      "in": 0,
+      "out": 1
+    },
+    {
+      "symbol": "server.handleOrders",
+      "path": "server/main.go",
+      "line": 17,
+      "in": 0,
+      "out": 1
+    },
+    {
+      "symbol": "server.main",
+      "path": "server/main.go",
+      "line": 12,
+      "in": 0,
+      "out": 1
+    },
+    {
+      "symbol": "tools.report.main",
+      "path": "tools/report.py",
+      "line": 17,
+      "in": 0,
+      "out": 1
+    }
+  ],
+  "internal_deps": 0,
+  "truncated": false,
+  "next": [
+    "reponite explain orders --repo shop   (a module: its files, purpose, top symbols)",
+    "reponite explain orders.Charge --repo shop   (a symbol: what it is, callers/callees, routes, tests)",
+    "reponite routes   (every route with the client calls that reach it)",
+    "reponite investigate \"\u003chow does X work\u003e\"   (a feature, by question)"
+  ],
+  "_meta": {
+    "repo": "shop",
+    "ref": "HEAD"
+  }
+}

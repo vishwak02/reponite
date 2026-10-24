@@ -1,7 +1,9 @@
 // The call-graph workspace: a symbol's callers (left) and callees (right),
-// laid out by ELK and drawn with React Flow. Double-click a node to expand its
-// own neighborhood in place; the side panel opens or refocuses it.
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+// laid out by ELK (in a worker) and drawn with React Flow. Double-click a node
+// to expand its own neighborhood in place: the nodes on screen stay where they
+// are and only the new ones are placed, beside the expanded node. The side
+// panel opens or refocuses a node.
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -25,11 +27,12 @@ import "@xyflow/react/dist/style.css";
 import { Crosshair, ExternalLink, FlaskConical, Loader2, Plus } from "lucide-react";
 import { api, type GraphEdge, type GraphNode, type GraphResult } from "@/lib/api";
 import { cn, shortName } from "@/lib/utils";
-import { symbolHref } from "@/components/layout/CommandPalette";
+import { symbolHref } from "@/lib/routes";
 import { Badge, Confidence } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty } from "@/components/ui/skeleton";
-import { fontsReady, layered, textWidth } from "./layout";
+import { placeAround } from "@/lib/place";
+import { fontsReady, layered, SPACING, textWidth, type Placed } from "./layout";
 
 type CallData = GraphNode & { focus: boolean; expanded: boolean; dim: boolean; hl: boolean } & Record<string, unknown>;
 
@@ -69,6 +72,9 @@ CallNode.displayName = "CallNode";
 const nodeTypes = { call: CallNode };
 
 const H = 46;
+
+interface Extra { nodes: GraphNode[]; edges: GraphEdge[]; expanded: Set<string>; last?: string; side: Map<string, number> }
+const noExtra = (): Extra => ({ nodes: [], edges: [], expanded: new Set(), side: new Map() });
 const width = (n: GraphNode) => Math.min(440, Math.max(120, Math.max(textWidth(n.label), textWidth(n.pkg, "10px Inter")) + 40));
 
 interface Opts { depth: number; tests: boolean; external: boolean; limit: number }
@@ -82,9 +88,12 @@ function Inner({ repo, refName, symbol, height }: { repo: string; refName: strin
     queryKey: ["graph", repo, refName, symbol, opts],
     queryFn: () => api<GraphResult>("graph", { repo, ref: refName, symbol, ...opts }),
   });
-  // nodes/edges added by expanding, on top of the fetched neighborhood
-  const [extra, setExtra] = useState<{ nodes: GraphNode[]; edges: GraphEdge[]; expanded: Set<string> }>({ nodes: [], edges: [], expanded: new Set() });
-  useEffect(() => setExtra({ nodes: [], edges: [], expanded: new Set() }), [repo, refName, symbol, opts]);
+  // nodes/edges added by expanding, on top of the fetched neighborhood; last
+  // is the node expanded most recently, side each added node's side of it
+  const [extra, setExtra] = useState<Extra>(noExtra);
+  useEffect(() => setExtra(noExtra()), [repo, refName, symbol, opts]);
+  // the positions on screen and the fetched neighborhood they were laid out for
+  const laid = useRef<{ base: GraphResult | null; pos: Map<string, Placed>; w: Map<string, number> }>({ base: null, pos: new Map(), w: new Map() });
   const [expanding, setExpanding] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
@@ -100,19 +109,31 @@ function Inner({ repo, refName, symbol, height }: { repo: string; refName: strin
     return { nodes: [...byId.values()], edges: [...edges.values()] };
   }, [g.data, extra]);
 
-  // layout whenever the node set changes
+  // lay out whenever the node set changes: the whole graph for a new
+  // neighborhood, only the added nodes after an expand
   useEffect(() => {
     if (!merged || !g.data) return;
     let live = true;
     let boxes: { id: string; width: number; height: number }[] = [];
+    let full = false;
     fontsReady()
       .then(() => {
         boxes = merged.nodes.map((n) => ({ id: n.id, width: width(n), height: H }));
+        const L = laid.current;
+        const at = extra.last ? L.pos.get(extra.last) : undefined;
+        if (L.base === g.data && extra.last && at) {
+          const anchor = { ...at, width: L.w.get(extra.last) ?? 0, height: H };
+          const placed = [...L.pos].map(([id, p]) => ({ ...p, width: L.w.get(id) ?? 0, height: H }));
+          const fresh = boxes.filter((b) => !L.pos.has(b.id)).map((b) => ({ ...b, side: (extra.side.get(b.id) ?? 1) < 0 ? (-1 as const) : (1 as const) }));
+          return new Map([...L.pos, ...placeAround(anchor, placed, fresh, SPACING.layer, SPACING.node)]);
+        }
+        full = true;
         return layered(boxes, merged.edges);
       })
       .then((pos) => {
       if (!live) return;
       const w = new Map(boxes.map((b) => [b.id, b.width]));
+      laid.current = { base: g.data!, pos, w };
       setNodes(
         merged.nodes.map((n) => ({
           id: n.id,
@@ -123,7 +144,8 @@ function Inner({ repo, refName, symbol, height }: { repo: string; refName: strin
           data: { ...n, focus: n.id === g.data!.focus, expanded: extra.expanded.has(n.id), dim: false, hl: false },
         })),
       );
-      setFit((f) => f + 1);
+      // refit for a new neighborhood; an expand keeps the viewport
+      if (full) setFit((f) => f + 1);
     });
     return () => {
       live = false;
@@ -178,7 +200,11 @@ function Inner({ repo, refName, symbol, height }: { repo: string; refName: strin
           queryKey: ["graph", repo, refName, id, { ...opts, depth: 1, limit: 40 }],
           queryFn: () => api<GraphResult>("graph", { repo, ref: refName, symbol: id, ...opts, depth: 1, limit: 40 }),
         });
-        setExtra((x) => ({ nodes: [...x.nodes, ...r.nodes], edges: [...x.edges, ...r.edges], expanded: new Set(x.expanded).add(id) }));
+        setExtra((x) => {
+          const side = new Map(x.side);
+          for (const n of r.nodes) if (!side.has(n.id)) side.set(n.id, n.hop);
+          return { nodes: [...x.nodes, ...r.nodes], edges: [...x.edges, ...r.edges], expanded: new Set(x.expanded).add(id), last: id, side };
+        });
       } finally {
         setExpanding(null);
       }

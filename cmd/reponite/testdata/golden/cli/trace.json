@@ -1,0 +1,75 @@
+{
+  "entry": "Charge",
+  "entry_kind": "symbol",
+  "direction": "down",
+  "depth": 5,
+  "budget": 2000,
+  "nodes": 4,
+  "tokens": 79,
+  "truncated": false,
+  "roots": [
+    {
+      "kind": "symbol",
+      "repo": "shop",
+      "handle": "orders.Charge",
+      "path": "orders/orders.go",
+      "line": 20,
+      "confidence": 1,
+      "effects": [
+        {
+          "kind": "log",
+          "op": "log.Printf",
+          "line": 21,
+          "text": "log.Printf \"charging order %s\""
+        }
+      ],
+      "children": [
+        {
+          "kind": "symbol",
+          "repo": "shop",
+          "handle": "orders.validateCard",
+          "path": "orders/orders.go",
+          "line": 28,
+          "edge": "call",
+          "resolution_method": "go-types",
+          "confidence": 1,
+          "children": [
+            {
+              "kind": "symbol",
+              "repo": "shop",
+              "handle": "orders.limit",
+              "path": "orders/orders.go",
+              "line": 35,
+              "edge": "call",
+              "resolution_method": "go-types",
+              "confidence": 1
+            }
+          ]
+        },
+        {
+          "kind": "symbol",
+          "repo": "shop",
+          "handle": "orders.save",
+          "path": "orders/orders.go",
+          "line": 37,
+          "edge": "call",
+          "resolution_method": "go-types",
+          "confidence": 1,
+          "effects": [
+            {
+              "kind": "log",
+              "op": "log.Printf",
+              "line": 38,
+              "text": "log.Printf \"saved order %s\""
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "note": "walk stopped at: none (every reachable node expanded). Edges carry the call graph's resolution_method/confidence; http (route match by path+method), topic (name match), impl (class derivation) and framework (convention) crossings are medium confidence. Effects are read from each body's source lines; a framework's own behavior is inferred and labeled so. — read [shop@HEAD]",
+  "_meta": {
+    "repo": "*",
+    "ref": "HEAD"
+  }
+}

@@ -50,6 +50,9 @@ type Symbol struct {
 	// ParamTypes: each overload's parameter types as written, by their
 	// last name (const geometry_msgs::Pose& -> Pose); "" where unknown
 	ParamTypes [][]string
+	// RecvOuter: the class a C++ method's own class is nested in, as its
+	// definition writes it (void Outer::Inner::f(), or in Outer's body)
+	RecvOuter string
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -113,6 +116,7 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 	// class the way Go qualifies by its receiver — keeping same-named methods on
 	// different classes distinct (Invariant 2). Empty at file scope and for Go
 	// (whose methods are top-level with a child receiver, not nested in the type).
+	var outers []string // the class enclosing each class being walked ("" none)
 	var walk func(n content.AST, enclosing string)
 	walk = func(n content.AST, enclosing string) {
 		var doc [][]byte
@@ -124,7 +128,19 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 			}
 			switch {
 			case containsStr(r.FuncDecl, t):
-				appendNamed(&out, extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n)))
+				fs := extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n))
+				if r.Name == "cpp" && fs.RecvOuter == "" && fs.Recv == enclosing && len(outers) > 0 {
+					fs.RecvOuter = outers[len(outers)-1] // a method of a nested class
+				}
+				appendNamed(&out, fs)
+				for _, lc := range localClasses(child, r) {
+					// a class defined inside the function (a visitor for
+					// std::visit): its methods are definitions of their own
+					out = append(out, typeSymbols(lc, r, normVer, nil)...)
+					outers = append(outers, "")
+					walk(lc, nameOf(lc, r))
+					outers = outers[:len(outers)-1]
+				}
 			case containsStr(r.MethodDecl, t):
 				appendNamed(&out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n)))
 			case containsStr(r.VarFuncDecl, t):
@@ -147,7 +163,9 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 				if len(r.TypeSpec) == 0 {
 					nested = nameOf(child, r)
 				}
+				outers = append(outers, enclosing)
 				walk(child, nested)
+				outers = outers[:len(outers)-1]
 			case t == "friend_declaration":
 				// a friend function defined in a class body is a free function
 				walk(child, "")
@@ -166,6 +184,36 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 		}
 	}
 	walk(root, "")
+	return out
+}
+
+// localClasses are the classes a C++ function defines in its body (those
+// nested in them are reached through their own methods).
+func localClasses(fn content.AST, r LangRules) []content.AST {
+	if r.Name != "cpp" {
+		return nil
+	}
+	body := firstChildAny(fn, r.BodyTypes)
+	if body == nil {
+		return nil
+	}
+	var out []content.AST
+	var walk func(n content.AST)
+	walk = func(n content.AST) {
+		for _, c := range n.Children() {
+			switch c.Type() {
+			case "class_specifier", "struct_specifier":
+				if !isTypeReference(c, r) && nameOf(c, r) != "" {
+					out = append(out, c)
+					continue
+				}
+			case "function_definition":
+				continue
+			}
+			walk(c)
+		}
+	}
+	walk(body)
 	return out
 }
 
@@ -224,10 +272,17 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		}
 		if r.CallSiteKinds {
 			var vars map[string]string
-			if r.Name == "cpp" {
-				vars = cppVarTypes(fn, r)
+			own, ownBody := fn, body
+			if len(localClasses(fn, r)) > 0 {
+				// the methods of a class defined in the body make their own
+				// calls, with their own parameters and locals
+				own = deepFiltered{AST: fn, drop: map[string]bool{"function_definition": true}}
+				ownBody = firstChildAny(own, r.BodyTypes)
 			}
-			sites = clikeCallSites(body, r, vars)
+			if r.Name == "cpp" {
+				vars = cppVarTypes(own, r)
+			}
+			sites = clikeCallSites(ownBody, r, vars)
 		}
 	}
 	recv := ""
@@ -237,8 +292,10 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	if recv == "" {
 		recv = enclosing // class-based languages: qualify by the enclosing class
 	}
+	recvOuter := ""
 	if recv == "" && r.ScopedDefs {
 		recv = declScope(fn, r) // out-of-class C++ definition: void A::f()
+		recvOuter = declOuterScope(fn, r)
 	}
 	var vars map[string]string
 	returns := ""
@@ -284,6 +341,7 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		QualifiedCalls: qcalls,
 		LocalImports:   localImports,
 		CallSites:      sites,
+		RecvOuter:      recvOuter,
 	}
 }
 
@@ -732,6 +790,15 @@ func nameOf(n content.AST, r LangRules) string {
 		if d := declaratorOf(n, r); d != nil {
 			return declaratorName(d, r)
 		}
+		if r.Name == "cpp" && containsStr(r.FuncDecl, n.Type()) {
+			// operator bool() const { … }: a conversion function, named by
+			// its type; any other definition without a declarator is
+			// anonymous (its body's identifiers are not its name)
+			if oc := conversionOperator(n); oc != nil {
+				return conversionName(oc)
+			}
+			return ""
+		}
 	}
 	return nameOfNode(n, r.NameTypes, r.NameByDesc)
 }
@@ -772,6 +839,9 @@ func declaratorName(d content.AST, r LangRules) string {
 		for _, c := range n.Children() {
 			if strings.Contains(c.Type(), "parameter") {
 				return true
+			}
+			if c.Type() == "template_argument_list" {
+				continue // template <> T f<T>(…): named f, not after its argument
 			}
 			if containsStr(types, c.Type()) {
 				name = c.Text()

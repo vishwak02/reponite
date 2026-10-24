@@ -1,0 +1,1 @@
+{"mode":"pages","truncated":false,"note":"no client routes recognized (react-router, vue-router/route tables, Next.js, SvelteKit, Nuxt) — unrecognized router; ask for a component by name instead — read [shop@HEAD]","_meta":{"repo":"*","ref":"HEAD"}}
