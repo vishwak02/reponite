@@ -1,222 +1,447 @@
-// cppbodymacros.go adds the calls a repo macro makes where a function body
-// uses it: `TRACE_ERROR(msg)` defined as `Tracer::instance().logError(msg)`
-// calls Tracer::instance and logError, and `__METHOD_NAME__` defined as
-// `methodName(__PRETTY_FUNCTION__)` calls methodName — calls the source text
-// of the body never shows. Only macros the repo defines, once (a name
-// defined differently under #if is the build's to pick), in a file the
-// caller includes, are expanded; the arguments' own calls are already the
-// body's. Test code is left to the test helpers' own handling. Pure over
-// the source text (ADR-018); the expansion's calls are read by the
-// tree-sitter layer (cppMemberParser).
+// cppbodymacros.go expands the repo's own macros where a function body uses
+// them, so the calls they make are the function's: `STEP_UNTIL(done())` in a
+// test is `stepUntil([&] { return (done()); })` to the compiler, and the
+// stepUntil call exists nowhere in the source text. Each use expands the
+// definition its translation unit sees — the file's own above it, or a header
+// it includes; two files may define one name differently — and one of
+// several conflicting definitions in sight (an #ifdef's variants) is not
+// guessed. The file is re-read with the uses replaced in place (its lines
+// kept), and each function takes the call sites of its expanded body. Pure
+// and stdlib-only (ADR-018); the parse is the tree-sitter layer's
+// (cppFunctionBodies, cppReparse).
 package processing
 
 import (
 	"regexp"
 	"strings"
-
-	"github.com/vishwak02/reponite/internal/content"
 )
 
-// macroArgPlaceholder stands for each argument of an expanded macro call:
-// the arguments' calls are the body's own, read where they are written.
-const macroArgPlaceholder = "reponite_macro_arg_"
+// cppFunctionBodies is a C/C++ file's function bodies (the outermost: a
+// local class's methods are inside its function's); nil in builds without
+// tree-sitter.
+var cppFunctionBodies func(path, src string) []cppBody
 
-var reMacroLike = regexp.MustCompile(`^(__[A-Za-z0-9_]+__|[A-Z][A-Z0-9_]*[A-Z0-9])$`)
+// cppBody is a function body's bytes [start, end) and the scopes an
+// unqualified name in it is looked up in: its namespaces ("a::b", "" the
+// global one) and the class an out-of-line member is defined for (a::C).
+type cppBody struct {
+	start, end int
+	scopes     []string
+	usings     []string // the namespaces using directives open there
+}
 
-// macroLikeIdents are the identifiers of a body written like an object-like
-// macro (FOO_BAR, __FOO__), each once.
-func macroLikeIdents(body content.AST) []string {
-	if body == nil {
-		return nil
-	}
-	var out []string
-	seen := map[string]bool{}
-	for _, id := range descendantsAny(body, []string{"identifier"}) {
-		if t := id.Text(); reMacroLike.MatchString(t) && !seen[t] {
-			seen[t] = true
-			out = append(out, t)
+// cppReparse parses a C/C++ file's text into its symbols; nil in builds
+// without tree-sitter.
+var cppReparse func(path, src string, normVer int) []Symbol
+
+// cppMacroDef is one #define of the repo.
+type cppMacroDef struct {
+	file string
+	line int // the #define's line, 1-based
+	mac  cppMacro
+	key  string // what tells two definitions apart
+}
+
+// cppMacroDefs reads every #define of the C/C++ sources, all of them by name.
+func cppMacroDefs(srcs map[string]string) map[string][]cppMacroDef {
+	out := map[string][]cppMacroDef{}
+	for file, src := range srcs {
+		if !strings.Contains(src, "define") {
+			continue
+		}
+		lines := strings.Split(src, "\n")
+		for i := 0; i < len(lines); i++ {
+			at := i + 1
+			ln := lines[i]
+			for strings.HasSuffix(strings.TrimRight(ln, " \t\r"), "\\") && i+1 < len(lines) {
+				ln = strings.TrimSuffix(strings.TrimRight(ln, " \t\r"), "\\") + " " + lines[i+1]
+				i++
+			}
+			m := reDefine.FindStringSubmatch(ln)
+			if m == nil {
+				continue
+			}
+			mac := cppMacro{body: strings.TrimSpace(stripBlockComments(stripLineComment(m[4])))}
+			if m[2] != "" {
+				mac.params = []string{}
+				for _, p := range strings.Split(m[3], ",") {
+					p = strings.TrimSpace(p)
+					switch {
+					case p == "":
+					case p == "...":
+						mac.variadic = true
+					case strings.HasSuffix(p, "..."):
+						mac.variadic = true
+						mac.params = append(mac.params, strings.TrimSpace(strings.TrimSuffix(p, "...")))
+					default:
+						mac.params = append(mac.params, p)
+					}
+				}
+			}
+			key := strings.Join(strings.Fields(mac.body), " ")
+			if mac.params != nil {
+				key = "(" + strings.Join(mac.params, ",") + map[bool]string{true: ",...", false: ""}[mac.variadic] + ")" + key
+			}
+			out[m[1]] = append(out[m[1]], cppMacroDef{file: file, line: at, mac: mac, key: key})
 		}
 	}
 	return out
 }
 
-type bodyMacro struct {
-	mac  cppMacro
-	file string
+// stripBlockComments drops /* … */ comments from one logical line.
+func stripBlockComments(s string) string {
+	for {
+		i := strings.Index(s, "/*")
+		if i < 0 {
+			return s
+		}
+		j := strings.Index(s[i+2:], "*/")
+		if j < 0 {
+			return s[:i]
+		}
+		s = s[:i] + " " + s[i+2+j+2:]
+	}
 }
 
-// expandCppBodyMacros appends to each production C++ function the calls of
-// the repo macros its body uses.
-func expandCppBodyMacros(files []ParsedFile) {
-	if cppMemberParser == nil {
+// reUsingNS is a using directive.
+var reUsingNS = regexp.MustCompile(`\busing\s+namespace\s+([A-Za-z_][\w:\s]*?)\s*;`)
+
+// reCallLike finds name( in an expansion: something it may call.
+var reCallLike = regexp.MustCompile(`([A-Za-z_]\w*)\s*\(`)
+
+// notCallees are the keywords and operators written like a call.
+var notCallees = map[string]bool{
+	"if": true, "while": true, "for": true, "switch": true, "return": true, "sizeof": true, "alignof": true,
+	"decltype": true, "typeid": true, "noexcept": true, "static_assert": true, "catch": true, "defined": true,
+	"alignas": true, "throw": true, "__attribute__": true, "__declspec": true, "_Pragma": true, "__typeof__": true,
+	"typeof": true, "static_cast": true, "dynamic_cast": true, "const_cast": true, "reinterpret_cast": true,
+	"do": true, "else": true, "case": true, "new": true, "delete": true, "__has_include": true,
+}
+
+// callingMacro reports a macro whose expansion may call something.
+func callingMacro(m cppMacro, first map[string]cppMacro) bool {
+	for _, c := range reCallLike.FindAllStringSubmatch(cppExpand(m.body, first, 0), -1) {
+		if !notCallees[c[1]] {
+			return true
+		}
+	}
+	return false
+}
+
+// expandBodyMacros gives each C/C++ function the call sites its body has
+// once the repo's macros it uses are expanded.
+func expandBodyMacros(files []ParsedFile, srcs map[string]string, normVer int) {
+	if cppFunctionBodies == nil || cppReparse == nil {
 		return
 	}
-	uses := false
-	for _, f := range files {
-		if f.Lang != "cpp" || f.IsTest {
-			continue
-		}
-		for _, s := range f.Symbols {
-			if len(s.MacroIdents) > 0 || len(s.CallSites) > 0 {
-				uses = true
+	defs := cppMacroDefs(srcs)
+	first := map[string]cppMacro{}
+	for name, ds := range defs {
+		first[name] = ds[0].mac
+	}
+	calling := map[string]bool{}
+	for name, ds := range defs {
+		for _, d := range ds {
+			if callingMacro(d.mac, first) {
+				calling[name] = true
 				break
 			}
 		}
 	}
-	if !uses {
+	if len(calling) == 0 {
 		return
 	}
-	defs := map[string][]bodyMacro{} // name -> its distinct definitions
-	all := map[string]string{}       // C/C++ file -> source holding a #define
+	// unqualified lookup of what an expansion calls: the repo's free
+	// functions by namespace, and the names some class has a method of
+	freeNS, methods := map[string][]string{}, map[string]bool{}
 	for _, f := range files {
-		if langFamily(f.Lang) != "c" {
-			continue
-		}
-		src := f.Content
-		if src == "" && f.Load != nil {
-			src, _ = f.Load()
-		}
-		if !strings.Contains(src, "define") {
-			continue
-		}
-		all[f.Path] = src
-		for _, nm := range everyDefine(src) {
-			name, m := nm.name, nm.mac
-			dup := false
-			for _, d := range defs[name] {
-				dup = dup || d.mac.body == m.body && len(d.mac.params) == len(m.params)
+		if f.Types != nil {
+			for n, nss := range f.Types.FuncNS {
+				freeNS[n] = append(freeNS[n], nss...)
 			}
-			if !dup {
-				defs[name] = append(defs[name], bodyMacro{mac: m, file: f.Path})
+		}
+		for _, s := range f.Symbols {
+			if s.Recv != "" && s.Kind != "type" {
+				methods[s.Name] = true
 			}
 		}
 	}
-	if len(defs) == 0 {
-		return
-	}
-	macros := cppMacros(all) // for the macros a macro's body uses
+	usingsOf := map[string][]string{}
 	var vis *cppVisibility
-	cache := map[string][]CallSite{}
+	visReady := false
 	for i := range files {
 		f := &files[i]
-		if f.Lang != "cpp" || f.IsTest {
+		src := srcs[f.Path]
+		if src == "" || len(f.Symbols) == 0 || !usesAny(src, calling) {
 			continue
 		}
-		for j := range f.Symbols {
-			s := &f.Symbols[j]
-			var texts []string
-			for _, cs := range s.CallSites {
-				if cs.Kind != CallPlain || len(defs[cs.Name]) == 0 || cs.NArgs == 0 {
-					continue
-				}
-				args := make([]string, cs.NArgs-1)
-				for k := range args {
-					args[k] = macroArgPlaceholder
-				}
-				texts = append(texts, cs.Name+"("+strings.Join(args, ", ")+")")
-			}
-			for _, id := range s.MacroIdents {
-				if ds := defs[id]; len(ds) > 0 && ds[0].mac.params == nil {
-					texts = append(texts, id)
+		if !visReady {
+			vis, visReady = newCppVisibility(files), true
+		}
+		var seen map[string]bool
+		if vis != nil {
+			seen = vis.seen(f.Path)
+		}
+		// the definition of name a use at line sees; ok false when none or
+		// several that disagree
+		visible := func(name string, line int) (cppMacro, bool) {
+			var in []cppMacroDef
+			for _, d := range defs[name] {
+				if d.file == f.Path && d.line < line || d.file != f.Path && (seen == nil && vis == nil || seen[d.file]) {
+					in = append(in, d)
 				}
 			}
-			if len(texts) == 0 {
-				continue
+			if len(in) == 0 {
+				return cppMacro{}, false
 			}
-			if vis == nil {
-				vis = newCppVisibility(files)
+			for _, d := range in[1:] {
+				if d.key != in[0].key {
+					return cppMacro{}, false
+				}
 			}
-			have := map[CallSite]bool{}
-			for _, cs := range s.CallSites {
-				have[cs] = true
+			return in[0].mac, true
+		}
+		bodies := cppFunctionBodies(f.Path, src)
+		if len(bodies) == 0 {
+			continue
+		}
+		// what a use's expansion expands in turn: the file's view at its end
+		nested := map[string]cppMacro{}
+		endLine := 2 + strings.Count(src, "\n")
+		for n := range defs {
+			if m, ok := visible(n, endLine); ok {
+				nested[n] = m
 			}
-			for _, text := range texts {
-				name := text
-				if k := strings.IndexByte(text, '('); k >= 0 {
-					name = text[:k]
+		}
+		var usings []string // using namespace X; of the headers the file includes
+		inFile := map[string]bool{}
+		if vis != nil {
+			inFile = vis.included(f.Path)
+		}
+		for p := range inFile {
+			if p == f.Path {
+				continue // the file's own are scoped (cppBody.usings)
+			}
+			u, ok := usingsOf[p]
+			if !ok {
+				for _, m := range reUsingNS.FindAllStringSubmatch(srcs[p], -1) {
+					u = append(u, strings.Join(strings.Fields(m[1]), ""))
 				}
-				if !macroVisible(defs[name], f.Path, vis) {
-					continue
+				usingsOf[p] = u
+			}
+			usings = append(usings, u...)
+		}
+		// a free function an expansion names unqualified is found from the
+		// use's scopes: one of its namespaces encloses them, or a using
+		// directive opens it (a member of some class may be this's)
+		reachable := func(callee string, body cppBody) bool {
+			nss := freeNS[callee]
+			if methods[callee] || len(nss) == 0 {
+				return true
+			}
+			for _, t := range nss {
+				if t == "" {
+					return true
 				}
-				sites, ok := cache[text]
-				if !ok {
-					sites = macroCallSites(text, macros)
-					cache[text] = sites
+				for _, c := range body.scopes {
+					if c == t || strings.HasPrefix(c, t+"::") {
+						return true
+					}
 				}
-				for _, cs := range sites {
-					if !have[cs] {
-						have[cs] = true
-						s.CallSites = append(s.CallSites, cs)
+				for _, u := range append(body.usings, usings...) {
+					if u == t || strings.HasSuffix(t, "::"+u) {
+						return true
 					}
 				}
 			}
+			return false
+		}
+		var b strings.Builder
+		last, changed := 0, false
+		scanCode(src, func(start, end int) int {
+			name := src[start:end]
+			if !calling[name] {
+				return end
+			}
+			body := bodyAt(bodies, start)
+			if body < 0 {
+				return end
+			}
+			line := 1 + strings.Count(src[:start], "\n")
+			mac, ok := visible(name, line)
+			if !ok {
+				return end
+			}
+			stop := end
+			if mac.params != nil {
+				k := end
+				for k < len(src) && (src[k] == ' ' || src[k] == '\t' || src[k] == '\n' || src[k] == '\r') {
+					k++
+				}
+				if k >= len(src) || src[k] != '(' {
+					return end // the name of a function-like macro, not a use of it
+				}
+				if _, e := macroArgs(src, k); e < 0 {
+					return end
+				} else {
+					stop = e
+				}
+			}
+			table := nested
+			if nested[name].body != mac.body || len(nested[name].params) != len(mac.params) {
+				table = map[string]cppMacro{name: mac}
+				for n, m := range nested {
+					if n != name {
+						table[n] = m
+					}
+				}
+			}
+			own := map[string]bool{} // what the definition calls, not its arguments
+			for _, p := range mac.params {
+				own[p] = true
+			}
+			for _, c := range reCallLike.FindAllStringSubmatch(cppExpand(mac.body, table, 0), -1) {
+				if !notCallees[c[1]] && !own[c[1]] && !reachable(c[1], bodies[body]) {
+					return stop // a name the use's scope cannot see: not this repo's function
+				}
+			}
+			exp := cppExpand(src[start:stop], table, 0)
+			b.WriteString(src[last:start])
+			b.WriteString(strings.Join(strings.Fields(exp), " "))
+			b.WriteString(strings.Repeat("\n", strings.Count(src[start:stop], "\n")))
+			last, changed = stop, true
+			return stop
+		})
+		if !changed {
+			continue
+		}
+		b.WriteString(src[last:])
+		syms := cppReparse(f.Path, b.String(), normVer)
+		if len(syms) != len(f.Symbols) {
+			continue // the expansion changed what the file defines: not read
+		}
+		same := true
+		for k := range syms {
+			a, o := syms[k], f.Symbols[k]
+			if a.Name != o.Name || a.Recv != o.Recv || a.Kind != o.Kind {
+				same = false
+				break
+			}
+		}
+		if !same {
+			continue
+		}
+		for k := range syms {
+			if syms[k].Kind != "type" {
+				f.Symbols[k].CallSites = syms[k].CallSites
+			}
 		}
 	}
 }
 
-// macroVisible: the macro has one definition the file can see — its own,
-// or one in a header it includes.
-func macroVisible(ds []bodyMacro, file string, vis *cppVisibility) bool {
-	if len(ds) != 1 {
-		return false
-	}
-	if ds[0].file == file || vis == nil {
-		return true
-	}
-	return vis.seen(file)[ds[0].file]
+// usesAny reports whether src names any of names (a quick filter).
+func usesAny(src string, names map[string]bool) bool {
+	found := false
+	scanCode(src, func(start, end int) int {
+		if names[src[start:end]] {
+			found = true
+			return len(src)
+		}
+		return end
+	})
+	return found
 }
 
-type namedMacro struct {
-	name string
-	mac  cppMacro
+// bodyAt is the body holding offset, -1 none.
+func bodyAt(bodies []cppBody, off int) int {
+	for i, b := range bodies {
+		if b.start <= off && off < b.end {
+			return i
+		}
+	}
+	return -1
 }
 
-// everyDefine is each #define of src, an #if/#else variant included (where
-// cppMacros keeps the first of a name).
-func everyDefine(src string) []namedMacro {
-	var out []namedMacro
-	lines := strings.Split(src, "\n")
-	for i := 0; i < len(lines); i++ {
-		ln := lines[i]
-		for strings.HasSuffix(strings.TrimRight(ln, " \t\r"), "\\") && i+1 < len(lines) {
-			ln = strings.TrimSuffix(strings.TrimRight(ln, " \t\r"), "\\") + " " + lines[i+1]
+// scanCode calls fn with each identifier of C/C++ source outside comments,
+// literals and preprocessor lines; fn returns where to go on from.
+func scanCode(src string, fn func(start, end int) int) {
+	lineStart := true
+	for i := 0; i < len(src); {
+		c := src[i]
+		switch {
+		case c == '\n':
+			lineStart = true
+			i++
+			continue
+		case c == ' ' || c == '\t' || c == '\r':
+			i++
+			continue
+		case c == '#' && lineStart:
+			// a directive, with its continuation lines
+			for i < len(src) && src[i] != '\n' {
+				if src[i] == '\\' && i+1 < len(src) && src[i+1] == '\n' {
+					i++
+				}
+				i++
+			}
+			continue
+		}
+		lineStart = false
+		switch {
+		case c == '/' && i+1 < len(src) && src[i+1] == '/':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(src) && src[i+1] == '*':
+			if j := strings.Index(src[i+2:], "*/"); j >= 0 {
+				i += j + 4
+			} else {
+				i = len(src)
+			}
+		case c == '"' || c == '\'':
+			i++
+			for i < len(src) && src[i] != c && src[i] != '\n' {
+				if src[i] == '\\' {
+					i++
+				}
+				i++
+			}
+			i++
+		case c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z':
+			j := i
+			for j < len(src) && (src[j] == '_' || src[j] >= 'a' && src[j] <= 'z' || src[j] >= 'A' && src[j] <= 'Z' || src[j] >= '0' && src[j] <= '9') {
+				j++
+			}
+			if j < len(src) && (src[j] == '"' || src[j] == '\'') && isLiteralPrefix(src[i:j]) {
+				if strings.HasSuffix(src[i:j], "R") && src[j] == '"' {
+					// R"d( … )d": nothing inside ends it but )d"
+					if open := strings.IndexByte(src[j:], '('); open > 0 {
+						if k := strings.Index(src[j+open:], ")"+src[j+1:j+open]+"\""); k >= 0 {
+							i = j + open + k + open + 1
+							continue
+						}
+					}
+					i = len(src)
+					continue
+				}
+				i = j // u8"…", L'x': the literal is read next
+				continue
+			}
+			i = max(fn(i, j), j)
+		case c >= '0' && c <= '9':
+			for i < len(src) && (src[i] == '.' || src[i] == '\'' || src[i] == '_' || src[i] >= '0' && src[i] <= '9' || src[i] >= 'a' && src[i] <= 'z' || src[i] >= 'A' && src[i] <= 'Z') {
+				i++
+			}
+		default:
 			i++
 		}
-		if !reDefine.MatchString(ln) {
-			continue
-		}
-		for name, m := range cppMacros(map[string]string{"": ln}) {
-			out = append(out, namedMacro{name: name, mac: m})
-		}
 	}
-	return out
 }
 
-// macroCallSites are the calls a macro use expands to, its arguments'
-// own calls left out.
-func macroCallSites(text string, macros map[string]cppMacro) []CallSite {
-	expanded := cppExpand(text, macros, 0)
-	if !strings.Contains(expanded, "(") {
-		return nil
+func isLiteralPrefix(s string) bool {
+	switch s {
+	case "u8", "u", "U", "L", "R", "u8R", "uR", "UR", "LR":
+		return true
 	}
-	syms := cppMemberParser("class reponite_macro_expansion {\nvoid reponite_macro_use() {\n"+expanded+";\n}\n};", 1)
-	var out []CallSite
-	for _, s := range syms {
-		if s.Name != "reponite_macro_use" {
-			continue
-		}
-		for _, cs := range s.CallSites {
-			if strings.Contains(cs.Recv, macroArgPlaceholder) || strings.Contains(cs.ArgTypes, macroArgPlaceholder) || cs.Name == macroArgPlaceholder {
-				if strings.Contains(cs.Recv, macroArgPlaceholder) || cs.Name == macroArgPlaceholder {
-					continue // a call on an argument: the body's own
-				}
-				cs.ArgTypes = "" // an argument stands for something unknown here
-			}
-			if cs.Kind == CallSelf {
-				continue // this-> inside the expansion: the wrapper's, not the caller's
-			}
-			out = append(out, cs)
-		}
-	}
-	return out
+	return false
 }

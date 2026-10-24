@@ -140,6 +140,7 @@ func main() {
 	b, err := os.ReadFile(*tf)
 	must(err)
 	must(json.Unmarshal(b, &t))
+	goNames = t.Lang == "go"
 	st, err := sqlite.Open(*storeDir + "/" + *repo + "/index.db")
 	must(err)
 	defer st.Close()
@@ -332,8 +333,21 @@ func main() {
 	}
 }
 
+// goNames: the scored repo is Go, whose file-scoped names carry their file
+// (baseOf).
+var goNames bool
+
 // baseOf is the last segment of a qualified name (Class.method -> method).
 func baseOf(q string) string {
+	if goNames {
+		// a Go name scoped to its file is that name: a file's init
+		// (init@config) and an external test package's function that the
+		// package itself also defines (helper@x_test); the file may have a
+		// dot of its own (init@msg.pb)
+		if i := strings.Index(q, "@"); i >= 0 {
+			q = q[:i]
+		}
+	}
 	if i := strings.LastIndexAny(q, "./"); i >= 0 {
 		q = q[i+1:]
 	}

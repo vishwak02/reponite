@@ -283,8 +283,56 @@ func parseFileRules(src []byte, ext string, r LangRules) (content.AST, []query.S
 	if err != nil {
 		return nil, nil, err
 	}
+	if ext != ".ts" {
+		tree, src, err = reparseJSXText(tree, src, lang)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	root := tree.RootNode()
 	return tsNode{n: root, src: src, tree: tree}, spansFor(root, src, r), nil
+}
+
+// reparseJSXText works around the JavaScript/TSX grammars lexing a `//` or
+// `/*` in JSX text (<span>//</span>) as a comment, which swallows the rest
+// of the line — closing tags included — and breaks the parse of the whole
+// enclosing function. In JSX children a comment can only be written inside
+// braces, so a comment node directly under an element is text: its leading
+// slash is blanked (same length, so every position stays) and the source
+// parsed again. The returned source is only for the tree; a file's stored
+// content stays as written.
+func reparseJSXText(tree *sitter.Tree, src []byte, lang *sitter.Language) (*sitter.Tree, []byte, error) {
+	for round := 0; round < 8 && tree.RootNode().HasError(); round++ {
+		var at []uint32
+		var walk func(n *sitter.Node)
+		walk = func(n *sitter.Node) {
+			for i := 0; i < int(n.ChildCount()); i++ {
+				c := n.Child(i)
+				if c.Type() == "comment" && n.Type() == "jsx_element" && int(c.StartByte()) < len(src) && src[c.StartByte()] == '/' {
+					at = append(at, c.StartByte())
+					continue
+				}
+				walk(c)
+			}
+		}
+		walk(tree.RootNode())
+		if len(at) == 0 {
+			break
+		}
+		if round == 0 {
+			src = append([]byte(nil), src...) // the caller's bytes stay as they are
+		}
+		for _, b := range at {
+			src[b] = ' '
+		}
+		next, err := parseTree(src, lang)
+		if err != nil {
+			return nil, nil, err
+		}
+		tree.Close()
+		tree = next
+	}
+	return tree, src, nil
 }
 
 // spansFor returns 1-based line ranges for each declaration, mirroring Extract:
@@ -296,6 +344,7 @@ func parseFileRules(src []byte, ext string, r LangRules) (content.AST, []query.S
 // reference (`struct Foo x;`) is not a declaration.
 func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 	var spans []query.SymbolSpan
+	shadowed := tsShadowedTypes(tsNode{n: root, src: src}, r)
 	var walk func(n *sitter.Node)
 	walk = func(n *sitter.Node) {
 		for i := 0; i < int(n.ChildCount()); i++ {
@@ -329,6 +378,8 @@ func spansFor(root *sitter.Node, src []byte, r LangRules) []query.SymbolSpan {
 				}
 			case containsStr(r.TypeDecl, t) && isTypeReference(w, r):
 				walk(ch) // a use, not a definition — no span
+			case shadowed != nil && containsStr(tsTypeOnlyDecls, t) && shadowed[t+"\x00"+nameOf(w, r)]:
+				// a type named like a value of the module (Extract)
 			case containsStr(r.TypeDecl, t):
 				if len(r.TypeSpec) > 0 {
 					for _, spec := range descendantsAny(w, r.TypeSpec) {

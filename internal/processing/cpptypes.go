@@ -740,6 +740,9 @@ func TypeName(n content.AST) string {
 	if n == nil {
 		return ""
 	}
+	if t, ok := gmockWrapped(n); ok {
+		return t // StrictMock<T>: a T
+	}
 	switch n.Type() {
 	case "type_identifier":
 		return n.Text()
@@ -1941,6 +1944,9 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 	case strings.HasPrefix(head, "q:"):
 		// Cls::f(): Cls's static method's return; ns::X(): a temporary of X
 		scope, name, _ := strings.Cut(head[2:], "::")
+		if a, found := tt.classAlias(scope, callerRecv); callerRecv != "" && found && a == "" {
+			return "" // Param::X(…) through the class's alias of a template parameter
+		}
 		if n := tt.nestedName(head[2:], callerRecv); n != "" {
 			t = n // Outer::Alias(…): a temporary of Outer's nested class
 		} else if c := tt.canon(head[2:]); tt.classes[c] != nil {
