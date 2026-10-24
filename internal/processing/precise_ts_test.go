@@ -108,8 +108,9 @@ int use(const Box& b) {
 	}
 }
 
-// Members a macro generates share one line: a call there does not say which
-// of them makes it, so none is credited with the compiler's edge.
+// Members a macro generates share one line: a call there names the
+// definition making it, and only a name that singles one out credits it with
+// the compiler's edge.
 func TestPreciseMacroMembersOnOneLine(t *testing.T) {
 	files := map[string]string{
 		"rec/src/rec.cpp": `class Rec {
@@ -130,6 +131,22 @@ void read(int& s) {}
 	pe := preciseEdges(units, li, nil)
 	if len(pe) != 0 {
 		t.Errorf("a line two definitions share proves nothing about either: %+v", pe)
+	}
+	units[0].Calls[0].CallerName = "load"
+	pe = preciseEdges(units, li, nil)
+	if pc := pe["rec/src.Rec.load"]; pc == nil || len(pe) != 1 {
+		t.Errorf("the caller's name picks load among the line's members: %+v", pe)
+	}
+	units[0].Calls[0].CallerName = "rec" // a name none of them has
+	if pe := preciseEdges(units, li, nil); len(pe) != 0 {
+		t.Errorf("a name no member has proves nothing: %+v", pe)
+	}
+	// the callee side: a call bound to one of two members on one line
+	li["rec/src/rec.cpp"] = append(li["rec/src/rec.cpp"], locSpan{qid: "rec/src.use", start: 9, end: 9})
+	units[0].Calls[0] = PreciseCall{CallerPath: "rec/src/rec.cpp", CallerLine: 9, CallerName: "use", Name: "save", CalleePath: "rec/src/rec.cpp", CalleeLine: 3}
+	pe = preciseEdges(units, li, nil)
+	if pc := pe["rec/src.use"]; pc == nil || len(pc.Bound["save"]) != 1 || pc.Bound["save"][0] != "rec/src.Rec.save" {
+		t.Errorf("the called name picks save: %+v", pe["rec/src.use"])
 	}
 	_ = files
 }

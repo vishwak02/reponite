@@ -52,7 +52,14 @@ const CallTyped CallKind = "typed"
 func clikeCallSites(body content.AST, r LangRules, vars map[string]string) []CallSite {
 	seen := map[CallSite]bool{}
 	var out []CallSite
-	for _, call := range descendantsAny(body, r.CallTypes) {
+	calls, expectations := clikeCalls(body, r)
+	for _, call := range expectations {
+		if cs, ok := gmockSite(call, vars, r.Name == "cpp"); ok && !seen[cs] {
+			seen[cs] = true
+			out = append(out, cs)
+		}
+	}
+	for _, call := range calls {
 		kids := call.Children()
 		if len(kids) == 0 {
 			continue

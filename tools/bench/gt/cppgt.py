@@ -39,6 +39,10 @@ import clang.cindex as ci
 
 SOURCES = (".c", ".cc", ".cpp", ".cxx")
 HEADERS = (".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp")
+STD_HEADERS = set("""assert.h complex.h ctype.h errno.h fenv.h float.h inttypes.h iso646.h limits.h
+    locale.h math.h setjmp.h signal.h stdalign.h stdarg.h stdatomic.h stdbool.h stddef.h stdint.h stdio.h
+    stdlib.h stdnoreturn.h string.h tgmath.h threads.h time.h uchar.h wchar.h wctype.h fcntl.h pthread.h
+    unistd.h strings.h memory.h malloc.h""".split())
 SKIP_DIRS = {".git", "build", "devel", "install", "node_modules", "__pycache__", ".venv"}
 DEF_KINDS = {
     ci.CursorKind.FUNCTION_DECL, ci.CursorKind.CXX_METHOD, ci.CursorKind.FUNCTION_TEMPLATE,
@@ -165,6 +169,19 @@ def source_line(c):
     ls = _lines[f.name]
     n = c.location.line
     return ls[n - 1] if 0 < n <= len(ls) else ""
+
+
+def source_statement(c):
+    """The source line a cursor sits on, joined with the next ones until its
+    parentheses close: a macro use written over several lines
+    (TEST_F(Suite,\n Case))."""
+    line = source_line(c)
+    ls = _lines.get(c.location.file.name, []) if c.location.file is not None else []
+    n = c.location.line
+    while line.count("(") > line.count(")") and n < len(ls) and n < c.location.line + 8:
+        line += " " + ls[n].strip()
+        n += 1
+    return line
 
 
 CALLED = re.compile(r"\b([A-Za-z_]\w*)\s*(?=\(|<[^;{}()]*>\s*\()")
@@ -299,6 +316,12 @@ def parse_one(job):
         tu = index.parse(path, args=args, options=ci.TranslationUnit.PARSE_INCOMPLETE)
     except ci.TranslationUnitLoadError:
         return [], []
+    if os.environ.get("CPPGT_DIAG") and os.environ["CPPGT_DIAG"] in path:
+        # why a unit's calls stay undetermined: its first errors
+        errs = [d for d in tu.diagnostics if d.severity >= 3]
+        for d in errs[:5]:
+            print(f"cppgt: {path}: {d.location.file}:{d.location.line}: {d.spelling}", file=sys.stderr)
+        print(f"cppgt: {path}: {len(errs)} errors", file=sys.stderr)
     prefix = root + os.sep
     defs, calls = [], []
 
@@ -341,7 +364,7 @@ def parse_one(job):
                 # with googletest present the body is a TestBody method of a
                 # generated class; stubbed, TEST_F(…) parses as a function
                 if c.spelling in ("TestBody", toks[0] if toks else ""):
-                    m = GTEST.match(source_line(c))
+                    m = GTEST.match(source_statement(c))
                     if m:
                         name = m.group(1) + "." + m.group(2)  # TEST_F(Suite, Case) { … }: Suite.Case
                 defs.append({"usr": c.get_usr(), "id": did, "decl": decl_at(c), "path": r, "line": c.location.line,
@@ -357,6 +380,20 @@ def parse_one(job):
                 visit(c, owner)
                 continue
             spelling = c.spelling if c.kind == ci.CursorKind.CALL_EXPR else ""
+            callee_ref = None
+            if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and not spelling:
+                # ((obj).f)(…), as googletest's EXPECT_CALL(obj, f) expands:
+                # clang names no callee through parentheses; the member or
+                # function inside them is what is called
+                kids = list(c.get_children())
+                inner = kids[0] if kids else None
+                if inner is not None and inner.kind == ci.CursorKind.PAREN_EXPR:
+                    while inner is not None and inner.kind in (ci.CursorKind.PAREN_EXPR, ci.CursorKind.UNEXPOSED_EXPR):
+                        sub = list(inner.get_children())
+                        inner = sub[0] if sub else None
+                    if inner is not None and inner.kind in (ci.CursorKind.MEMBER_REF_EXPR, ci.CursorKind.DECL_REF_EXPR) \
+                            and inner.referenced is not None and inner.spelling:
+                        spelling, callee_ref = inner.spelling, inner.referenced
             dependent = None
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and not spelling:
                 # f(t) with t of a template parameter's type: an unresolved
@@ -374,7 +411,7 @@ def parse_one(job):
                         visit(c, owner)
                         continue
             if c.kind == ci.CursorKind.CALL_EXPR and owner is not None and spelling:
-                ref = c.referenced
+                ref = callee_ref or c.referenced
                 if ref is not None and ref.kind in (ci.CursorKind.CONSTRUCTOR, ci.CursorKind.DESTRUCTOR):
                     calls.append({"from": owner, "name": c.spelling, "usr": None, "external": False,
                                   "line": c.location.line, "col": c.location.column, "bound": True})
@@ -459,32 +496,39 @@ def main():
     # every directory holding headers, and every include/ directory's parent
     # chain, is an include root: `#include "pkg/x.h"` and `#include "x.h"`
     inc = set()
+    shadows = {os.path.dirname(h) for h in headers if os.path.basename(h) in STD_HEADERS}
     for h in headers:
         d = os.path.dirname(h)
-        inc.add(d)
+        if d not in shadows:
+            inc.add(d)
         parts = os.path.relpath(d, root).split(os.sep)
         for i, p in enumerate(parts):
-            if p == "include":
+            if p == "include" and os.path.join(root, *parts[:i + 1]) not in shadows:
                 inc.add(os.path.join(root, *parts[:i + 1]))
     inc_dirs = sorted(inc)
     # the host's own C and C++ library headers first; the copied tree fills in
     # what the host lacks (ROS, Eigen, Boost, the generated messages)
     sys_dirs = system_dirs(extra)
     sys_dirs += [d for d in header_dirs(extra) if d not in sys_dirs]
-    # a pinned submodule's headers, found as the repo's are
-    lib_inc = set()
+    # a pinned submodule's headers, found as the repo's are: its directories
+    # sit at the paths the repo pins them at, so a source sees the copy
+    # nearest it first (two parts of a repo may pin two copies of a library)
+    lib_inc = {}  # dir -> its path in the repo's layout
+    lib_headers = []  # their headers' includes may be missing too (generated code)
     for lr in libs:
         for d, dirs, fs in os.walk(lr):
             dirs[:] = [x for x in dirs if not x.startswith(".")]
-            if any(f.endswith(HEADERS) for f in fs):
-                lib_inc.add(d)
+            lib_headers += [os.path.join(d, f) for f in fs if f.endswith(HEADERS)]
+            # a directory holding its own limits.h is reached by quoted
+            # includes beside it, never put on the path (it hides the system's)
+            if any(f.endswith(HEADERS) for f in fs) and not any(f in STD_HEADERS for f in fs):
+                lib_inc[d] = os.path.relpath(d, lr)
                 parts = os.path.relpath(d, lr).split(os.sep)
                 for i, p in enumerate(parts):
                     if p == "include":
-                        lib_inc.add(os.path.join(lr, *parts[:i + 1]))
-    sys_dirs += [d for d in sorted(lib_inc) if d not in sys_dirs]
+                        lib_inc[os.path.join(lr, *parts[:i + 1])] = os.path.join(*parts[:i + 1])
     stub_dir = tempfile.mkdtemp(prefix="cppgt-stubs-")
-    stub_missing(root, sources, headers, inc_dirs, sys_dirs, stub_dir)
+    stub_missing(root, sources, headers + lib_headers, inc_dirs, sorted(lib_inc) + sys_dirs, stub_dir)
     # Eigen's SSE kernels need the compiler's own intrinsics headers, which
     # a copied tree lacks; its scalar path declares the same API
     base = ["-x", "c++", "-std=c++17", "-w", "-ferror-limit=0", "-nostdinc", "-nostdinc++", "-DEIGEN_DONT_VECTORIZE"]
@@ -549,8 +593,15 @@ def main():
         def rank(d):
             p = package_of(os.path.join(d, "x"))
             return (tier.get(p, len(tier) + 1), -shared(d), d)
+        def lib_rank(d):
+            n = 0
+            for a, b in zip(lib_inc[d].split(os.sep), os.path.relpath(f, root).split(os.sep)):
+                if a != b:
+                    break
+                n += 1
+            return (-n, d)
         args = list(base)
-        for d in sorted(inc_dirs, key=rank) + [stub_dir] + sys_dirs:
+        for d in sorted(inc_dirs, key=rank) + sorted(lib_inc, key=lib_rank) + [stub_dir] + sys_dirs:
             args += ["-I", d]
         return args if not f.endswith(".c") else ["-x", "c", "-std=c11"] + args[3:]
     jobs_list = [(f, args_for(f), root, lib) for f in sources]

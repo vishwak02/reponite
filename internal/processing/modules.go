@@ -85,10 +85,12 @@ type moduleIndex struct {
 var (
 	reConstNew = regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*new\s+([A-Z][\w$]*)\s*[(<]`)
 	reFuncRet  = regexp.MustCompile(`(?m)^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>()]*>)?\([^()]*\)\s*(?::\s*([A-Z][\w$]*)\s*)?\{`)
+	// const f = (…) => new Cls(…): an instance of Cls (not async: a promise)
+	reArrowNew = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>\s*new\s+([A-Z][\w$]*)\s*[(<]`)
 	reArrowRet = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\([^()]*\)\s*:\s*([A-Z][\w$]*)\s*=>`)
 	reTypedVar = regexp.MustCompile(`(?m)^(?:export\s+)?(?:let|var|const)\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Z][\w$]*)\s*[;=\n]`)
 	reReturnID = regexp.MustCompile(`\breturn\s+([A-Za-z_$][\w$]*)\s*;?\s*$`)
-	reConstObj = regexp.MustCompile(`(?m)^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\{`)
+	reConstObj = regexp.MustCompile(`(?m)^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=\n]+)?=\s*\{`)
 )
 
 var reExportDefaultNew = regexp.MustCompile(`(?m)^export\s+default\s+new\s+([A-Z][\w$]*)\s*[(<]`)
@@ -105,6 +107,8 @@ type jsModule struct {
 var (
 	reExportFrom = regexp.MustCompile(`(?m)^export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]`)
 	reExportStar = regexp.MustCompile(`(?m)^export\s+\*\s+from\s*['"]([^'"]+)['"]`)
+	// export * as ns from './m': ns is m's namespace
+	reExportStarAs = regexp.MustCompile(`(?m)^export\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]`)
 	// export { a as b } of the module's own names (no from)
 	reExportLocal = regexp.MustCompile(`(?m)^export\s+\{([^}]*)\}\s*;?\s*$`)
 )
@@ -112,7 +116,7 @@ var (
 // reExportDefault reads `export default Name` (a declared function or
 // class, or a name declared elsewhere in the module).
 // reDefaultCallOnly: export default f(…) — a call's result, not f itself
-var reDefaultCallOnly = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?[A-Za-z_$][\w$]*\s*\($`)
+var reDefaultCallOnly = regexp.MustCompile(`^export\s+default\s+(?:async\s+)?[A-Za-z_$][\w$]*\s*[(<]$`)
 
 var reExportDefault = regexp.MustCompile(`(?m)^export\s+default\s+(?:async\s+)?(?:function\*?\s+|class\s+)?([A-Za-z_$][\w$]*)\s*(?:;|$|\(|\{|<|extends\b)`)
 
@@ -176,6 +180,9 @@ func newModuleIndex(files []ParsedFile) moduleIndex {
 			}
 			for _, m := range reExportStar.FindAllStringSubmatch(src, -1) {
 				jm.stars = append(jm.stars, m[1])
+			}
+			for _, m := range reExportStarAs.FindAllStringSubmatch(src, -1) {
+				jm.reexp[m[1]] = ImportBinding{Local: m[1], Module: m[2]} // a namespace: no Symbol, not a default
 			}
 			for _, m := range reExportLocal.FindAllStringSubmatch(src, -1) {
 				for _, spec := range strings.Split(m[1], ",") {
@@ -477,11 +484,12 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 			if d := mi.defaults[pkg]; d != "" {
 				return walk(pkg, d, depth+1)
 			}
-			// export { default } from './m' (an index passing on m's default)
+			// export { default } from './m' (an index passing on m's default),
+			// export { f as default } from './m' (m's f)
 			if jm := mi.jsMods[pkg]; jm != nil {
-				if b, ok := jm.reexp["default"]; ok {
+				if b, ok := jm.reexp["default"]; ok && b.Symbol != "" {
 					if p, ok := mi.resolve(jm.lang, jm.path, b.Module); ok {
-						return walk(p, "default", depth+1)
+						return walk(p, b.Symbol, depth+1)
 					}
 				}
 			}
@@ -529,6 +537,53 @@ func (mi moduleIndex) resolveExport(pkg, name string, defined func(pkg, name str
 	return walk(pkg, name, 0)
 }
 
+// resolveNamespace follows a JS/TS module's exports to where name is bound
+// to a whole module — `import * as ns from './m'` (re-exported as
+// `export { ns }`) or `export * as ns from './m'` — and returns that
+// module's package id; false when name is anything else.
+func (mi moduleIndex) resolveNamespace(pkg, name string) (string, bool) {
+	seen := map[string]bool{}
+	var walk func(pkg, name string, depth int) (string, bool)
+	walk = func(pkg, name string, depth int) (string, bool) {
+		if depth > 10 || seen[pkg+"\x00"+name] {
+			return "", false
+		}
+		seen[pkg+"\x00"+name] = true
+		jm := mi.jsMods[pkg]
+		if jm == nil || langFamily(jm.lang) != "js" {
+			return "", false
+		}
+		follow := func(b ImportBinding) (string, bool) {
+			p, ok := mi.resolve(jm.lang, jm.path, b.Module)
+			switch {
+			case !ok || b.Default:
+				return "", false
+			case b.Symbol == "":
+				return p, true // the module itself
+			}
+			return walk(p, b.Symbol, depth+1)
+		}
+		if b, ok := jm.reexp[name]; ok {
+			return follow(b)
+		}
+		if a, ok := jm.aliases[name]; ok {
+			return walk(pkg, a, depth+1)
+		}
+		if b, ok := jm.imports[name]; ok {
+			return follow(b)
+		}
+		for _, star := range jm.stars {
+			if p, ok := mi.resolve(jm.lang, jm.path, star); ok {
+				if np, ok := walk(p, name, depth+1); ok {
+					return np, true
+				}
+			}
+		}
+		return "", false
+	}
+	return walk(pkg, name, 0)
+}
+
 // jsReturnClasses are the classes a JS/TS module's top-level functions
 // return: the return annotation (function f(): Client, const f = (): Client
 // =>), else, when every return of the body names one module-level value of
@@ -545,11 +600,19 @@ func jsReturnClasses(src string, instances map[string]string) map[string]string 
 	for _, m := range reArrowRet.FindAllStringSubmatch(src, -1) {
 		out[m[1]] = m[2]
 	}
+	for _, m := range reArrowNew.FindAllStringSubmatch(src, -1) {
+		if out[m[1]] == "" {
+			out[m[1]] = m[2]
+		}
+	}
 	for _, loc := range reFuncRet.FindAllStringSubmatchIndex(src, -1) {
 		name := src[loc[2]:loc[3]]
 		if loc[4] >= 0 {
 			out[name] = src[loc[4]:loc[5]]
 			continue
+		}
+		if strings.Contains(src[loc[0]:loc[2]], "async") {
+			continue // returns a promise of whatever its returns name
 		}
 		// the body: up to the first closing brace at the start of a line
 		body := src[loc[1]:]
@@ -576,9 +639,9 @@ func jsReturnClasses(src string, instances map[string]string) map[string]string 
 }
 
 var (
-	reDefaultCall  = regexp.MustCompile(`(?m)^export\s+default\s+([A-Za-z_$][\w$.]*\s*\(.*)$`)
+	reDefaultCall  = regexp.MustCompile(`(?m)^export\s+default\s+([A-Za-z_$][\w$.]*\s*(?:<[^()]*>)?\s*\(.*)$`)
 	reWrappedLast  = regexp.MustCompile(`\(\s*([A-Za-z_$][\w$]*)\s*(?:,[^()]*)?\)[),\s]*;?\s*$`)
-	reConstWrapped = `(?m)^(?:export\s+)?const\s+%s\s*=\s*([A-Za-z_$][\w$.]*\s*\(.*)$`
+	reConstWrapped = `(?m)^(?:export\s+)?const\s+%s\s*=\s*([A-Za-z_$][\w$.]*\s*(?:<[^()]*>)?\s*\(.*)$`
 )
 
 // wrappedDefault is the component a module's default export wraps in a

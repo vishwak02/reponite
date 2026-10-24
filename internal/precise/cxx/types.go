@@ -20,6 +20,7 @@ type Call struct {
 	DeclLine  int
 	RecvPath  string // a virtual call's object's class definition ("" unknown)
 	RecvLine  int
+	OwnerName string // the calling definition's name: several may share its line (a macro's members)
 }
 
 // Result is what one translation unit showed.
@@ -63,4 +64,5 @@ type Ref struct {
 	OwnerPath string
 	OwnerLine int
 	Name      string
+	OwnerName string
 }

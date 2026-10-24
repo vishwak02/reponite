@@ -163,6 +163,8 @@ typedef struct {
 	buf out;
 	// the innermost function definition being walked
 	char owner_path[PATH_MAX]; unsigned owner_line; int has_owner; int owner_kind; CXCursor owner;
+	// the definition's own name: members a macro writes on one line share it
+	char owner_name[1024];
 	// last file resolved (most cursors in a row share one)
 	CXFile last_file; char last_path[PATH_MAX]; int last_in;
 } walk;
@@ -193,6 +195,17 @@ static int where_(walk *w, CXSourceLocation loc, char *path, unsigned *line) {
 
 static void clean_tabs(char *s) {
 	for (; *s; s++) if (*s == '\t' || *s == '\n') *s = ' ';
+}
+
+// put_call writes one call of the current definition: C, its owner, the
+// called name, how it was bound, the binding, the receiver's class, and the
+// owner's name.
+static void put_call(walk *w, const char *name, char kind, const char *usr, const char *cpath, unsigned cline,
+	const char *rpath, unsigned rline) {
+	char line_s[PATH_MAX * 4 + 7200];
+	snprintf(line_s, sizeof line_s, "C\t%s\t%u\t%s\t%c\t%s\t%s\t%u\t%s\t%u\t%s\n", w->owner_path, w->owner_line, name, kind, usr,
+		cpath, cline, rpath, rline, w->owner_name);
+	put(&w->out, line_s);
 }
 
 // guessed: ref is one of several methods of its name and clang could not
@@ -275,7 +288,20 @@ static CXCursor child_of(CXCursor c) {
 	}
 	return out;
 }
-enum { K_FIELD = 6, K_VAR = 9, K_PARM = 10, T_RECORD = 105, T_ELABORATED = 119 };
+enum { K_FIELD = 6, K_VAR = 9, K_PARM = 10, T_RECORD = 105, T_ELABORATED = 119, K_PAREN = 111 };
+
+// paren_callee is what a call through parentheses calls — the member or
+// function reference inside ((obj).f)(…) — or a cursor of kind -1.
+static CXCursor paren_callee(CXCursor call) {
+	CXCursor in = child_of(call);
+	if (in.kind != K_PAREN) {
+		in.kind = -1;
+		return in;
+	}
+	while (in.kind == K_PAREN) in = child_of(in);
+	if (in.kind != K_MEMBERREF && in.kind != K_DECLREF) in.kind = -1;
+	return in;
+}
 static int dispatches(walk *w, CXCursor call) {
 	CXCursor callee = child_of(call);
 	if (callee.kind == -1) return 1;
@@ -376,10 +402,16 @@ static int visit(CXCursor c, CXCursor parent, CXClientData d) {
 		char saved_path[PATH_MAX]; unsigned saved_line = w->owner_line; int saved_has = w->has_owner;
 		snprintf(saved_path, sizeof saved_path, "%s", w->owner_path);
 		snprintf(w->owner_path, sizeof w->owner_path, "%s", path);
+		char saved_name[1024];
+		snprintf(saved_name, sizeof saved_name, "%s", w->owner_name);
+		CXString on = lc.spelling(c);
+		snprintf(w->owner_name, sizeof w->owner_name, "%s", lc.cstring(on) ? lc.cstring(on) : ""); clean_tabs(w->owner_name);
+		lc.disposeString(on);
 		int saved_kind = w->owner_kind; CXCursor saved_owner = w->owner;
 		w->owner_line = line; w->has_owner = 1; w->owner_kind = k; w->owner = c;
 		lc.visitChildren(c, visit, w);
 		snprintf(w->owner_path, sizeof w->owner_path, "%s", saved_path);
+		snprintf(w->owner_name, sizeof w->owner_name, "%s", saved_name);
 		w->owner_line = saved_line; w->has_owner = saved_has; w->owner_kind = saved_kind; w->owner = saved_owner;
 		return 1;
 	}
@@ -393,8 +425,8 @@ static int visit(CXCursor c, CXCursor parent, CXClientData d) {
 			char name[1024]; snprintf(name, sizeof name, "%s", lc.cstring(sp) ? lc.cstring(sp) : ""); clean_tabs(name);
 			lc.disposeString(sp);
 			if (name[0]) {
-				char line_s[PATH_MAX + 1100];
-				snprintf(line_s, sizeof line_s, "R\t%s\t%u\t%s\n", w->owner_path, w->owner_line, name);
+				char line_s[PATH_MAX + 2200];
+				snprintf(line_s, sizeof line_s, "R\t%s\t%u\t%s\t%s\n", w->owner_path, w->owner_line, name, w->owner_name);
 				put(&w->out, line_s);
 			}
 		}
@@ -403,27 +435,33 @@ static int visit(CXCursor c, CXCursor parent, CXClientData d) {
 		CXString sp = lc.spelling(c);
 		char name[1024]; snprintf(name, sizeof name, "%s", lc.cstring(sp) ? lc.cstring(sp) : ""); clean_tabs(name);
 		lc.disposeString(sp);
+		CXCursor ref = lc.referenced(c);
+		if (!name[0]) {
+			// ((obj).f)(…), as googletest's EXPECT_CALL(obj, f) expands:
+			// clang names no callee through the parentheses, but the
+			// member or function inside them is what is called
+			CXCursor in = paren_callee(c);
+			if (in.kind != -1) {
+				CXString is = lc.spelling(in);
+				snprintf(name, sizeof name, "%s", lc.cstring(is) ? lc.cstring(is) : ""); clean_tabs(name);
+				lc.disposeString(is);
+				ref = lc.referenced(in);
+			}
+		}
 		if (!name[0]) {
 			// a call clang could not form (error recovery: an argument of a
 			// type from a missing header): its callee is the name written
 			// before its first "(" — not bound, whatever a sibling binds
 			callee_from_tokens(w->tu, c, name, sizeof name);
-			if (name[0]) {
-				char line_s[PATH_MAX + 1100];
-				snprintf(line_s, sizeof line_s, "C\t%s\t%u\t%s\tU\t\t\t0\n", w->owner_path, w->owner_line, name);
-				put(&w->out, line_s);
-			}
+			if (name[0]) put_call(w, name, 'U', "", "", 0, "", 0);
 			return 2;
 		}
 		// an operator call (operator<<, operator()), not a function named operatorX
 		int is_op = strncmp(name, "operator", 8) == 0 && !(name[8] == '_' || (name[8] >= 'a' && name[8] <= 'z') ||
 			(name[8] >= 'A' && name[8] <= 'Z') || (name[8] >= '0' && name[8] <= '9'));
 		if (name[0] && !is_op) {
-			CXCursor ref = lc.referenced(c);
-			char line_s[PATH_MAX * 4 + 6000];
 			if (lc.isNull(ref)) {
-				snprintf(line_s, sizeof line_s, "C\t%s\t%u\t%s\tU\t\t\t0\n", w->owner_path, w->owner_line, name);
-				put(&w->out, line_s);
+				put_call(w, name, 'U', "", "", 0, "", 0);
 			} else if (ref.kind != K_CTOR && ref.kind != K_DTOR) {
 				// an instantiation (twice<int>, Box<int>::get) is the template
 				// the repo defines: its USR and definition are the pattern's
@@ -439,9 +477,9 @@ static int visit(CXCursor c, CXCursor parent, CXClientData d) {
 				char cpath[PATH_MAX]; unsigned cline = 0;
 				where_(w, lc.location(lc.canonical(ref)), cpath, &cline);
 				if (!din && dpath[0]) {
-					snprintf(line_s, sizeof line_s, "C\t%s\t%u\t%s\tE\t\t\t0\n", w->owner_path, w->owner_line, name);
+					put_call(w, name, 'E', "", "", 0, "", 0);
 				} else if (ref.kind == K_METHOD && guessed(c, ref)) {
-					snprintf(line_s, sizeof line_s, "C\t%s\t%u\t%s\tU\t\t\t0\n", w->owner_path, w->owner_line, name);
+					put_call(w, name, 'U', "", "", 0, "", 0);
 				} else {
 					// bound to the repo: by USR, its canonical declaration
 					// telling apart two programs' functions of one USR; V a
@@ -450,9 +488,8 @@ static int visit(CXCursor c, CXCursor parent, CXClientData d) {
 					char kind = ref.kind == K_METHOD && lc.isVirtual(ref) && dispatches(w, c) ? 'V' : 'B';
 					char rpath[PATH_MAX] = ""; unsigned rline = 0;
 					if (kind == 'V') receiver(w, c, rpath, &rline);
-					snprintf(line_s, sizeof line_s, "C\t%s\t%u\t%s\t%c\t%s\t%s\t%u\t%s\t%u\n", w->owner_path, w->owner_line, name, kind, usr, cpath, cline, rpath, rline);
+					put_call(w, name, kind, usr, cpath, cline, rpath, rline);
 				}
-				put(&w->out, line_s);
 			}
 		}
 	}
@@ -669,12 +706,9 @@ func Parse(root, file string, args []string) (Result, error) {
 				r.Defs = append(r.Defs, Def{USR: f[1], Path: f[2], Line: atoi(f[3]), DeclPath: f[4], DeclLine: atoi(f[5])})
 			}
 		case "C":
-			if len(f) >= 8 && f[4] != "" {
-				c := Call{OwnerPath: f[1], OwnerLine: atoi(f[2]), Name: f[3], Kind: f[4][0], USR: f[5], DeclPath: f[6], DeclLine: atoi(f[7])}
-				if len(f) == 10 {
-					c.RecvPath, c.RecvLine = f[8], atoi(f[9])
-				}
-				r.Calls = append(r.Calls, c)
+			if len(f) == 11 && f[4] != "" {
+				r.Calls = append(r.Calls, Call{OwnerPath: f[1], OwnerLine: atoi(f[2]), Name: f[3], Kind: f[4][0], USR: f[5],
+					DeclPath: f[6], DeclLine: atoi(f[7]), RecvPath: f[8], RecvLine: atoi(f[9]), OwnerName: f[10]})
 			}
 		case "I":
 			if len(f) == 2 {
@@ -699,8 +733,8 @@ func Parse(root, file string, args []string) (Result, error) {
 				r.Diags = append(r.Diags, f[1])
 			}
 		case "R":
-			if len(f) == 4 {
-				r.Refs = append(r.Refs, Ref{OwnerPath: f[1], OwnerLine: atoi(f[2]), Name: f[3]})
+			if len(f) == 5 {
+				r.Refs = append(r.Refs, Ref{OwnerPath: f[1], OwnerLine: atoi(f[2]), Name: f[3], OwnerName: f[4]})
 			}
 		}
 	}
