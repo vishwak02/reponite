@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -231,6 +232,21 @@ func cmdIndex(args []string) {
 	}
 	registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
 	fmt.Printf("refs now: %v\n", st.Refs(repo))
+}
+
+// indexHead (re)indexes repo's working tree at dir as HEAD, stamped with this
+// build's ruleset, in one transaction (sqlite.Store.Replace): a reader — an
+// MCP server's tool calls, another process — sees the previous complete index
+// until the new one is written whole, and a run that fails or is cancelled
+// (ctx) leaves the previous one as it was rather than a cleared, unfinished
+// ref.
+func indexHead(ctx context.Context, st *sqlite.Store, repo, dir string, opt processing.IndexOptions) error {
+	return st.Replace(ctx, func(w *sqlite.Store) error {
+		if err := processing.IndexDirWith(w, repo, "HEAD", dir, version.NormVer, opt); err != nil {
+			return err
+		}
+		return w.SetIndexVersion(repo, "HEAD", version.IndexVer)
+	})
 }
 
 // indexOneRev indexes one revision, or reuses an index of the same commit

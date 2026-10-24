@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -29,20 +30,23 @@ func newSymbolParser() func(path, content string) []query.EditedSymbol {
 // If HEAD (the working tree) is already indexed it refreshes it in the
 // BACKGROUND; a repo indexed only at git revisions is left as it is — so restarting the agent picks up the current working tree
 // without a manual `reponite index` and without blocking startup. This fixes the
-// stale-mount trap (an agent got confident answers about outdated code). Note:
-// a background refresh briefly re-clears the ref, so that repo's results can be
-// momentarily partial right after mount; `reponite watch` gives continuous
+// stale-mount trap (an agent got confident answers about outdated code). The
+// refresh is one transaction (indexHead): tool calls keep reading the previous
+// complete index until the new one commits; `reponite watch` gives continuous
 // mid-session freshness.
-func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
+//
+// The returned stop abandons a refresh still running — the server is shutting
+// down: its writes are rolled back and the previous index stays as it was. Call
+// it before closing st.
+func autoIndexOnMount(st *sqlite.Store, repo, dir string) (stop func()) {
 	// compiled C/C++ results are reused, as a plain `reponite index` does
 	opt := processing.IndexOptions{PreciseDriver: cachedDriver(repo)}
 	if len(st.Refs(repo)) == 0 {
 		fmt.Fprintf(os.Stderr, "reponite: no index for %q; indexing %s@HEAD on mount...\n", repo, dir)
-		if err := processing.IndexDirWith(st, repo, "HEAD", dir, version.NormVer, opt); err != nil {
+		if err := indexHead(context.Background(), st, repo, dir, opt); err != nil {
 			fmt.Fprintln(os.Stderr, "reponite: auto-index failed:", err)
 		}
-		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
-		return
+		return func() {}
 	}
 	hasHead := false
 	for _, r := range st.Refs(repo) {
@@ -51,14 +55,17 @@ func autoIndexOnMount(st *sqlite.Store, repo, dir string) {
 	if !hasHead {
 		// indexed only at chosen revisions (index --git): the working tree
 		// may be any branch, and reading it would replace those answers
-		return
+		return func() {}
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		if err := processing.IndexDirWith(st, repo, "HEAD", dir, version.NormVer, opt); err != nil {
-			fmt.Fprintln(os.Stderr, "reponite: background refresh failed:", err)
+		if err := indexHead(ctx, st, repo, dir, opt); err != nil {
+			if ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "reponite: background refresh failed:", err)
+			}
 			return
 		}
-		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
 		fmt.Fprintf(os.Stderr, "reponite: refreshed %s@HEAD on mount\n", repo)
 	}()
+	return cancel
 }

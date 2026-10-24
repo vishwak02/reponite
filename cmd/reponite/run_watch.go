@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"github.com/vishwak02/reponite/internal/processing"
-	"github.com/vishwak02/reponite/internal/version"
 )
 
 // watchCommand indexes HEAD once, then re-indexes on source-file changes
@@ -34,11 +34,12 @@ func watchCommand(args []string) {
 	reindex := func() {
 		mu.Lock()
 		defer mu.Unlock()
-		if err := processing.IndexDirWith(st, repo, "HEAD", dir, version.NormVer, opt); err != nil {
+		// one transaction: a server reading this store meanwhile keeps the
+		// previous complete index until the new one is written whole
+		if err := indexHead(context.Background(), st, repo, dir, opt); err != nil {
 			fmt.Fprintln(os.Stderr, "reindex error:", err)
 			return
 		}
-		_ = st.SetIndexVersion(repo, "HEAD", version.IndexVer)
 		fmt.Printf("reindexed %s@HEAD\n", repo)
 	}
 	reindex() // initial
