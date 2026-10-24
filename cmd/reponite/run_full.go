@@ -192,10 +192,7 @@ func cmdIndex(args []string) {
 	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary, PreciseDriver: pf.driver(repo)}
 	if gitRev == "" && tagGlob == "" {
 		ref := arg(pos, 1, "HEAD")
-		if err := processing.IndexDirWith(st, repo, ref, dir, version.NormVer, opt); err != nil {
-			fail(err)
-		}
-		if err := st.SetIndexVersion(repo, ref, version.IndexVer); err != nil {
+		if err := indexDirRef(context.Background(), st, repo, ref, dir, opt); err != nil {
 			fail(err)
 		}
 		registerRepo(repo, dir, st.ModulePath(repo)) // join the persistent fleet (§8B.7)
@@ -234,18 +231,23 @@ func cmdIndex(args []string) {
 	fmt.Printf("refs now: %v\n", st.Refs(repo))
 }
 
-// indexHead (re)indexes repo's working tree at dir as HEAD, stamped with this
+// indexHead (re)indexes repo's working tree at dir as HEAD (indexDirRef).
+func indexHead(ctx context.Context, st *sqlite.Store, repo, dir string, opt processing.IndexOptions) error {
+	return indexDirRef(ctx, st, repo, "HEAD", dir, opt)
+}
+
+// indexDirRef (re)indexes repo's working tree at dir as ref, stamped with this
 // build's ruleset, in one transaction (sqlite.Store.Replace): a reader — an
 // MCP server's tool calls, another process — sees the previous complete index
-// until the new one is written whole, and a run that fails or is cancelled
-// (ctx) leaves the previous one as it was rather than a cleared, unfinished
-// ref.
-func indexHead(ctx context.Context, st *sqlite.Store, repo, dir string, opt processing.IndexOptions) error {
+// until the new one is written whole, and a run that fails, is cancelled
+// (ctx) or is killed (Ctrl-C) leaves the previous one as it was rather than a
+// cleared, unfinished ref.
+func indexDirRef(ctx context.Context, st *sqlite.Store, repo, ref, dir string, opt processing.IndexOptions) error {
 	return st.Replace(ctx, func(w *sqlite.Store) error {
-		if err := processing.IndexDirWith(w, repo, "HEAD", dir, version.NormVer, opt); err != nil {
+		if err := processing.IndexDirWith(w, repo, ref, dir, version.NormVer, opt); err != nil {
 			return err
 		}
-		return w.SetIndexVersion(repo, "HEAD", version.IndexVer)
+		return w.SetIndexVersion(repo, ref, version.IndexVer)
 	})
 }
 
@@ -274,32 +276,48 @@ func indexOneRev(st *sqlite.Store, repo, dir string, rv processing.GitRev, opt p
 				fmt.Printf("%s@%s already indexed at %s — skipped\n", repo, rv.Label, shortHash(rv.Commit))
 				return
 			}
-			if err := st.AliasRef(repo, have, rv.Label); err != nil {
+			// one transaction: the label is never read cleared or half-copied
+			if err := st.Replace(context.Background(), func(w *sqlite.Store) error { return w.AliasRef(repo, have, rv.Label) }); err != nil {
 				fail(err)
 			}
 			fmt.Printf("%s@%s = %s@%s (same commit %s) — reused\n", repo, rv.Label, repo, have, shortHash(rv.Commit))
 			return
 		}
 	}
-	commit, err := processing.IndexGitRefWith(st, repo, rv.Label, dir, rv.Rev, version.NormVer, opt)
+	commit, err := indexGitRev(context.Background(), st, repo, dir, rv, opt, filter, pf)
 	if err != nil {
-		fail(err)
-	}
-	if err := st.AddRef(repo, rv.Label, commit, ""); err != nil {
-		fail(err)
-	}
-	if err := st.SetIndexVersion(repo, rv.Label, version.IndexVer); err != nil {
-		fail(err)
-	}
-	if pf != nil && pf.compiled {
-		filter += preciseMark
-	}
-	if err := st.SetRefFilter(repo, rv.Label, filter); err != nil {
 		fail(err)
 	}
 	fmt.Printf("indexed %s@%s (git %s @ %s)%s\n", repo, rv.Label, rv.Rev, shortHash(commit), moduleNote(st, repo))
 	// derive the per-repo facts questions need now, so no question pays for them
 	query.WarmFacts(st, repo, rv.Label)
+}
+
+// indexGitRev indexes revision rv as its label, with its commit, ruleset and
+// file filter (marked when compiled calls joined it), in one transaction
+// (sqlite.Store.Replace): readers keep the label's previous complete index
+// until the new one is written whole, and a run that fails or is interrupted
+// leaves it as it was. The precise driver runs inside, before the first
+// write, so a compile holds no lock.
+func indexGitRev(ctx context.Context, st *sqlite.Store, repo, dir string, rv processing.GitRev, opt processing.IndexOptions, filter string, pf *preciseFlags) (string, error) {
+	var commit string
+	err := st.Replace(ctx, func(w *sqlite.Store) error {
+		var err error
+		if commit, err = processing.IndexGitRefWith(w, repo, rv.Label, dir, rv.Rev, version.NormVer, opt); err != nil {
+			return err
+		}
+		if err := w.AddRef(repo, rv.Label, commit, ""); err != nil {
+			return err
+		}
+		if err := w.SetIndexVersion(repo, rv.Label, version.IndexVer); err != nil {
+			return err
+		}
+		if pf != nil && pf.compiled {
+			filter += preciseMark
+		}
+		return w.SetRefFilter(repo, rv.Label, filter)
+	})
+	return commit, err
 }
 
 const maxSubmoduleDepth = 5
