@@ -1,13 +1,14 @@
-import { useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { Command as CmdIcon, Moon, Search, Sun } from "lucide-react";
 import { useScope } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
-import { CommandPalette } from "./CommandPalette";
 import { NAV } from "./nav";
 import { RefPicker, RepoPicker } from "./RepoPicker";
+
+const CommandPalette = lazy(() => import("./CommandPalette"));
 
 function Logo() {
   return (
@@ -27,7 +28,24 @@ function Logo() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { dark, toggleTheme, repos } = useScope();
-  const [palette, setPalette] = useState(false);
+  const [palette, setPaletteState] = useState(false);
+  // the palette's code loads the first time it opens, and stays mounted
+  const [paletteUsed, setPaletteUsed] = useState(false);
+  const setPalette = (o: boolean) => {
+    if (o) setPaletteUsed(true);
+    setPaletteState(o);
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteUsed(true);
+        setPaletteState((o) => !o);
+      }
+    };
+    addEventListener("keydown", on);
+    return () => removeEventListener("keydown", on);
+  }, []);
   const loc = useLocation();
   const mac = navigator.platform.toLowerCase().includes("mac");
   return (
@@ -86,7 +104,11 @@ export function AppShell({ children }: { children: ReactNode }) {
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
       </div>
-      <CommandPalette open={palette} setOpen={setPalette} />
+      {paletteUsed && (
+        <Suspense fallback={null}>
+          <CommandPalette open={palette} setOpen={setPalette} />
+        </Suspense>
+      )}
     </div>
   );
 }

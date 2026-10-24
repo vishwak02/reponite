@@ -1,4 +1,5 @@
-// ⌘K: jump to any symbol in the fleet, or to any page.
+// ⌘K: jump to any symbol in the fleet, or to any page. Loaded on first open
+// (AppShell owns the shortcut), so the dialog stays out of the app shell.
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -7,6 +8,7 @@ import { Command } from "cmdk";
 import { Braces, CornerDownLeft, FlaskConical, Search } from "lucide-react";
 import { searchSymbols } from "@/lib/api";
 import { useScope } from "@/lib/scope";
+import { symbolHref } from "@/lib/routes";
 import { shortName, tint } from "@/lib/utils";
 import { NAV } from "./nav";
 
@@ -19,29 +21,12 @@ function useDebounced<T>(v: T, ms: number): T {
   return d;
 }
 
-export function symbolHref(repo: string, ref: string, name: string, tab?: string) {
-  const q = new URLSearchParams({ repo, ref, s: name });
-  if (tab) q.set("tab", tab);
-  return `/symbol?${q}`;
-}
-
-export function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => void }) {
+export default function CommandPalette({ open, setOpen }: { open: boolean; setOpen: (o: boolean) => void }) {
   const nav = useNavigate();
   const { repo, ref } = useScope();
   const [q, setQ] = useState("");
   const [fleet, setFleet] = useState(true);
   const dq = useDebounced(q.trim(), 160);
-
-  useEffect(() => {
-    const on = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setOpen(!open);
-      }
-    };
-    addEventListener("keydown", on);
-    return () => removeEventListener("keydown", on);
-  }, [open, setOpen]);
 
   const hits = useQuery({
     queryKey: ["search", dq, fleet ? "*" : repo, fleet ? "HEAD" : ref],

@@ -1,15 +1,14 @@
 // The symbol hub: everything reponite knows about one symbol, in tabs.
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { lazy, Suspense, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDownRight, ArrowUpLeft, Braces, Code2, FileCode2, FlaskConical, GitCompareArrows, ListTree, Network, Search } from "lucide-react";
 import { api, searchSymbols, type Brief, type CompatResult, type Neighbor, type UsagesResult } from "@/lib/api";
-import { useScope } from "@/lib/scope";
+import { useSymbolParams } from "@/lib/symbolParams";
 import { cn, shortName, tint } from "@/lib/utils";
-import CodeView from "@/components/code/CodeView";
 import { Page } from "@/components/layout/AppShell";
-import { symbolHref } from "@/components/layout/CommandPalette";
+import { symbolHref } from "@/lib/routes";
 import { Badge, Confidence } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -17,19 +16,8 @@ import { Empty, Rows, Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const CallGraph = lazy(() => import("@/components/graph/CallGraph"));
-
-export function useSymbolParams() {
-  const [sp, setSp] = useSearchParams();
-  const scope = useScope();
-  const repo = sp.get("repo") || scope.repo;
-  const ref = sp.get("ref") || scope.ref;
-  const s = sp.get("s") || "";
-  // a link into another repo moves the global scope with it
-  useEffect(() => {
-    if (sp.get("repo") && sp.get("repo") !== scope.repo) scope.setRepo(sp.get("repo")!);
-  }, [sp.get("repo")]); // eslint-disable-line react-hooks/exhaustive-deps
-  return { repo, ref, s, tab: sp.get("tab") || "overview", sp, setSp };
-}
+// CodeMirror is the largest dependency: only the Code tab loads it
+const CodeView = lazy(() => import("@/components/code/CodeView"));
 
 export default function SymbolPage() {
   const { repo, ref, s, tab, sp, setSp } = useSymbolParams();

@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "size": "size-limit"
   },
   "dependencies": {
     "@codemirror/lang-cpp": "6.0.2",
@@ -46,13 +49,21 @@
     "tailwind-merge": "2.5.4"
   },
   "devDependencies": {
+    "@playwright/test": "1.49.1",
+    "@size-limit/file": "11.1.6",
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/react": "16.1.0",
+    "@types/node": "22.9.0",
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
     "@vitejs/plugin-react": "4.3.3",
     "autoprefixer": "10.4.20",
+    "jsdom": "25.0.1",
     "postcss": "8.4.49",
+    "size-limit": "11.1.6",
     "tailwindcss": "3.4.15",
     "typescript": "5.6.3",
-    "vite": "5.4.11"
+    "vite": "5.4.11",
+    "vitest": "2.1.9"
   }
 }

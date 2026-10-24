@@ -1,4 +1,4 @@
-.PHONY: build test vet fmt tidy clean cli sqlite treesitter mcp e2e web
+.PHONY: build test vet fmt tidy clean cli sqlite treesitter mcp e2e web web-check web-e2e
 
 build:
 	go build -o bin/reponite ./cmd/reponite
@@ -46,3 +46,15 @@ e2e:
 # build never needs this.
 web:
 	cd web && npm ci && npm run build
+
+# What CI's web job checks: the committed dist is exactly what the source
+# builds to, the unit tests pass, and the bundle stays within its budgets.
+web-check: web
+	git diff --exit-code --stat -- internal/interfaces/webui/dist
+	test -z "$$(git status --porcelain -- internal/interfaces/webui/dist)"
+	cd web && npm test && npm run size
+
+# Playwright smoke over every route against `reponite serve` on the fixture
+# repo (needs `npx playwright install chromium` once).
+web-e2e: cli
+	cd web && REPONITE_BIN=$(CURDIR)/bin/reponite npm run e2e

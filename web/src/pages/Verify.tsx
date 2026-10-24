@@ -1,21 +1,21 @@
 // Check an edit before making it: paste or edit a file's new content, and see
 // which symbols it adds, changes or removes, and what in the fleet would break.
-import { Suspense, useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { FileCode2, Loader2, ShieldAlert, ShieldCheck } from "lucide-react";
 import { api, verifyEdit, type VerifyResult } from "@/lib/api";
 import { useScope } from "@/lib/scope";
 import { shortName } from "@/lib/utils";
-import CodeView from "@/components/code/CodeView";
 import { Page } from "@/components/layout/AppShell";
-import { symbolHref } from "@/components/layout/CommandPalette";
+import { symbolHref } from "@/lib/routes";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Empty, Skeleton } from "@/components/ui/skeleton";
 
+const CodeView = lazy(() => import("@/components/code/CodeView"));
 
 export default function Verify() {
   const { repo, ref } = useScope();
