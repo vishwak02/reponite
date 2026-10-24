@@ -15,5 +15,5 @@ export function useSymbolParams() {
   useEffect(() => {
     if (sp.get("repo") && sp.get("repo") !== scope.repo) scope.setRepo(sp.get("repo")!);
   }, [sp.get("repo")]); // eslint-disable-line react-hooks/exhaustive-deps
-  return { repo, ref, s, tab: sp.get("tab") || "overview", sp, setSp };
+  return { repo, ref, s, tab: sp.get("tab") || "explain", sp, setSp };
 }

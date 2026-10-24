@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Boxes, Braces, FileCode2, GitBranch, Share2 } from "lucide-react";
@@ -8,6 +8,10 @@ import { fmt, tint } from "@/lib/utils";
 import { Page } from "@/components/layout/AppShell";
 import { Card, CardHeader, Stat } from "@/components/ui/card";
 import { Rows, Skeleton } from "@/components/ui/skeleton";
+import { AskBar } from "@/components/ask/AskBar";
+
+// what changed between each repo's two newest refs: loaded after first paint
+const SinceIndex = lazy(() => import("@/components/home/SinceIndex"));
 
 export function useFleetMap() {
   return useQuery({ queryKey: ["fleetmap"], queryFn: () => api<FleetMap>("fleetmap", { ref: FLEET_REF }), staleTime: 5 * 60_000 });
@@ -50,12 +54,26 @@ export default function Overview() {
 
   return (
     <Page title="Fleet overview" sub="Every indexed repository, at the version this server is pinned to.">
+      <div className="relative mb-5 overflow-hidden rounded-2xl border bg-card px-5 py-5 shadow-[0_1px_2px_rgb(0_0_0/0.04)] sm:px-6">
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/[.07] via-transparent to-shape/[.06]" />
+        <div className="relative">
+          <div className="text-[15px] font-semibold tracking-tight">Ask the fleet</div>
+          <div className="mb-3 mt-0.5 text-sm text-muted-foreground">A symbol, a question, a route, a config key or a pasted log line: answered from the index, with the code it rests on.</div>
+          <AskBar examples className="max-w-3xl" />
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Stat label="Repositories" value={fmt(overview.length || repos.length)} icon={<Boxes />} />
         <Stat label="Versions indexed" value={fmt(versions)} icon={<GitBranch />} hint="refs across all repos" />
         <Stat label="Symbols" value={fm.isLoading ? <Skeleton className="h-7 w-24" /> : fmt(totals.symbols)} icon={<Braces />} />
         <Stat label="Source files" value={fm.isLoading ? <Skeleton className="h-7 w-24" /> : fmt(totals.files)} icon={<FileCode2 />} />
         <Stat label="Cross-repo links" value={fm.isLoading ? <Skeleton className="h-7 w-16" /> : fmt(fm.data?.links?.length)} icon={<Share2 />} hint={<Link to="/fleet" className="text-primary hover:underline">open the fleet map →</Link>} />
+      </div>
+
+      <div className="mt-4">
+        <Suspense fallback={<Skeleton className="h-28 rounded-xl" />}>
+          <SinceIndex />
+        </Suspense>
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">

@@ -66,6 +66,7 @@ func serveCommand(args []string) {
 			return processing.ParseEditedSymbols(path, content, version.NormVer)
 		},
 		Ranker:      semanticRanker(),
+		History:     newHistoryProvider(dirs),
 		Compact:     true,
 		DataVersion: func() string { return interfaces.FileVersion(dbPaths...) },
 	}

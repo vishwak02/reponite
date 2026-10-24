@@ -106,3 +106,11 @@
 .cm-marked { background: hsl(var(--primary) / .09); box-shadow: inset 2px 0 0 hsl(var(--primary)); }
 .cm-editor { font-size: 12.5px; }
 .cm-editor .cm-scroller { font-family: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace; }
+
+/* call sites in the code view, by the edge's provenance (lib/provenance.ts) */
+.cm-callgutter .cm-gutterElement { display: flex; align-items: center; justify-content: center; width: 12px; padding: 0 2px; }
+.cm-callsite { display: block; width: 7px; height: 7px; border-radius: 9999px; cursor: help; }
+.cm-callsite-proven { background: hsl(var(--ok)); }
+.cm-callsite-typed { background: hsl(var(--primary)); }
+.cm-callsite-guessed { background: transparent; box-shadow: inset 0 0 0 1.5px hsl(var(--warn)); }
+.cm-callsite-ambiguous { background: transparent; box-shadow: inset 0 0 0 1.5px hsl(var(--bad) / .8); border-radius: 2px; }

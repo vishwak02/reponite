@@ -39,6 +39,9 @@ type WebHandler struct {
 	// Ranker overrides the semantic rung for /api/investigate (ADR-020);
 	// injected by the neural build when configured, nil = term-idf default.
 	Ranker query.SemanticRanker
+	// History reads repos' git object stores for /api/v2/why (nil = no
+	// history; why still answers the history across indexed refs).
+	History query.HistoryProvider
 	// Compact writes answers as single-line JSON (the browser does not read
 	// the indentation the CLI formatters produce). Web only: the MCP path's
 	// CompactOutput is a separate switch.
@@ -65,11 +68,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 	}
 	mux.HandleFunc("/", h.index)
 	mux.Handle("/assets/", assetHandler(appDist))
-	for _, rt := range []struct {
-		path string
-		kind apiKind
-		fn   http.HandlerFunc
-	}{
+	for _, rt := range append([]apiRoute{
 		{"/api/repos", apiGet, h.apiRepos},
 		{"/api/overview", apiGet, h.apiOverview},
 		{"/api/refs", apiGet, h.apiRefs},
@@ -93,7 +92,7 @@ func (h *WebHandler) Routes() *http.ServeMux {
 		{"/api/coverage", apiGet, h.apiCoverage},
 		{"/api/fleetmap", apiGet, h.apiFleetMap},
 		{"/api/file", apiGet, h.apiFile},
-	} {
+	}, h.v2Routes()...) {
 		mux.Handle(rt.path, h.api(rt.kind, rt.fn))
 	}
 	return mux

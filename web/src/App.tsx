@@ -14,6 +14,8 @@ const Links = lazy(() => import("./pages/Links"));
 const Grep = lazy(() => import("./pages/Grep"));
 const Diff = lazy(() => import("./pages/Diff"));
 const Verify = lazy(() => import("./pages/Verify"));
+const Ask = lazy(() => import("./pages/Ask"));
+const Flow = lazy(() => import("./pages/Flow"));
 
 export default function App() {
   return (
@@ -21,6 +23,8 @@ export default function App() {
       <Suspense fallback={<div className="p-6"><Rows /></div>}>
         <Routes>
           <Route path="/" element={<Overview />} />
+          <Route path="/ask" element={<Ask />} />
+          <Route path="/flow" element={<Flow />} />
           <Route path="/repos" element={<Repos />} />
           <Route path="/symbol" element={<SymbolPage />} />
           <Route path="/graph" element={<GraphPage />} />
