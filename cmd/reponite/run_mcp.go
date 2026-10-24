@@ -21,7 +21,10 @@ func mcpCommand(args []string) {
 		st := openStore(dir)
 		defer st.Close()
 		repo := repoName(dir)
-		autoIndexOnMount(st, repo, dir) // index on first mount; refresh HEAD in the background otherwise
+		// index on first mount; refresh HEAD in the background otherwise. At
+		// shutdown (stdin closed) a refresh still running is abandoned before
+		// the store closes: the previous index stays whole.
+		defer autoIndexOnMount(st, repo, dir)()
 		stores = append(stores, st)
 		repos = append(repos, repo)
 	}

@@ -44,8 +44,16 @@ const FormatVersion = 2
 
 // Store is a SQLite-backed query.Store.
 type Store struct {
-	db   *sql.DB
-	path string // on-disk path (":memory:" for tests), for the dashboard DB view
+	// db runs every statement: the connection pool, or in a Replace writer
+	// its transaction (opened at its first write)
+	db   dbtx
+	pool *sql.DB // the connection pool; nil in a Replace writer
+	lz   *lazyTx // a Replace writer's transaction; nil otherwise
+	path string  // on-disk path (":memory:" for tests), for the dashboard DB view
+	// wmu is held shared by every open Replace transaction and exclusively by
+	// Close, which so waits for one to finish (or be abandoned) first
+	wmu    sync.RWMutex
+	closed bool
 	// idMu guards names and refs: a server answers tool calls on several
 	// goroutines at once
 	idMu  sync.Mutex
@@ -226,7 +234,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	s := &Store{db: db, path: path, names: map[string]int64{}, refs: map[[2]string]int64{}}
+	s := &Store{db: db, pool: db, path: path, names: map[string]int64{}, refs: map[[2]string]int64{}}
 	if s.tableExists("ref_history") || s.tableExists("external_refs") || s.tableExists("refs") {
 		if err := s.migrateV1(); err != nil {
 			db.Close()
@@ -245,8 +253,17 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Close closes the underlying database.
-func (s *Store) Close() error { return s.db.Close() }
+// Close closes the underlying database. A Replace still writing is waited
+// for: cancel its context first to abandon it (its writes are rolled back).
+func (s *Store) Close() error {
+	if s.pool == nil {
+		return nil // a Replace writer: Replace closes what it opened
+	}
+	s.wmu.Lock()
+	s.closed = true
+	s.wmu.Unlock()
+	return s.pool.Close()
+}
 
 // DBStats reports the index database's file path and per-table row counts, for
 // the dashboard's index/database view.
@@ -442,7 +459,28 @@ func inflate(z []byte) (string, error) {
 // --- writes (used by the indexer) -----------------------------------------
 
 func (s *Store) withTx(fn func(tx *sql.Tx) error) error {
-	tx, err := s.db.Begin()
+	if s.lz != nil {
+		// a Replace writer: every write joins its one transaction, committed
+		// (or rolled back) by Replace as a whole
+		tx, err := s.lz.begin()
+		if err != nil {
+			return err
+		}
+		// a savepoint keeps each write all-or-nothing within it, as its own
+		// transaction would
+		if _, err := tx.Exec(`SAVEPOINT w`); err != nil {
+			return err
+		}
+		if err := fn(tx); err != nil {
+			_, _ = tx.Exec(`ROLLBACK TO w`)
+			_, _ = tx.Exec(`RELEASE w`)
+			s.resetIDs()
+			return err
+		}
+		_, err = tx.Exec(`RELEASE w`)
+		return err
+	}
+	tx, err := s.pool.Begin()
 	if err != nil {
 		return err
 	}
