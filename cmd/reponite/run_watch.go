@@ -30,7 +30,7 @@ func watchCommand(args []string) {
 	defer st.Close()
 
 	var mu sync.Mutex
-	opt := processing.IndexOptions{PreciseDriver: cachedDriver(repo)}
+	opt := cachedOptions(repo)
 	reindex := func() {
 		mu.Lock()
 		defer mu.Unlock()

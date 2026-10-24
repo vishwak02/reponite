@@ -43,6 +43,12 @@ const (
 	// packages' manifests instead (the build's flags were not available).
 	MethodClang      = "clang-compdb"
 	MethodClangSynth = "clang-synth"
+	// MethodTSC: a call the TypeScript compiler's checker bound, written in
+	// TypeScript; MethodTSCJS: written in JavaScript (checked from inferred
+	// types only). MethodPyright: a Python call pyright bound.
+	MethodTSC     = "tsc"
+	MethodTSCJS   = "tsc-js"
+	MethodPyright = "pyright"
 )
 
 // Confidence per resolution method (§7, invariant 5), monotonic with certainty:
@@ -57,6 +63,9 @@ const (
 	// ConfClangSynth: compiler-bound, but with include paths the build may
 	// order differently
 	ConfClangSynth = 0.97
+	ConfTSC        = 1.0
+	ConfTSCJS      = 0.97
+	ConfPyright    = 0.97
 	ConfResolved   = 0.9
 	ConfImport     = 0.75
 	ConfExternal   = 0.6

@@ -34,6 +34,16 @@ type PreciseCall struct {
 	Virtual    bool   // bound to a virtual method through an object: overrides may run instead
 	RecvPath   string // a virtual call's object's class definition ("" unknown)
 	RecvLine   int
+	// CalleeName is the bound definition's own name. A driver that locates
+	// a call by the line it is written on (CallerLine is the call's line,
+	// not its caller's definition: TypeScript, Python) sets it: the callee
+	// location then proves the edge only when the innermost definition
+	// there has this name — a line inside another definition (a local
+	// variable's, a nested function this index does not hold) is not it.
+	CalleeName string
+	// Ctor: the call constructs the class defined at the callee location
+	// (Python Cls(), TypeScript new Cls() or <Cls/>): the class is the edge.
+	Ctor bool
 }
 
 // PreciseUnit is one compiled unit's calls (a translation unit, a project),
@@ -208,6 +218,20 @@ func preciseEdges(units []PreciseUnit, li locIndex, isType func(string) bool) Pr
 				pc.Unbound[c.Name] = true
 			case c.External:
 				pc.External[c.Name] = true
+			case c.CalleePath != "" && c.CalleeName != "":
+				// located by the definition's own name: a class only when
+				// the call constructs it, a function only when it does not
+				to := li.at(c.CalleePath, c.CalleeLine, c.CalleeName)
+				if to == "" || BaseName(to) != c.CalleeName || isType != nil && isType(to) != c.Ctor {
+					pc.Unbound[c.Name] = true
+					continue
+				}
+				if !containsStr(pc.Bound[c.Name], to) {
+					pc.Bound[c.Name] = append(pc.Bound[c.Name], to)
+				}
+				if p, ok := pc.Via[to]; !ok || u.Conf > p.Conf {
+					pc.Via[to] = Proof{u.Method, u.Conf}
+				}
 			case c.CalleePath != "":
 				to := li.at(c.CalleePath, c.CalleeLine, c.Name)
 				if to == from && (c.CalleePath != c.CallerPath || c.CalleeLine != c.CallerLine) {
@@ -331,6 +355,10 @@ func mergePrecise(inferred []query.Callee, pc *PreciseCaller, nodeSet map[string
 	}
 	return out
 }
+
+// PreciseInputCxx reports the files a C/C++ precise driver reads: sources,
+// headers and the manifests that say how they build.
+func PreciseInputCxx(rel string) bool { return preciseInput(rel) }
 
 // preciseInputs are the files a C/C++ precise driver reads: sources, headers
 // and the manifests that say how they build.

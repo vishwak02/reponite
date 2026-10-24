@@ -57,10 +57,21 @@ type IndexOptions struct {
 	// PreciseDriver, when set, is run on the ref's C/C++ sources (precise.go)
 	// and its proven calls join Precise.
 	PreciseDriver func(PreciseSource) []PreciseUnit
+	// PreciseInput selects the files PreciseDriver reads (PreciseSource.Files);
+	// nil: the C/C++ ones (PreciseInputCxx).
+	PreciseInput func(rel string) bool
+}
+
+// preciseInput reports a file the precise driver reads.
+func (o IndexOptions) preciseInput(rel string) bool {
+	if o.PreciseInput != nil {
+		return o.PreciseInput(rel)
+	}
+	return preciseInput(rel)
 }
 
 // PreciseSource is what a precise driver reads of one ref: its C/C++ files
-// (and the manifests a build reads) by path with their git blob ids, their
+// (and the manifests a build reads; IndexOptions.PreciseInput chooses others) by path with their git blob ids, their
 // content, and a way to put them on disk when a compiler must read them.
 type PreciseSource struct {
 	Files map[string]string

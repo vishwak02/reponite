@@ -189,7 +189,7 @@ func cmdIndex(args []string) {
 	// per-caller skew. Without them the skew is honestly "unknown".
 	peers := openPeers(dir)
 	defer peers.Close()
-	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary, PreciseDriver: pf.driver(repo)}
+	opt := processing.IndexOptions{Excludes: excludes, Peers: peers.Store, Report: printIndexSummary, PreciseDriver: pf.driver(repo), PreciseInput: pf.input}
 	if gitRev == "" && tagGlob == "" {
 		ref := arg(pos, 1, "HEAD")
 		if err := indexDirRef(context.Background(), st, repo, ref, dir, opt); err != nil {
