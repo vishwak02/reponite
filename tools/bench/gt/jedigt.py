@@ -20,6 +20,68 @@ import sys
 import jedi
 
 
+def resolve_call(script, line, col):
+    """the definitions Jedi names for the call whose callee name is at
+    (line, col): functions, classes, modules; [] when undetermined"""
+    try:
+        targets = script.goto(line, col, follow_imports=True)
+    except Exception:  # jedi gives up on some constructs
+        return []
+    # a parameter (cls(...) in a classmethod, call_next(request)): goto stops
+    # at its name, on the def line, which by_place would read as the
+    # enclosing function itself; what it holds is the caller's value, so the
+    # call is undetermined
+    targets = [t for t in targets if t.type != "param"]
+    if targets and all(t.type == "statement" for t in targets):
+        # a name bound by assignment (`_aggs = es.aggs`, a tuple of them):
+        # goto stops at the assignment, the value is the callee
+        try:
+            inferred = script.infer(line, col)
+        except Exception:
+            inferred = []
+        if inferred and all(t.type in ("function", "class") for t in inferred):
+            return inferred
+        return []  # a variable whose value Jedi cannot name: undetermined
+    return targets
+
+
+def base_name(e):
+    """the last name of a base class expression (abc.ABC, Generic[T])"""
+    if isinstance(e, ast.Subscript):
+        e = e.value
+    if isinstance(e, ast.Attribute):
+        return e.attr
+    if isinstance(e, ast.Name):
+        return e.id
+    return ""
+
+
+def stub_kind(fn):
+    """what a method's definition says of its body: "abstract"
+    (@abstractmethod), "ellipsis" (only ... or raise NotImplementedError, and
+    a docstring), "pass" (only pass or a docstring), or "" for code"""
+    for d in fn.decorator_list:
+        if base_name(d.func if isinstance(d, ast.Call) else d) == "abstractmethod":
+            return "abstract"
+    body = list(fn.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and \
+            isinstance(body[0].value.value, str):
+        body = body[1:]
+    kind = "pass"
+    for st in body:
+        if isinstance(st, ast.Pass):
+            continue
+        if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and st.value.value is Ellipsis:
+            kind = "ellipsis"
+            continue
+        if isinstance(st, ast.Raise) and st.exc is not None and \
+                base_name(st.exc.func if isinstance(st.exc, ast.Call) else st.exc) == "NotImplementedError":
+            kind = "ellipsis"
+            continue
+        return ""
+    return kind
+
+
 def main():
     root = os.path.abspath(sys.argv[1])
     with open(sys.argv[2], encoding="utf-8") as fh:
@@ -53,6 +115,12 @@ def main():
                 cur = os.path.dirname(cur)
             projects[d] = jedi.Project(root, added_sys_path=near + sorted(r for r in roots if r not in near))
         return projects[d]
+
+    def fresh_project(project):
+        # a Project keeps inference state across every Script made from it:
+        # one it has given up on can stay given up, where a new one (same
+        # paths) resolves the call standalone
+        return jedi.Project(root, added_sys_path=project.added_sys_path)
 
     def enclosing(path, line):
         best = None
@@ -89,7 +157,94 @@ def main():
                 if isinstance(nm, ast.Name) and isinstance(v, ast.Attribute) and nm.id != v.attr:
                     aliases.setdefault(nm.id, set()).add(v.attr)
 
-    added = 0
+    # abstract methods: a call Jedi resolves to one (@abstractmethod, or a
+    # stub body in an ABC or Protocol) runs, through an instance of a
+    # concrete subclass, one of the subclasses' overrides — never the
+    # abstract body. The class hierarchy comes from Jedi resolving each
+    # class's bases.
+    classes = {}  # (rel, class line) -> {"kind", "methods": name -> (line, stub), "bases": [place]}
+    method_at = {}  # (rel, def line) -> (class place, name)
+    for rel in sorted(defs_by_path):
+        full = os.path.join(root, rel)
+        try:
+            with open(full, encoding="utf-8") as fh:
+                src = fh.read()
+            tree = ast.parse(src, filename=rel)
+        except (SyntaxError, UnicodeDecodeError, ValueError, OSError):
+            continue
+        script = None
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            names = [base_name(b) for b in node.bases] + [base_name(k.value) for k in node.keywords if k.arg == "metaclass"]
+            kind = "protocol" if "Protocol" in names else ("abc" if "ABC" in names or "ABCMeta" in names else "")
+            place = (rel, node.lineno)
+            info = {"kind": kind, "methods": {}, "bases": []}
+            for m in node.body:
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    info["methods"][m.name] = (m.lineno, stub_kind(m))
+                    method_at[(rel, m.lineno)] = (place, m.name)
+            for b in node.bases:
+                if base_name(b) in ("ABC", "Protocol", "object", "Generic"):
+                    continue
+                e = b.value if isinstance(b, ast.Subscript) else b
+                if isinstance(e, ast.Attribute):
+                    bl, bc = e.end_lineno, e.end_col_offset - len(e.attr)
+                elif isinstance(e, ast.Name):
+                    bl, bc = e.lineno, e.col_offset
+                else:
+                    continue
+                if script is None:
+                    script = jedi.Script(src, path=full, project=project_for(rel))
+                try:
+                    bts = script.goto(bl, bc, follow_imports=True)
+                except Exception:
+                    bts = []
+                for t in bts:
+                    if t.type == "class" and t.module_path is not None and t.line is not None and \
+                            str(t.module_path).startswith(root + os.sep):
+                        info["bases"].append((os.path.relpath(str(t.module_path), root).replace(os.sep, "/"), t.line))
+            classes[place] = info
+    derived = {}
+    for place, info in classes.items():
+        for b in info["bases"]:
+            derived.setdefault(b, []).append(place)
+
+    def class_kind(place, seen=()):
+        info = classes.get(place)
+        if info is None or place in seen:
+            return ""
+        if info["kind"]:
+            return info["kind"]
+        # ABCMeta is inherited; a class deriving from a Protocol without
+        # naming Protocol again implements it
+        for b in info["bases"]:
+            if class_kind(b, seen + (place,)) == "abc":
+                return "abc"
+        return ""
+
+    def is_abstract(place, name):
+        line, stub = classes[place]["methods"][name]
+        return stub == "abstract" or stub == "ellipsis" and class_kind(place) != "" or \
+            stub == "pass" and classes[place]["kind"] == "protocol"
+
+    def concrete_overrides(rel, line):
+        hit = method_at.get((rel, line))
+        if hit is None or not is_abstract(*hit):
+            return []
+        place, name = hit
+        out, seen, queue = [], {place}, list(derived.get(place, []))
+        while queue:
+            c = queue.pop(0)
+            if c in seen:
+                continue
+            seen.add(c)
+            if name in classes[c]["methods"] and not is_abstract(c, name):
+                out.append((c[0], classes[c]["methods"][name][0]))
+            queue.extend(derived.get(c, []))
+        return out
+
+    added = dispatched = 0
     external, unresolved = set(truth.pop("fixture_external", [])), set()
     judged = set(truth.pop("fixture_judged", []))  # pygt read these as pytest fixtures
     for rel in sorted(defs_by_path):
@@ -118,34 +273,12 @@ def main():
                 continue
             if f"{caller['id']}>{f.attr if isinstance(f, ast.Attribute) else f.id}@{line}:{col}" in judged:
                 continue  # pygt read this call as a pytest fixture's
-            try:
-                targets = script.goto(line, col, follow_imports=True)
-                if not targets:
-                    # Jedi's inference state builds up across one script's
-                    # queries and it can give up on a call it resolves fresh
-                    targets = jedi.Script(src, path=full, project=project).goto(line, col, follow_imports=True)
-            except Exception:  # jedi gives up on some constructs
-                targets = []
-            # a parameter (cls(...) in a classmethod, call_next(request)):
-            # goto stops at its name, on the def line, which by_place would
-            # read as the enclosing function itself; what it holds is the
-            # caller's value, so the call is undetermined
-            targets = [t for t in targets if t.type != "param"]
-            if targets and all(t.type == "statement" for t in targets):
-                # a name bound by assignment (`_aggs = es.aggs`, a tuple of
-                # them): goto stops at the assignment, the value is the callee
-                try:
-                    inferred = script.infer(line, col)
-                    if not inferred:
-                        # as for goto: a fresh script may name what the
-                        # shared one's built-up state gave up on
-                        inferred = jedi.Script(src, path=full, project=project).infer(line, col)
-                except Exception:
-                    inferred = []
-                if inferred and all(t.type in ("function", "class") for t in inferred):
-                    targets = inferred
-                else:
-                    targets = []  # a variable whose value Jedi cannot name: undetermined
+            targets = resolve_call(script, line, col)
+            if not targets:
+                # Jedi's inference state builds up across one script's
+                # queries, and one project's: it can give up on a call that a
+                # new script of a new project (the same paths) resolves
+                targets = resolve_call(jedi.Script(src, path=full, project=fresh_project(project)), line, col)
             name = f.attr if isinstance(f, ast.Attribute) else f.id
             if not targets:
                 # this call stays undetermined, whatever another call of the
@@ -171,9 +304,21 @@ def main():
                 have.add((caller["id"], to))
                 truth["edges"].append({"from": caller["id"], "to": to, "kind": "inferred", "line": node.lineno})
                 added += 1
+            for t in targets:
+                if t.type != "function" or t.module_path is None or t.line is None:
+                    continue
+                tp = os.path.relpath(str(t.module_path), root).replace(os.sep, "/")
+                for op in concrete_overrides(tp, t.line):
+                    to = by_place.get(op)
+                    if to is None or (caller["id"], to) in have:
+                        continue
+                    have.add((caller["id"], to))
+                    truth["edges"].append({"from": caller["id"], "to": to, "kind": "dispatch", "line": node.lineno})
+                    dispatched += 1
     truth["resolved_external"] = sorted(external)
     truth["unresolved"] = sorted(unresolved)
-    print(f"jedigt: {added} inferred edges, {len(external)} calls resolved outside the repo", file=sys.stderr)
+    print(f"jedigt: {added} inferred edges, {dispatched} to concrete overrides of abstract methods, "
+          f"{len(external)} calls resolved outside the repo", file=sys.stderr)
     json.dump(truth, sys.stdout, indent=1)
 
 
