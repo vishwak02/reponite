@@ -237,6 +237,9 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			}
 			if s.Kind == "type" && s.Recv == "" && hasClassBases(lang) {
 				k := classes.define(pkg, s.Name)
+				if s.PyClass != 0 {
+					classes.kind[k] = s.PyClass
+				}
 				classDecls = append(classDecls, classDecl{key: k, path: f.Path, lang: lang, bases: s.Bases, byLocal: byLocal})
 			}
 		}
@@ -336,6 +339,17 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepoFor(d.lang, d.path), modPkg), linkReexport)
 	}
 	x.classes = classes
+	for _, qid := range order {
+		// a Python method that never runs when called through its class
+		if c := byQID[qid]; c.lang == "python" && c.sym.PyStub != 0 && c.sym.Recv != "" {
+			if k, ok := classes.has(c.pkg, c.sym.Recv); ok && pyAbstract(c.sym.PyStub, classes.abstractKind(k)) {
+				if x.pyAbstract == nil {
+					x.pyAbstract = map[string]bool{}
+				}
+				x.pyAbstract[qid] = true
+			}
+		}
+	}
 	var rsPaths []string
 	for _, f := range files {
 		if f.Lang == "rust" {
@@ -523,7 +537,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				kept := qcalls[:0:0]
 				for _, qc := range qcalls {
 					v, local := c.sym.Vars[qc.Name]
-					if qc.Qualifier == "" && local && x.isTest[qid] && (strings.HasPrefix(v, pyCallTag) || strings.HasPrefix(v, pyTypeTag)) {
+					if qc.Qualifier == "" && local && x.isTest[qid] && c.sym.PyFixtureParams && (strings.HasPrefix(v, pyCallTag) || strings.HasPrefix(v, pyTypeTag)) {
 						// a test's parameter annotated as the callable its fixture
 						// hands it (maker: Callable[[], Order]): still the fixture's
 						if fq := py.fixtureOf(qid, qc.Name); fq != "" && strings.HasPrefix(byQID[fq].sym.Returns, pyFactoryTag) {

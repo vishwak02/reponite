@@ -205,6 +205,7 @@ type siteIndex struct {
 	precise    map[string]string   // base -> type-proven qid (Go only; nil here)
 	types      *typeTable          // C++ classes/fields/bases (nil: none in the ref)
 	classes    *classGraph         // Python/JS/TS classes by module, bases resolved through imports
+	pyAbstract map[string]bool     // qid -> a Python abstract method: called through its class, its body never runs
 	rust       *rustCrate          // Rust module tree (nil: no Rust in the ref)
 	callerPkg  string
 	callerTest bool
@@ -363,6 +364,49 @@ const (
 	ConfOverride   = 0.6
 )
 
+// A Python call that reaches an abstract method (pyabstract.go) through its
+// class never runs that method's body: the instance is of a concrete
+// subclass. The call's targets are then the concrete overrides the repo
+// defines (MethodAbstractImpl), as sure as the receiver's class itself; the
+// abstract declaration stays an edge (who calls through the interface), as
+// MethodAbstractDecl below the resolved band.
+const (
+	MethodAbstractImpl = "abstract-override"
+	MethodAbstractDecl = "abstract-declared"
+	ConfAbstractDecl   = 0.7
+)
+
+// pyAbstractCallees are the edges of a Python call of name that reaches
+// method q on class cls with the claim (method, conf): q itself and its overrides,
+// or — when q is abstract and the repo overrides it concretely — those
+// overrides at the claim's confidence and q as a declaration.
+func pyAbstractCallees(cls, name, q, method string, conf float64, x siteIndex) []query.Callee {
+	ovs := x.classes.overriders(cls, name, x.nodeSet)
+	var concrete []string
+	for _, o := range ovs {
+		if (x.callerTest || !x.isTest[o]) && !x.pyAbstract[o] {
+			concrete = append(concrete, o)
+		}
+	}
+	if !x.pyAbstract[q] || len(concrete) == 0 {
+		out := []query.Callee{{Name: q, ResolutionMethod: method, Confidence: conf}}
+		for _, o := range ovs {
+			if x.callerTest || !x.isTest[o] {
+				out = append(out, query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
+			}
+		}
+		return out
+	}
+	if conf > ConfTyped {
+		conf = ConfTyped // one of the overrides: which, the code does not say
+	}
+	out := []query.Callee{{Name: q, ResolutionMethod: MethodAbstractDecl, Confidence: ConfAbstractDecl}}
+	for _, o := range concrete {
+		out = append(out, query.Callee{Name: o, ResolutionMethod: MethodAbstractImpl, Confidence: conf})
+	}
+	return out
+}
+
 // bareNameSkipsClass: languages whose unqualified call is looked up in the
 // function's and module's scope, not the enclosing class's.
 var bareNameSkipsClass = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true, "rust": true}
@@ -475,11 +519,8 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				// reaches, and any subclass's override
 				cls := strings.TrimPrefix(s.Scope, pyClassScope)
 				if q, found := x.classes.method(cls, name, false, x.nodeSet); found {
-					add(query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
-					for _, o := range x.classes.overriders(cls, name, x.nodeSet) {
-						if x.callerTest || !x.isTest[o] {
-							add(query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
-						}
+					for _, c := range pyAbstractCallees(cls, name, q, MethodTyped, ConfTyped, x) {
+						add(c)
 					}
 				} else {
 					// a library base's method, or an attribute set at runtime
@@ -497,13 +538,12 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			if s.Kind == CallSelf && callerRecv != "" && hasClassBases(lang) {
 				if cls, ok := x.classes.has(callerPkg, callerRecv); ok {
 					if q, found := x.classes.method(cls, name, super, x.nodeSet); found {
-						add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
-						if !super { // super() names the base's method itself
-							for _, o := range x.classes.overriders(cls, name, x.nodeSet) {
-								if x.callerTest || !x.isTest[o] {
-									add(query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
-								}
-							}
+						if super { // super() names the base's method itself
+							add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+							continue
+						}
+						for _, c := range pyAbstractCallees(cls, name, q, MethodResolved, ConfResolved, x) {
+							add(c)
 						}
 						continue
 					}
