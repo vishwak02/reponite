@@ -1296,6 +1296,9 @@ type typeTable struct {
 	fileAliases map[string]map[string]string
 	file        string
 	depth       int // nesting of method returns being evaluated
+	// extOwner: the class outside the repo whose member the last eval
+	// stopped at (lib::Task of task.type), see evalOwner
+	extOwner string
 }
 
 // oneReturn is the return type the declarations of one Cls.m agree on: a
@@ -2002,6 +2005,9 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 			t, _ = tt.fieldType(t, op[1:])
 		case strings.HasPrefix(op, "."):
 			if tt.classes[t] == nil {
+				if tt.depth == 0 {
+					tt.extOwner = t
+				}
 				return ""
 			}
 			t, _ = tt.fieldType(t, op[1:])
@@ -2018,6 +2024,40 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 		return n // Outer::Inner: which of two same-named nested classes
 	}
 	return tt.canon(t)
+}
+
+// evalOwner evaluates expr as eval does and, when that stops at a member of
+// a class the repo does not define (task.type with task a lib::Task),
+// names that class: the member's type is then the library's, not the
+// repo's.
+func (tt *typeTable) evalOwner(expr, callerRecv string) (t, owner string) {
+	tt.extOwner = ""
+	t = tt.eval(expr, callerRecv)
+	if t == "" && tt.foreign(tt.extOwner) {
+		owner = tt.extOwner
+	}
+	tt.extOwner = ""
+	return t, owner
+}
+
+// foreign: t names a type of a library — written with its namespace (a
+// lowercase one: never a template parameter like T::Inner), not the
+// standard library's, and no class, enum or alias of the repo by its
+// qualified or its bare name.
+func (tt *typeTable) foreign(t string) bool {
+	i := strings.Index(t, "::")
+	if i <= 0 || strings.ContainsAny(t, "<>[], ") || t[0] < 'a' || t[0] > 'z' || t[:i] == "std" {
+		return false
+	}
+	for _, n := range []string{t, typeLeaf(t)} {
+		if tt.classes[n] != nil || tt.enums[n] || tt.nestedIn[n] > 0 {
+			return false
+		}
+		if _, ok := tt.aliases[n]; ok {
+			return false
+		}
+	}
+	return true
 }
 
 // elemOf is what indexing (or iterating) a container type yields.
