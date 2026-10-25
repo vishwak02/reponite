@@ -39,6 +39,10 @@ type TypeFacts struct {
 	Nested map[string]bool
 	// Enums are the enumeration types this file defines
 	Enums map[string]bool
+	// TypeNames are the alias names this file declares (namespace- or
+	// class-level using/typedef), whatever their target — one Aliases cannot
+	// read (decltype(…)) included
+	TypeNames map[string]bool
 	// Top are the classes this file defines at namespace scope (not nested
 	// in another class): what a bare class name written outside any class
 	// names
@@ -147,7 +151,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 		return nil
 	}
 	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{},
-		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}, Top: map[string]bool{},
+		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}, TypeNames: map[string]bool{}, Top: map[string]bool{},
 		FuncReturns: map[string]string{}, Members: map[string]bool{}, Opened: map[string]bool{}, NSAliases: map[string]string{}}
 	var nsStack []string // the named namespaces around the walk
 	inNS := func(name string, extra ...string) {
@@ -331,6 +335,9 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 						continue
 					}
 					id := firstChildAny(ad, []string{"type_identifier"})
+					if id != nil {
+						tf.TypeNames[id.Text()] = true
+					}
 					if td := firstChildAny(ad, []string{"type_descriptor"}); id != nil && td != nil {
 						if t := TypeName(td); t != "" && t != id.Text() {
 							if prev, seen := local[id.Text()]; seen && prev != t {
@@ -419,6 +426,9 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					walk(kidsNode{AST: c, kids: lcs}, "") // classes the body defines
 				}
 			case "alias_declaration":
+				if id := firstChildAny(c, []string{"type_identifier"}); id != nil {
+					tf.TypeNames[id.Text()] = true
+				}
 				if class == "" {
 					id := firstChildAny(c, []string{"type_identifier"})
 					if td := firstChildAny(c, []string{"type_descriptor"}); id != nil && td != nil {
@@ -431,6 +441,11 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					}
 				}
 			case "type_definition":
+				for i, k := range c.Children() {
+					if i > 0 && k.Type() == "type_identifier" {
+						tf.TypeNames[k.Text()] = true // typedef T Name;
+					}
+				}
 				if class == "" {
 					kids := c.Children()
 					t := TypeName(firstChildAny(c, typeNodeTypes))
@@ -1283,7 +1298,9 @@ type typeTable struct {
 	nestedIn map[string]int
 	nestedBy map[string][]string // Inner -> each Outer::Inner
 	enums    map[string]bool     // enumeration type names
-	top      map[string]bool     // classes some file defines at namespace scope
+	// typeNames: every alias name a file declares (TypeFacts.TypeNames)
+	typeNames map[string]bool
+	top       map[string]bool // classes some file defines at namespace scope
 	// funcReturns: a free function's return type by name ("" unknown or
 	// conflicting); funcNS the namespaces it is declared in; members every
 	// class's methods ("Cls.m")
@@ -1299,6 +1316,8 @@ type typeTable struct {
 	// extOwner: the class outside the repo whose member the last eval
 	// stopped at (lib::Task of task.type), see evalOwner
 	extOwner string
+	// typeLeaves: every class and alias name by its last name (onlyEnum)
+	typeLeaves map[string]bool
 }
 
 // oneReturn is the return type the declarations of one Cls.m agree on: a
@@ -1338,7 +1357,7 @@ func (tt *typeTable) oneReturn(vs []string) string {
 
 func newTypeTable(files []ParsedFile) *typeTable {
 	tt := &typeTable{classes: map[string]*ClassFact{}, aliases: map[string]string{}, returns: map[string]string{}, derived: map[string][]string{}, aliasArgs: map[string][]string{},
-		nested: map[string]bool{}, nestedIn: map[string]int{}, nestedBy: map[string][]string{}, enums: map[string]bool{}, top: map[string]bool{},
+		nested: map[string]bool{}, nestedIn: map[string]int{}, nestedBy: map[string][]string{}, enums: map[string]bool{}, typeNames: map[string]bool{}, top: map[string]bool{},
 		funcReturns: map[string]string{}, funcNS: map[string][]string{}, members: map[string]bool{},
 		fileAliases: map[string]map[string]string{}}
 	returns := map[string][]string{}
@@ -1366,6 +1385,9 @@ func newTypeTable(files []ParsedFile) *typeTable {
 		}
 		for k := range f.Types.Enums {
 			tt.enums[k] = true
+		}
+		for k := range f.Types.TypeNames {
+			tt.typeNames[k] = true
 		}
 		for k := range f.Types.Top {
 			tt.top[k] = true
@@ -1492,6 +1514,11 @@ func (tt *typeTable) canonN(t string, depth int) string {
 		if i := strings.LastIndex(t, "::"); i > 0 {
 			root, _, _ := strings.Cut(t, "::")
 			if leaf := t[i+2:]; !externalScopes[root] {
+				if tt.classes[leaf] != nil && !tt.top[leaf] && tt.nestedIn[leaf] > 0 && !tt.nested[typeLeaf(t[:i])+"::"+leaf] {
+					// lib::Tracker with the repo's only Tracker nested in a
+					// class of its own: a namespace's class, not that one
+					return t
+				}
 				if tt.classes[leaf] != nil {
 					return leaf
 				}
@@ -1978,6 +2005,14 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 		if t = tt.canon(t); t == "" {
 			return ""
 		}
+		if tt.classes[t] == nil && tt.foreign(t) {
+			// an element, member or method result of a library's type
+			// (lib::ResultList [] .tasks): the library's, whatever it is
+			if tt.depth == 0 {
+				tt.extOwner = t
+			}
+			return ""
+		}
 		switch {
 		case strings.HasPrefix(op, "get") && strings.HasPrefix(t, "tuple["):
 			elems := strings.Split(strings.TrimSuffix(strings.TrimPrefix(t, "tuple["), "]"), ";")
@@ -2031,6 +2066,23 @@ func (tt *typeTable) eval(expr, callerRecv string) string {
 // names that class: the member's type is then the library's, not the
 // repo's.
 func (tt *typeTable) evalOwner(expr, callerRecv string) (t, owner string) {
+	if strings.Contains(expr, "|") {
+		// several bindings of the name (one per scope): a library's value
+		// only when every one is
+		for _, alt := range strings.Split(expr, "|") {
+			at, ao := tt.evalOwner(alt, callerRecv)
+			if ao == "" && !tt.foreign(at) {
+				return tt.eval(expr, callerRecv), ""
+			}
+			if owner == "" {
+				owner = ao
+			}
+			if owner == "" {
+				owner = at
+			}
+		}
+		return "", owner
+	}
 	tt.extOwner = ""
 	t = tt.eval(expr, callerRecv)
 	if t == "" && tt.foreign(tt.extOwner) {
@@ -2049,15 +2101,50 @@ func (tt *typeTable) foreign(t string) bool {
 	if i <= 0 || strings.ContainsAny(t, "<>[], ") || t[0] < 'a' || t[0] > 'z' || t[:i] == "std" {
 		return false
 	}
-	for _, n := range []string{t, typeLeaf(t)} {
-		if tt.classes[n] != nil || tt.enums[n] || tt.nestedIn[n] > 0 {
-			return false
+	if tt.classes[t] != nil || tt.enums[t] || tt.typeNames[t] {
+		return false
+	}
+	if _, ok := tt.aliases[t]; ok {
+		return false
+	}
+	leaf, outer := typeLeaf(t), typeLeaf(t[:strings.LastIndex(t, "::")])
+	if tt.classes[leaf] != nil && (tt.top[leaf] || tt.nested[outer+"::"+leaf] || tt.nestedIn[leaf] == 0) {
+		return false // the repo's class, written with its namespace
+	}
+	if tt.enums[leaf] || tt.typeNames[leaf] {
+		return false
+	}
+	_, ok := tt.aliases[leaf]
+	return !ok
+}
+
+// onlyEnum: every type of the repo named like t (by t or its last name)
+// is an enumeration — no class or alias shares the name, so a parameter
+// written t is that enum whichever namespace it is read in.
+func (tt *typeTable) onlyEnum(t string) bool {
+	leaf := typeLeaf(t)
+	if !tt.enums[t] && !tt.enums[leaf] {
+		return false
+	}
+	if tt.typeLeaves == nil {
+		tt.typeLeaves = map[string]bool{}
+		for k, c := range tt.classes {
+			tt.typeLeaves[typeLeaf(k)] = true
+			for a := range c.Aliases {
+				tt.typeLeaves[typeLeaf(a)] = true // a class's own alias (Handler::LocationType)
+			}
 		}
-		if _, ok := tt.aliases[n]; ok {
-			return false
+		for k := range tt.aliases {
+			tt.typeLeaves[typeLeaf(k)] = true
+		}
+		for k := range tt.nestedIn {
+			tt.typeLeaves[typeLeaf(k)] = true
+		}
+		for k := range tt.typeNames {
+			tt.typeLeaves[typeLeaf(k)] = true
 		}
 	}
-	return true
+	return !tt.typeLeaves[leaf]
 }
 
 // elemOf is what indexing (or iterating) a container type yields.

@@ -1170,29 +1170,59 @@ func (x siteIndex) byArgTypes(cands []string) []string {
 
 // argsFit: one of q's overloads (its parameter types, as written) can take
 // the call's arguments, as far as their types are known. A free function
-// picked by its name alone whose every overload refuses an argument (an
-// enum parameter given another enum, a library value) is not what the
-// call binds: the compiler picks a function the repo does not define.
+// picked by its name alone whose every overload has an enum parameter the
+// argument cannot be (an enum converts to no other type of enum, and no
+// number, string or library value converts to it) is not what the call
+// binds: the compiler picks a function the repo does not define. Class and
+// number parameters are not judged — a converting constructor or a
+// standard conversion may take another type.
 func (x siteIndex) argsFit(q string) bool {
 	sets := x.paramTypes[q]
 	if len(sets) == 0 || x.argTypes == "" || x.types == nil {
 		return true
 	}
-	score := x.argScore()
+	args, foreign := x.argTypesOf()
+	cls := strings.SplitN(x.recvOf[q], "@", 2)[0]
 	for _, ps := range sets {
-		if _, fit := score(ps, x.recvOf[q]); fit {
+		fit := true
+		for i, a := range args {
+			if i >= len(ps) || ps[i] == "" {
+				continue
+			}
+			p := ps[i]
+			if cls != "" {
+				p = x.types.ownNested(cls, p)
+			}
+			if !x.types.onlyEnum(p) {
+				continue
+			}
+			_, prim := cPrimitives[a]
+			switch {
+			case foreign[i]:
+				fit = false // a library's value
+			case a == "" || a == p || a == typeLeaf(p):
+			case strings.HasPrefix(a, "#") || prim:
+				fit = false // a literal or a variable of a built-in type
+			case x.types.enums[a] || x.types.classes[a] != nil:
+				fit = false // another of the repo's types
+			}
+			if !fit {
+				break
+			}
+		}
+		if fit {
 			return true
 		}
 	}
 	return false
 }
 
-// argScore reads the call's argument types (x.argTypes) and returns how
-// well a parameter list takes them: the number of parameters whose type an
-// argument matches, and false when an argument cannot be passed to one.
-func (x siteIndex) argScore() func(params []string, cls string) (int, bool) {
+// argTypesOf is the type of each of the call's arguments (x.argTypes) by
+// its last name ("" unknown; #num/#str/#bool a literal), and whether it is
+// a library's value (task.type of a lib::Task, a value of lib::Kind).
+func (x siteIndex) argTypesOf() ([]string, []bool) {
 	args := strings.Split(x.argTypes, ",")
-	foreign := make([]bool, len(args)) // a library's value (task.type of a lib::Task)
+	foreign := make([]bool, len(args))
 	callerRecv := ""
 	if x.recvOf != nil {
 		callerRecv = x.recvOf[x.caller]
@@ -1220,6 +1250,14 @@ func (x siteIndex) argScore() func(params []string, cls string) (int, bool) {
 			args[i] = "#num" // timeout * 0.9 on a number
 		}
 	}
+	return args, foreign
+}
+
+// argScore reads the call's argument types (x.argTypes) and returns how
+// well a parameter list takes them: the number of parameters whose type an
+// argument matches, and false when an argument cannot be passed to one.
+func (x siteIndex) argScore() func(params []string, cls string) (int, bool) {
+	args, foreign := x.argTypesOf()
 	known := func(t string) bool {
 		_, prim := cPrimitives[t]
 		if prim || x.types == nil {

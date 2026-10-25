@@ -26,9 +26,21 @@ constexpr const char* toString(PayloadReason r) noexcept { return "c"; }
 namespace split {
 using NewTaskList = std::vector<lib::AgentTask>;
 struct Result { NewTaskList new_tasks; TransportReason reason; };
+class Handler {
+public:
+    using LocationType = decltype(lib::Reservation::location_type);
+};
+inline const char* describe(Handler::LocationType t) { return "x"; }
+enum class LocationType { LOAD };
+typedef int Count;
 class Splitter {
 public:
     std::map<int, Result> results(int w);
+    lib::ResultList libResults();
+};
+class Board {
+public:
+    class TaskTracker { public: int all(); };
 };
 }
 `,
@@ -43,6 +55,21 @@ void check(Splitter* s) {
 void check2(lib::AgentTask other) {
     toString(other.type);
 }
+void check4(const lib::Response& resp) {
+    describe(resp.reservation.location_type);
+}
+void check5(Splitter* s) {
+    auto r = s->libResults().at(0);
+    toString(r.reason);
+}
+struct Fixture {
+    std::optional<lib::TaskTracker> tracker_;
+    void run() {
+        for (const auto& [id, task] : tracker_->all()) {
+            toString(task.type);
+        }
+    }
+};
 void check3(Splitter* s) {
     auto result = std::move(s->results(1).at(2));
     toString(result.reason);
@@ -51,11 +78,25 @@ void check3(Splitter* s) {
 	}
 	edges := indexAndEdges(t, files)
 	const repoToString = "split/include/split.toString"
+	for _, f := range []string{"split/test.check", "split/test.check2", "split/test.check4", "split/test.check5", "split/test.Fixture.run"} {
+		if len(edges[f]) == 0 {
+			t.Fatalf("%s: no calls indexed (%v)", f, edges)
+		}
+	}
 	if m := edges["split/test.check"][repoToString]; m != "" {
 		t.Errorf("a library element's member is not the repo's enum: %v", edges["split/test.check"])
 	}
 	if m := edges["split/test.check2"][repoToString]; m != "" {
 		t.Errorf("a library parameter's member is not the repo's enum: %v", edges["split/test.check2"])
+	}
+	if m := edges["split/test.check4"]["split/include/split.describe"]; m != MethodResolved {
+		t.Errorf("a parameter named like an enum but declared as an alias is no enum: %v", edges["split/test.check4"])
+	}
+	if m := edges["split/test.check5"][repoToString]; m != "" {
+		t.Errorf("an element of a library's container is the library's: %v", edges["split/test.check5"])
+	}
+	if m := edges["split/test.Fixture.run"][repoToString]; m != "" {
+		t.Errorf("lib::TaskTracker is not the repo's Board::TaskTracker: %v", edges["split/test.Fixture.run"])
 	}
 	if m := edges["split/test.check3"][repoToString]; m != MethodResolved {
 		t.Errorf("the repo's enum field takes the repo's overload: %v", edges["split/test.check3"])
