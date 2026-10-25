@@ -62,6 +62,14 @@ void check5(Splitter* s) {
     auto r = s->libResults().at(0);
     toString(r.reason);
 }
+lib::Work makeWork();
+class WorkTest : public ::testing::Test {
+public:
+    void run() {
+        auto w = makeWork();
+        toString(w.kind);
+    }
+};
 struct Fixture {
     std::optional<lib::TaskTracker> tracker_;
     void run() {
@@ -78,7 +86,7 @@ void check3(Splitter* s) {
 	}
 	edges := indexAndEdges(t, files)
 	const repoToString = "split/include/split.toString"
-	for _, f := range []string{"split/test.check", "split/test.check2", "split/test.check4", "split/test.check5", "split/test.Fixture.run"} {
+	for _, f := range []string{"split/test.check", "split/test.check2", "split/test.check4", "split/test.check5", "split/test.Fixture.run", "split/test.WorkTest.run"} {
 		if len(edges[f]) == 0 {
 			t.Fatalf("%s: no calls indexed (%v)", f, edges)
 		}
@@ -97,6 +105,9 @@ void check3(Splitter* s) {
 	}
 	if m := edges["split/test.Fixture.run"][repoToString]; m != "" {
 		t.Errorf("lib::TaskTracker is not the repo's Board::TaskTracker: %v", edges["split/test.Fixture.run"])
+	}
+	if m := edges["split/test.WorkTest.run"][repoToString]; m != "" {
+		t.Errorf("a free function's library value in a library-derived class's method: %v", edges["split/test.WorkTest.run"])
 	}
 	if m := edges["split/test.check3"][repoToString]; m != MethodResolved {
 		t.Errorf("the repo's enum field takes the repo's overload: %v", edges["split/test.check3"])

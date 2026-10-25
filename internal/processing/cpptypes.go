@@ -1871,15 +1871,17 @@ func (tt *typeTable) fieldType(cls, field string) (string, bool) {
 }
 
 // hasMember reports whether cls's lineage may define a method m: it
-// declares one, or a base is a class the repo does not define (a library's,
-// a template parameter) whose members are not known.
+// declares one, or a base is a template parameter whose members are not
+// known. A library's base class does not count: a bare f() in a method
+// whose own classes define no f is the repo's free function f, as the call
+// edge itself resolves it (cPlainCallee).
 func (tt *typeTable) hasMember(cls, m string) bool {
 	if tt.open(cls) {
 		return true
 	}
 	for _, c := range tt.lineage(cls) {
 		if tt.classes[c] == nil {
-			return true
+			continue
 		}
 		if i := strings.LastIndex(c, "::"); i > 0 && tt.nested[c] {
 			c = c[i+2:]
