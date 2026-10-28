@@ -810,6 +810,12 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
 	}
 	if root, _, scoped := strings.Cut(t, "::"); scoped && !externalScopes[root] && x.types.classes[t] == nil {
+		if x.types.foreign(t) && !x.types.derivedFrom(t) {
+			// a library's class (lib::Problem) no class of the repo derives
+			// from: the call is that class's own method, never a repo
+			// method that shares its name
+			return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
+		}
 		return s // Cls::Alias the table cannot follow: the type is not known
 	}
 	if strings.Contains(t, "::") || x.types.classes[t] != nil {
@@ -1203,8 +1209,10 @@ func (x siteIndex) argsFit(q string) bool {
 			case a == "" || a == p || a == typeLeaf(p):
 			case strings.HasPrefix(a, "#") || prim:
 				fit = false // a literal or a variable of a built-in type
-			case x.types.enums[a] || x.types.classes[a] != nil:
-				fit = false // another of the repo's types
+			case x.types.enums[a]:
+				fit = false // another of the repo's enums: no enum converts to another
+			case x.types.classes[a] != nil && !x.types.converts(a):
+				fit = false // a class of the repo with no conversion function
 			}
 			if !fit {
 				break

@@ -43,6 +43,10 @@ type TypeFacts struct {
 	// class-level using/typedef), whatever their target — one Aliases cannot
 	// read (decltype(…)) included
 	TypeNames map[string]bool
+	// Converting are the classes this file defines with a conversion
+	// function (operator Kind() const): a value of one may convert to a
+	// type it does not name
+	Converting map[string]bool
 	// Top are the classes this file defines at namespace scope (not nested
 	// in another class): what a bare class name written outside any class
 	// names
@@ -151,7 +155,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 		return nil
 	}
 	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{},
-		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}, TypeNames: map[string]bool{}, Top: map[string]bool{},
+		Internal: map[string]bool{}, Declared: map[string]bool{}, AliasArgs: map[string][]string{}, FuncNS: map[string][]string{}, Defaults: map[string]int{}, Nested: map[string]bool{}, Enums: map[string]bool{}, TypeNames: map[string]bool{}, Converting: map[string]bool{}, Top: map[string]bool{},
 		FuncReturns: map[string]string{}, Members: map[string]bool{}, Opened: map[string]bool{}, NSAliases: map[string]string{}}
 	var nsStack []string // the named namespaces around the walk
 	inNS := func(name string, extra ...string) {
@@ -326,6 +330,16 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 								cf.BaseArgs[t] = args
 							}
 						}
+					}
+				}
+				for _, m := range classMembers(body) {
+					if m.Type() == "template_declaration" {
+						if fn := firstChildAny(m, []string{"function_definition", "declaration", "field_declaration"}); fn != nil {
+							m = fn // template <class T> operator T() const
+						}
+					}
+					if conversionOperator(m) != nil {
+						tf.Converting[name] = true
 					}
 				}
 				// using Impl = X<…>; inside the class: its members' Impl is X
@@ -1300,7 +1314,9 @@ type typeTable struct {
 	enums    map[string]bool     // enumeration type names
 	// typeNames: every alias name a file declares (TypeFacts.TypeNames)
 	typeNames map[string]bool
-	top       map[string]bool // classes some file defines at namespace scope
+	// converting: classes with a conversion function (TypeFacts.Converting)
+	converting map[string]bool
+	top        map[string]bool // classes some file defines at namespace scope
 	// funcReturns: a free function's return type by name ("" unknown or
 	// conflicting); funcNS the namespaces it is declared in; members every
 	// class's methods ("Cls.m")
@@ -1318,6 +1334,9 @@ type typeTable struct {
 	extOwner string
 	// typeLeaves: every class and alias name by its last name (onlyEnum)
 	typeLeaves map[string]bool
+	// derivedLeaves: every base a repo class names, by its last name
+	// (derivedFrom)
+	derivedLeaves map[string]bool
 }
 
 // oneReturn is the return type the declarations of one Cls.m agree on: a
@@ -1357,7 +1376,7 @@ func (tt *typeTable) oneReturn(vs []string) string {
 
 func newTypeTable(files []ParsedFile) *typeTable {
 	tt := &typeTable{classes: map[string]*ClassFact{}, aliases: map[string]string{}, returns: map[string]string{}, derived: map[string][]string{}, aliasArgs: map[string][]string{},
-		nested: map[string]bool{}, nestedIn: map[string]int{}, nestedBy: map[string][]string{}, enums: map[string]bool{}, typeNames: map[string]bool{}, top: map[string]bool{},
+		nested: map[string]bool{}, nestedIn: map[string]int{}, nestedBy: map[string][]string{}, enums: map[string]bool{}, typeNames: map[string]bool{}, converting: map[string]bool{}, top: map[string]bool{},
 		funcReturns: map[string]string{}, funcNS: map[string][]string{}, members: map[string]bool{},
 		fileAliases: map[string]map[string]string{}}
 	returns := map[string][]string{}
@@ -1388,6 +1407,9 @@ func newTypeTable(files []ParsedFile) *typeTable {
 		}
 		for k := range f.Types.TypeNames {
 			tt.typeNames[k] = true
+		}
+		for k := range f.Types.Converting {
+			tt.converting[k] = true
 		}
 		for k := range f.Types.Top {
 			tt.top[k] = true
@@ -2118,6 +2140,34 @@ func (tt *typeTable) foreign(t string) bool {
 	}
 	_, ok := tt.aliases[leaf]
 	return !ok
+}
+
+// derivedFrom: a class of the repo names t (or a type of t's last name)
+// as a base — a value of type t may be one of the repo's, whose overrides
+// a virtual call through t runs.
+func (tt *typeTable) derivedFrom(t string) bool {
+	if len(tt.derived[t]) > 0 {
+		return true
+	}
+	if tt.derivedLeaves == nil {
+		tt.derivedLeaves = map[string]bool{}
+		for b := range tt.derived {
+			tt.derivedLeaves[typeLeaf(b)] = true
+		}
+	}
+	return tt.derivedLeaves[typeLeaf(t)]
+}
+
+// converts: a value of class cls may convert to another type — its class
+// or a base the repo defines declares a conversion function, or a base is
+// one the repo does not define (whose members are not known).
+func (tt *typeTable) converts(cls string) bool {
+	for _, c := range tt.lineage(cls) {
+		if tt.classes[c] == nil || tt.converting[c] || tt.converting[typeLeaf(c)] {
+			return true
+		}
+	}
+	return false
 }
 
 // onlyEnum: every type of the repo named like t (by t or its last name)
