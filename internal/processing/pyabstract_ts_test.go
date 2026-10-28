@@ -47,6 +47,17 @@ class Minus(Adjuster):
         return v - 1
 
 
+class Shift(Adjuster):
+    @abstractmethod
+    def adjust(self, v):
+        return v * 2
+
+
+class Double(Shift):
+    def adjust(self, v):
+        return super().adjust(v)
+
+
 class Sink(Protocol):
     def write(self, v):
         pass
@@ -61,12 +72,28 @@ class Plain:
     def go(self):
         return 1
 
+    def later(self):
+        ...
+
+
+class Exporter:
+    def write(self, v):
+        raise NotImplementedError
+
+
+class CsvExporter(Exporter):
+    def write(self, v):
+        return v
+
 
 class Fast(Plain):
     def go(self):
         return 2
+
+    def later(self):
+        return 3
 `,
-		"shop/use.py": `from shop.pricing import Adjuster, Plain
+		"shop/use.py": `from shop.pricing import Adjuster, Exporter, Plain
 
 
 def apply(a: Adjuster, p: Plain):
@@ -74,6 +101,11 @@ def apply(a: Adjuster, p: Plain):
     a.stub()
     a.hook()
     p.go()
+    p.later()
+
+
+def export(e: Exporter):
+    e.write(1)
 `,
 	}
 	edges := indexAndEdges(t, files)
@@ -104,6 +136,20 @@ def apply(a: Adjuster, p: Plain):
 	if m := apply["shop.pricing.Fast.go"]; m != MethodOverride {
 		t.Errorf("a concrete method's override stays a possible target: %q", m)
 	}
+	// super() names the base's method: its body runs, abstract or not
+	if m := edges["shop.pricing.Double.adjust"]["shop.pricing.Shift.adjust"]; m != MethodResolved {
+		t.Errorf("super() of an abstract method with a body is that body: %q in %v", m, edges["shop.pricing.Double.adjust"])
+	}
+	if m := apply["shop.pricing.Plain.later"]; m != MethodTyped {
+		t.Errorf("a plain class's ... body runs (returns None): %q", m)
+	}
+	export := edges["shop.use.export"]
+	if m := export["shop.pricing.CsvExporter.write"]; m != MethodAbstractImpl {
+		t.Errorf("raise NotImplementedError marks a method abstract in any class: %q in %v", m, export)
+	}
+	if m := export["shop.pricing.Exporter.write"]; m != MethodAbstractDecl {
+		t.Errorf("the NotImplementedError stub is a declaration: %q", m)
+	}
 	run := edges["shop.pricing.Adjuster.run"]
 	if m := run["shop.pricing.Adjuster.adjust"]; m != MethodAbstractDecl {
 		t.Errorf("self.f() on an abstract f in its own class: %q in %v", m, run)
@@ -120,8 +166,11 @@ func TestPyStubKinds(t *testing.T) {
 		cls  uint8
 	}{
 		{"class A(ABC):\n    @abc.abstractmethod\n    def f(self):\n        return 1\n", pyAbstractMethod, pyClassABC},
-		{"class A(metaclass=ABCMeta):\n    def f(self):\n        \"\"\"doc\"\"\"\n        raise NotImplementedError(\"x\")\n", pyStubEllipsis, pyClassABC},
+		{"class A(metaclass=ABCMeta):\n    def f(self):\n        \"\"\"doc\"\"\"\n        raise NotImplementedError(\"x\")\n", pyStubNotImpl, pyClassABC},
+		{"class A:\n    def f(self):\n        raise NotImplementedError\n", pyStubNotImpl, 0},
+		{"class A:\n    def f(self):\n        ...\n", pyStubEllipsis, 0},
 		{"class A(typing.Protocol):\n    def f(self): ...\n", pyStubEllipsis, pyClassProtocol},
+		{"class A(Protocol[T]):\n    def f(self) -> T:\n        pass\n", pyStubPass, pyClassProtocol},
 		{"class A(Base):\n    def f(self):\n        pass\n", pyStubPass, 0},
 		{"class A:\n    def f(self):\n        x = 1\n", 0, 0},
 		{"class A:\n    def f(self):\n        raise ValueError()\n", 0, 0},

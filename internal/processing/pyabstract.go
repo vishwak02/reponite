@@ -5,22 +5,26 @@ import "github.com/vishwak02/reponite/internal/content"
 // Python abstract methods. A call through a class whose method is abstract
 // never runs that method's body: the instance is of a concrete subclass, so
 // one of the subclasses' overrides runs. Symbol.PyStub records what the
-// definition says; whether the class is abstract (Symbol.PyABC) decides
+// definition says; whether the class is abstract (Symbol.PyClass) decides
 // whether a stub body means "abstract".
 const (
-	// pyAbstractMethod: decorated @abstractmethod (abc.abstractmethod).
+	// pyAbstractMethod: decorated @abstractmethod (abc.abstractmethod, or
+	// the older abstractclassmethod / abstractstaticmethod).
 	pyAbstractMethod uint8 = 1
-	// pyStubEllipsis: a body of only `...` or raise NotImplementedError
-	// (and a docstring) — abstract in an ABC or a Protocol.
+	// pyStubEllipsis: a body of only `...` (and pass or a docstring) —
+	// abstract in an ABC or a Protocol; elsewhere it runs and returns None.
 	pyStubEllipsis uint8 = 2
 	// pyStubPass: a body of only pass or a docstring — abstract in a
 	// Protocol; in an ABC it is a hook that does nothing, and runs.
 	pyStubPass uint8 = 3
+	// pyStubNotImpl: a body that only raises NotImplementedError — the
+	// language's way for any base class to say a subclass must override it
+	pyStubNotImpl uint8 = 4
 )
 
 // pyStubKind classifies a Python function definition fn (decorated is its
-// decorated_definition parent, or nil): pyAbstractMethod, pyStubEllipsis,
-// pyStubPass, or 0 for a method with code of its own.
+// decorated_definition parent, or nil): pyAbstractMethod, pyStubNotImpl,
+// pyStubEllipsis, pyStubPass, or 0 for a method with code of its own.
 func pyStubKind(decorated, fn content.AST) uint8 {
 	if decorated != nil && decorated.Type() == "decorated_definition" {
 		for _, d := range decorated.Children() {
@@ -28,7 +32,7 @@ func pyStubKind(decorated, fn content.AST) uint8 {
 				continue
 			}
 			for _, e := range namedKids(d) {
-				if parts := dottedRef(e); len(parts) > 0 && parts[len(parts)-1] == "abstractmethod" {
+				if parts := dottedRef(e); len(parts) > 0 && abstractDecorators[parts[len(parts)-1]] {
 					return pyAbstractMethod
 				}
 			}
@@ -58,7 +62,9 @@ func pyStubKind(decorated, fn content.AST) uint8 {
 					return 0 // a string expression after code is not a docstring
 				}
 			case "ellipsis":
-				kind = pyStubEllipsis
+				if kind != pyStubNotImpl {
+					kind = pyStubEllipsis
+				}
 			default:
 				return 0
 			}
@@ -66,7 +72,7 @@ func pyStubKind(decorated, fn content.AST) uint8 {
 			if !pyRaisesNotImplemented(st) {
 				return 0
 			}
-			kind = pyStubEllipsis
+			kind = pyStubNotImpl
 		default:
 			return 0
 		}
@@ -76,6 +82,10 @@ func pyStubKind(decorated, fn content.AST) uint8 {
 	}
 	return kind
 }
+
+// abstractDecorators are the abc module's decorators that declare a method
+// abstract.
+var abstractDecorators = map[string]bool{"abstractmethod": true, "abstractclassmethod": true, "abstractstaticmethod": true}
 
 // pyRaisesNotImplemented: raise NotImplementedError / NotImplementedError(...).
 func pyRaisesNotImplemented(st content.AST) bool {
@@ -136,7 +146,7 @@ const (
 // kind cls never runs when called through that class.
 func pyAbstract(stub, cls uint8) bool {
 	switch stub {
-	case pyAbstractMethod:
+	case pyAbstractMethod, pyStubNotImpl:
 		return true
 	case pyStubEllipsis:
 		return cls != 0
