@@ -58,10 +58,11 @@ def base_name(e):
 
 def stub_kind(fn):
     """what a method's definition says of its body: "abstract"
-    (@abstractmethod), "ellipsis" (only ... or raise NotImplementedError, and
+    (@abstractmethod), "notimpl" (it only raises NotImplementedError: a
+    subclass must override it, in any class), "ellipsis" (only ..., pass and
     a docstring), "pass" (only pass or a docstring), or "" for code"""
     for d in fn.decorator_list:
-        if base_name(d.func if isinstance(d, ast.Call) else d) == "abstractmethod":
+        if base_name(d.func if isinstance(d, ast.Call) else d) in ("abstractmethod", "abstractclassmethod", "abstractstaticmethod"):
             return "abstract"
     body = list(fn.body)
     if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and \
@@ -72,11 +73,12 @@ def stub_kind(fn):
         if isinstance(st, ast.Pass):
             continue
         if isinstance(st, ast.Expr) and isinstance(st.value, ast.Constant) and st.value.value is Ellipsis:
-            kind = "ellipsis"
+            if kind != "notimpl":
+                kind = "ellipsis"
             continue
         if isinstance(st, ast.Raise) and st.exc is not None and \
                 base_name(st.exc.func if isinstance(st.exc, ast.Call) else st.exc) == "NotImplementedError":
-            kind = "ellipsis"
+            kind = "notimpl"
             continue
         return ""
     return kind
@@ -225,15 +227,19 @@ def main():
 
     def is_abstract(place, name):
         line, stub = classes[place]["methods"][name]
-        return stub == "abstract" or stub == "ellipsis" and class_kind(place) != "" or \
+        return stub in ("abstract", "notimpl") or stub == "ellipsis" and class_kind(place) != "" or \
             stub == "pass" and classes[place]["kind"] == "protocol"
 
-    def concrete_overrides(rel, line):
+    def concrete_overrides(rel, line, recv=None):
+        """the concrete overrides a call of the abstract method at (rel,
+        line) can run: those of the subclasses of the receiver's class recv
+        (a place; None: the method's own class)"""
         hit = method_at.get((rel, line))
         if hit is None or not is_abstract(*hit):
             return []
         place, name = hit
-        out, seen, queue = [], {place}, list(derived.get(place, []))
+        start = recv if recv in classes else place
+        out, seen, queue = [], {start}, list(derived.get(start, []))
         while queue:
             c = queue.pop(0)
             if c in seen:
@@ -243,6 +249,31 @@ def main():
                 out.append((c[0], classes[c]["methods"][name][0]))
             queue.extend(derived.get(c, []))
         return out
+
+    def receiver(script, f):
+        """how the call f (an ast.Attribute) reaches its method: "bound"
+        (super().m(), Cls.m(obj): the named class's own body runs), the
+        place of the receiver's class when Jedi infers one instance of a repo
+        class, else None (dispatch from the method's own class)"""
+        v = f.value
+        if isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "super":
+            return "bound"
+        if isinstance(v, ast.Name):
+            pos = (v.lineno, v.col_offset)
+        elif isinstance(v, ast.Attribute):
+            pos = (v.end_lineno, v.end_col_offset - len(v.attr))
+        else:
+            return None
+        try:
+            if any(t.type == "class" for t in script.goto(*pos, follow_imports=True)):
+                return "bound"  # the class itself, not an instance of it
+            inferred = script.infer(*pos)
+        except Exception:
+            return None
+        places = {(os.path.relpath(str(t.module_path), root).replace(os.sep, "/"), t.line) for t in inferred
+                  if t.type == "instance" and t.module_path is not None and t.line is not None and
+                  str(t.module_path).startswith(root + os.sep)}
+        return places.pop() if len(places) == 1 and len(inferred) == 1 else None
 
     added = dispatched = 0
     external, unresolved = set(truth.pop("fixture_external", [])), set()
@@ -304,11 +335,19 @@ def main():
                 have.add((caller["id"], to))
                 truth["edges"].append({"from": caller["id"], "to": to, "kind": "inferred", "line": node.lineno})
                 added += 1
+            recv = False  # not read yet
             for t in targets:
-                if t.type != "function" or t.module_path is None or t.line is None:
+                if t.type != "function" or t.module_path is None or t.line is None or not isinstance(f, ast.Attribute):
                     continue
                 tp = os.path.relpath(str(t.module_path), root).replace(os.sep, "/")
-                for op in concrete_overrides(tp, t.line):
+                hit = method_at.get((tp, t.line))
+                if hit is None or not is_abstract(*hit):
+                    continue
+                if recv is False:
+                    recv = receiver(script, f)
+                if recv == "bound":
+                    continue  # super().m(), Cls.m(obj): that body runs
+                for op in concrete_overrides(tp, t.line, recv):
                     to = by_place.get(op)
                     if to is None or (caller["id"], to) in have:
                         continue
