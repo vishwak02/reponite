@@ -37,6 +37,7 @@ type preciseFlags struct {
 	node       string
 	typescript string
 	pyright    string
+	langs      string // the drivers to run, comma-separated (cpp, ts, py; "" all)
 	// compiled is set when the last ref's driver run parsed translation
 	// units (compiled now or read from the store): only then does the ref
 	// record that it holds compiler-exact calls
@@ -125,6 +126,7 @@ func (p *preciseFlags) register(fs *flag.FlagSet) {
 	fs.IntVar(&p.jobs, "precise-jobs", 0, "parallel compiler workers for --precise (default: one per CPU, at most what free memory holds at about 1 GB each)")
 	fs.StringVar(&p.node, "node", os.Getenv("REPONITE_NODE"), "node binary for the TypeScript and Python drivers of --precise (default: node on $PATH)")
 	fs.StringVar(&p.typescript, "typescript", os.Getenv("REPONITE_TYPESCRIPT"), "typescript package directory for --precise, for a repo without node_modules/typescript")
+	fs.StringVar(&p.langs, "precise-langs", "", "the languages --precise covers, comma-separated: cpp, ts (TypeScript/JavaScript), py (default: all)")
 	fs.StringVar(&p.pyright, "pyright", os.Getenv("REPONITE_PYRIGHT"), "pyright for --precise: its package directory, its langserver script, or a pyright-langserver/basedpyright-langserver executable (default: one on $PATH)")
 }
 
@@ -171,6 +173,23 @@ func (p *preciseFlags) driver(repo string) func(processing.PreciseSource) []proc
 	store := precise.Open(root)
 	on := p.mode == "on"
 	p.cxx, p.ts, p.py = on || store.Has("cpp"), on || store.Has(tsc.Kind), on || store.Has(pyright.Kind)
+	if p.langs != "" {
+		want := map[string]bool{}
+		for _, l := range strings.Split(p.langs, ",") {
+			switch l = strings.TrimSpace(strings.ToLower(l)); l {
+			case "cpp", "c", "c++", "cxx":
+				want["cpp"] = true
+			case "ts", "js", "typescript", "javascript":
+				want["ts"] = true
+			case "py", "python":
+				want["py"] = true
+			case "":
+			default:
+				fail(fmt.Errorf("--precise-langs %q: want cpp, ts or py", l))
+			}
+		}
+		p.cxx, p.ts, p.py = p.cxx && want["cpp"], p.ts && want["ts"], p.py && want["py"]
+	}
 	if !p.cxx && !p.ts && !p.py {
 		return nil // nothing was ever compiled: the default index does no extra work
 	}
@@ -316,34 +335,44 @@ func (p *preciseFlags) runPy(store *precise.Store, src processing.PreciseSource)
 		return nil
 	}
 	out, err := pyright.Run(context.Background(), pyright.Input{
-		Files: src.Files, Extra: src.Extra, Dir: src.Dir, Read: src.Read, Materialize: src.Materialize, CachedOnly: p.mode == "cached",
-	}, pyright.Config{Node: p.node, Pyright: p.pyright, Jobs: p.jobs, Store: store, Log: os.Stderr})
+		Files: src.Files, Extra: src.Extra, Dir: src.Dir, Read: src.Read, CachedOnly: p.mode == "cached",
+	}, pyright.Config{Node: p.node, Pyright: p.pyright, Store: store, Log: os.Stderr})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reponite: compiler-exact Python calls unavailable: %v\n", err)
 	}
-	if out.Files > 0 && out.Failed < out.Files && (p.mode == "on" || out.Cached == out.Files) {
+	if out.Units > 0 && out.Failed == 0 && (p.mode == "on" || out.Cached == out.Units) {
 		p.compiled = true
 	}
-	if out.Files > 0 && (p.mode == "on" || out.Cached > 0) {
+	if out.Units > 0 && (p.mode == "on" || out.Cached > 0) && err == nil {
 		ver := ""
 		if out.Version != "" {
 			ver = " " + out.Version
 		}
-		fmt.Fprintf(os.Stderr, "reponite: pyright%s: %d files — %d cached, %d failed\n", ver, out.Files, out.Cached, out.Failed)
-		for _, e := range out.Errs {
-			fmt.Fprintf(os.Stderr, "reponite: pyright: %s\n", e)
+		how := fmt.Sprintf("%d calls resolved", out.Sites)
+		if out.Cached > 0 {
+			how = "cached"
 		}
+		fmt.Fprintf(os.Stderr, "reponite: pyright%s: %s\n", ver, how)
 	}
 	u := processing.PreciseUnit{Method: processing.MethodPyright, Conf: processing.ConfPyright}
+	alias := processing.PreciseUnit{Method: processing.MethodPyrightAlias, Conf: processing.ConfPyrightAlias}
 	for _, e := range out.Edges {
-		u.Calls = append(u.Calls, processing.PreciseCall{CallerPath: e.CallerPath, CallerLine: e.CallerLine, Name: e.Name,
+		c := processing.PreciseCall{CallerPath: e.CallerPath, CallerLine: e.CallerLine, Name: e.Name,
 			CalleePath: e.CalleePath, CalleeLine: e.CalleeLine, CalleeName: e.CalleeName, Ctor: e.Ctor,
-			External: e.External, Unbound: e.Unbound})
+			External: e.External, Unbound: e.Unbound}
+		if e.Alias {
+			alias.Calls = append(alias.Calls, c)
+		} else {
+			u.Calls = append(u.Calls, c)
+		}
 	}
-	if len(u.Calls) == 0 {
-		return nil
+	var units []processing.PreciseUnit
+	for _, x := range []processing.PreciseUnit{u, alias} {
+		if len(x.Calls) > 0 {
+			units = append(units, x)
+		}
 	}
-	return []processing.PreciseUnit{u}
+	return units
 }
 
 // cachedOptions is the default tier for a re-index no command line chose
@@ -389,9 +418,12 @@ func cmdPrecise(args []string) {
 	store := precise.Open(preciseRoot())
 	switch sub {
 	case "status":
-		var libclang string
-		parseCmd("precise status", "precise status [--libclang PATH]", args, func(fs *flag.FlagSet) {
+		var libclang, node, typescript, pyr string
+		parseCmd("precise status", "precise status [--libclang PATH] [--node PATH] [--typescript DIR] [--pyright PATH]", args, func(fs *flag.FlagSet) {
 			fs.StringVar(&libclang, "libclang", os.Getenv("REPONITE_LIBCLANG"), "libclang to load")
+			fs.StringVar(&node, "node", os.Getenv("REPONITE_NODE"), "node binary")
+			fs.StringVar(&typescript, "typescript", os.Getenv("REPONITE_TYPESCRIPT"), "typescript package directory")
+			fs.StringVar(&pyr, "pyright", os.Getenv("REPONITE_PYRIGHT"), "pyright package, script or langserver")
 		})
 		b, n := store.Size()
 		fmt.Printf("store: %s (%d entries, %.1f MB)\n", store.Dir(), n, float64(b)/(1<<20))
@@ -399,6 +431,24 @@ func cmdPrecise(args []string) {
 			fmt.Printf("C/C++: unavailable — %v\n", err)
 		} else {
 			fmt.Printf("C/C++: %s — `reponite index --precise on` compiles; the default (cached) reuses what was compiled\n", cxx.Version())
+		}
+		nodeBin, nodeErr := tsc.FindNode(node)
+		switch v := tsc.TypeScriptVersion(typescript); {
+		case nodeErr != nil:
+			fmt.Printf("TypeScript/JavaScript: unavailable — %v\n", nodeErr)
+		case v != "":
+			fmt.Printf("TypeScript/JavaScript: TypeScript %s (node %s); a repo's own node_modules/typescript is preferred\n", v, nodeBin)
+		default:
+			fmt.Printf("TypeScript/JavaScript: node %s; only repos with their own node_modules/typescript (--typescript names one for the others)\n", nodeBin)
+		}
+		if eng, err := pyright.Find(pyr, node, ""); err != nil {
+			fmt.Printf("Python: unavailable — %v\n", err)
+		} else {
+			v := eng.Version
+			if v == "" {
+				v = eng.Argv[0]
+			}
+			fmt.Printf("Python: pyright %s\n", v)
 		}
 	case "gc":
 		var max string

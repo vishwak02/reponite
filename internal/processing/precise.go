@@ -156,7 +156,13 @@ func newLocIndex(units []PreciseUnit, files []ParsedFile, qidsByPath map[string]
 		}
 		// overloads share one id (mergeOverload) but each has its own span:
 		// a span no id claimed belongs to the id of its name in the file —
-		// of the class whose body holds it, when several classes have one
+		// of the class whose body holds it, when several classes have one.
+		// C/C++ only: a Python or TypeScript name defined again (a
+		// property's getter and setter) is its last definition, and the
+		// bodies before it are not that id's
+		if !preciseInput(f.Path) {
+			continue
+		}
 		for _, sp := range f.Spans {
 			qs := byName[sp.Name]
 			if len(qs) == 0 || claimed[[2]int{sp.StartLine, sp.EndLine}] {

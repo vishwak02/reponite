@@ -45,10 +45,13 @@ const (
 	MethodClangSynth = "clang-synth"
 	// MethodTSC: a call the TypeScript compiler's checker bound, written in
 	// TypeScript; MethodTSCJS: written in JavaScript (checked from inferred
-	// types only). MethodPyright: a Python call pyright bound.
-	MethodTSC     = "tsc"
-	MethodTSCJS   = "tsc-js"
-	MethodPyright = "pyright"
+	// types only). MethodPyright: a Python call pyright bound;
+	// MethodPyrightAlias: through a variable assigned once from a name
+	// (f = helper), which another module may assign again.
+	MethodTSC          = "tsc"
+	MethodTSCJS        = "tsc-js"
+	MethodPyright      = "pyright"
+	MethodPyrightAlias = "pyright-alias"
 )
 
 // Confidence per resolution method (§7, invariant 5), monotonic with certainty:
@@ -66,10 +69,13 @@ const (
 	ConfTSC        = 1.0
 	ConfTSCJS      = 0.97
 	ConfPyright    = 0.97
-	ConfResolved   = 0.9
-	ConfImport     = 0.75
-	ConfExternal   = 0.6
-	ConfAmbiguous  = 0.5
+	// ConfPyrightAlias: below the resolved band — the variable is the
+	// checker's, its value the assignment's
+	ConfPyrightAlias = 0.8
+	ConfResolved     = 0.9
+	ConfImport       = 0.75
+	ConfExternal     = 0.6
+	ConfAmbiguous    = 0.5
 )
 
 // pkgOf returns the package qualifier for a file: its directory relative to the

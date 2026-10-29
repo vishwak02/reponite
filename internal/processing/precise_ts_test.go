@@ -232,3 +232,95 @@ int use(B* b) {
 		t.Errorf("A is not a B: its override cannot run: %v", got)
 	}
 }
+
+// A driver that locates a call by its own line and the bound definition by
+// its name (Python, TypeScript): a class is the edge only when the call
+// constructs it, and a callee location inside another definition (a local
+// variable's line) proves nothing.
+func TestPreciseCallsLocatedByName(t *testing.T) {
+	files := map[string]string{
+		"shop/orders.py": `from shop.util import helper
+
+
+class Order:
+    def total(self):
+        return helper(1)
+
+
+def run(kind):
+    o = Order()
+    x = o.total()
+    f = make()
+    return f(x)
+
+
+def make():
+    g = 1
+    return g
+`,
+		"shop/util.py": `def helper(v):
+    return v
+
+
+def total(v):
+    return v
+`,
+	}
+	units := []PreciseUnit{{Method: "pyright", Conf: 0.97, Calls: []PreciseCall{
+		{CallerPath: "shop/orders.py", CallerLine: 6, Name: "helper", CalleePath: "shop/util.py", CalleeLine: 1, CalleeName: "helper"},
+		{CallerPath: "shop/orders.py", CallerLine: 10, Name: "Order", CalleePath: "shop/orders.py", CalleeLine: 4, CalleeName: "Order", Ctor: true},
+		{CallerPath: "shop/orders.py", CallerLine: 11, Name: "total", CalleePath: "shop/orders.py", CalleeLine: 5, CalleeName: "total"},
+		// a name located at a line of another definition's body: not proven
+		{CallerPath: "shop/orders.py", CallerLine: 13, Name: "f", CalleePath: "shop/orders.py", CalleeLine: 17, CalleeName: "g"},
+	}}}
+	edges := indexAndEdgesWith(t, files, units)
+	got := edges["shop.orders.run"]
+	if got["shop.orders.Order"] != "pyright" {
+		t.Errorf("Order() constructs the class: %v", got)
+	}
+	if got["shop.orders.Order.total"] != "pyright" {
+		t.Errorf("o.total() is the method pyright bound: %v", got)
+	}
+	if _, ok := got["shop.util.total"]; ok {
+		t.Errorf("the same-named function of another module is not the bound method: %v", got)
+	}
+	if _, ok := got["shop.orders.make"]; !ok {
+		t.Errorf("make() keeps its inferred edge: %v", got)
+	}
+	if got := edges["shop.orders.Order.total"]; got["shop.util.helper"] != "pyright" {
+		t.Errorf("helper(1) is the imported function: %v", got)
+	}
+	// a class located where a function is called (no Ctor) proves nothing
+	units[0].Calls[1].Ctor = false
+	if got := indexAndEdgesWith(t, files, units)["shop.orders.run"]; got["shop.orders.Order"] == "pyright" {
+		t.Errorf("a class bound by a call that does not construct it: %v", got)
+	}
+}
+
+// A Python name defined twice in a class (a property's getter, then its
+// setter) is its last definition: a call in the body before it is not
+// that method's.
+func TestPreciseShadowedDefinitionBody(t *testing.T) {
+	files := map[string]string{
+		"acl/model.py": `class Checker:
+    pass
+
+
+class Acl:
+    @property
+    def secret(self):
+        return Checker()
+
+    @secret.setter
+    def secret(self, v):
+        self.v = v
+`,
+	}
+	units := []PreciseUnit{{Method: "pyright", Conf: 0.97, Calls: []PreciseCall{
+		{CallerPath: "acl/model.py", CallerLine: 8, Name: "Checker", CalleePath: "acl/model.py", CalleeLine: 1, CalleeName: "Checker", Ctor: true},
+	}}}
+	got := indexAndEdgesWith(t, files, units)["acl.model.Acl.secret"]
+	if got["acl.model.Checker"] == "pyright" {
+		t.Errorf("a call in a shadowed definition's body is not the last definition's: %v", got)
+	}
+}

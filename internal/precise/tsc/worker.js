@@ -253,6 +253,9 @@ function analyze(req) {
       case ts.SyntaxKind.PropertyAssignment: {
         const init = unwrap(d.initializer);
         if (!init || !d.name || !(ts.isIdentifier(d.name) || ts.isPrivateIdentifier(d.name) || ts.isStringLiteral(d.name)) || !named(d)) return "value";
+        // a variable that may be assigned again holds what it was given last
+        const fixed = !ts.isVariableDeclaration(d) || (ts.isVariableDeclarationList(d.parent) && d.parent.flags & ts.NodeFlags.Const);
+        if (!fixed) return "value";
         if (fnLike(init)) return at(d.name, textOf(d.name));
         if (ts.isClassExpression(init)) return at(d.name, textOf(d.name), true);
         // const X = memo(function X() {}), forwardRef((p, r) => ...): a
@@ -297,10 +300,6 @@ function analyze(req) {
   // ["E"] bound outside it, ["U"] not bound (any, unknown, a value the
   // checker cannot follow to a definition)
   function resolve(nameNode) {
-    return resolveExpr(nameNode, 0);
-  }
-
-  function resolveExpr(nameNode, depth) {
     let sym;
     try {
       sym = checker.getSymbolAtLocation(nameNode);
@@ -321,19 +320,9 @@ function analyze(req) {
     }
     if (targets.length > 0) return ["B", targets];
     if (decls.length > 0 && ext && !abstract && values.length === 0) return ["E"];
-    // a constant that only names another function (const run = start, a
-    // re-export through a variable) is that function; any other value — a
-    // parameter, an annotated or reassigned variable — holds what the
-    // checker cannot prove: its type names a function, not the one it holds
-    if (values.length === 1 && decls.length === 1 && depth < 5) {
-      const d = values[0];
-      if (ts.isVariableDeclaration(d) && !d.type && d.initializer && ts.isVariableDeclarationList(d.parent) &&
-        d.parent.flags & ts.NodeFlags.Const) {
-        const init = unwrap(d.initializer);
-        const n = ts.isIdentifier(init) ? init : ts.isPropertyAccessExpression(init) ? init.name : null;
-        if (n) return resolveExpr(n, depth + 1);
-      }
-    }
+    // a value — a variable holding a function, a parameter — is not
+    // followed: its type names a function, not the one it holds (and a
+    // constant alias, const run = start, is left to the inferred edges)
     return ["U"];
   }
 
