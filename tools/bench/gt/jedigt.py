@@ -307,8 +307,11 @@ def main():
             targets = resolve_call(script, line, col)
             if not targets:
                 # Jedi's inference state builds up across one script's
-                # queries, and one project's: it can give up on a call that a
-                # new script of a new project (the same paths) resolves
+                # queries: it can give up on a call a new script resolves
+                targets = resolve_call(jedi.Script(src, path=full, project=project), line, col)
+            if not targets:
+                # and across one project's: a new project (the same paths)
+                # resolves some of the rest standalone
                 targets = resolve_call(jedi.Script(src, path=full, project=fresh_project(project)), line, col)
             name = f.attr if isinstance(f, ast.Attribute) else f.id
             if not targets:
