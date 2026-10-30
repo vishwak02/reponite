@@ -283,6 +283,26 @@ func main() {
 	if inferredRecall.Total > 0 {
 		defer fmt.Printf("  inferred-edge recall   %s any confidence, %s resolved\n", inferredRecall, inferredResolved)
 	}
+	// dispatch edges: the implementation a call through a base or abstract
+	// method runs, from the receiver's class (a truth that records them)
+	var dispatchRecall, dispatchResolved ratio
+	for _, e := range t.Edges {
+		if e.Kind != "dispatch" {
+			continue
+		}
+		k := e.From + ">" + e.To
+		dispatchRecall.Total++
+		dispatchResolved.Total++
+		if got[k] {
+			dispatchRecall.Hit++
+		}
+		if gotConf[k] >= 0.85 {
+			dispatchResolved.Hit++
+		}
+	}
+	if dispatchRecall.Total > 0 {
+		defer fmt.Printf("  dispatch-edge recall   %s any confidence, %s resolved\n", dispatchRecall, dispatchResolved)
+	}
 	for k := range truthEdge {
 		sc.EdgeRecall.Total++
 		if got[k] {

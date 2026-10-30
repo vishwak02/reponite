@@ -29,7 +29,34 @@ const (
 	// parameter, say): calls on it are not typed, a bare call of it in the
 	// function itself is the module's
 	pyNestedTag = "h:"
+	// pyDeclTag: d:<dotted class>|<value>: a value annotated with one class
+	// and visibly made of another (x: Base = Impl()): its methods are the
+	// value's, the annotation still names the method the call goes through
+	pyDeclTag = "d:"
 )
+
+// pyDeclEnc is the encoding of a value annotated decl (a t: type) and
+// made as val; the annotation alone when val is not another class's
+// construction.
+func pyDeclEnc(decl, val string) string {
+	if !strings.HasPrefix(decl, pyTypeTag) || !strings.HasPrefix(val, pyTypeTag) && !strings.HasPrefix(val, pyNewTag) ||
+		val[len(pyTypeTag):] == decl[len(pyTypeTag):] {
+		return decl
+	}
+	return pyDeclTag + decl[len(pyTypeTag):] + "|" + val
+}
+
+// pyDeclared is the annotation a t: or d: encoding names ("" otherwise).
+func pyDeclared(v string) string {
+	switch {
+	case strings.HasPrefix(v, pyTypeTag):
+		return v[len(pyTypeTag):]
+	case strings.HasPrefix(v, pyDeclTag):
+		d, _, _ := strings.Cut(v[len(pyDeclTag):], "|")
+		return d
+	}
+	return ""
+}
 
 // pyMaxDepth bounds how far one value is followed (aliases, returns of
 // returns, fields of fields).
@@ -485,13 +512,14 @@ type pyVal struct {
 	kind  byte   // pyInst, pyClassV, pyModuleV, pyCallableV, pyFuncV; 0: unknown
 	cls   string // class key (pyInst, pyClassV)
 	exact bool   // pyInst: exactly that class; pyClassV: the class itself, not cls of a subclass
+	decl  string // pyInst: the class its annotation names when it is made of another (pyDeclTag)
 	mod   string // pyModuleV: the module's package id
 	name  string // pyModuleV: its dotted name as imported, from file
 	from  string
-	ret   string // pyCallableV: what calling it gives, in rctx
-	rctx  *pyCtx // pyCallableV, pyTupleV: where ret or items are written
+	ret   string   // pyCallableV: what calling it gives, in rctx
+	rctx  *pyCtx   // pyCallableV, pyTupleV: where ret or items are written
 	items []string // pyTupleV: each item's value
-	fn    string // pyFuncV: the function's qid
+	fn    string   // pyFuncV: the function's qid
 }
 
 const (
@@ -520,6 +548,22 @@ func (p *pyTyper) eval(c pyCtx, v string, depth int) pyVal {
 		if k := p.class(c, rest); k != "" {
 			return pyVal{kind: pyInst, cls: k, exact: true}
 		}
+	case pyDeclTag:
+		decl, enc, _ := strings.Cut(rest, "|")
+		dk := p.class(c, decl)
+		val := p.eval(c, enc, depth+1)
+		if val.kind == pyInst && dk == "" {
+			return val // annotated with a library class: the repo's value
+		}
+		if val.kind != pyInst || dk == "" || !p.classes.derives(val.cls, dk) {
+			// made of a class that is not the annotation's (or not the
+			// repo's): the annotation is what the code says
+			return p.typeVal(c, decl, depth+1)
+		}
+		if val.cls != dk {
+			val.decl = dk
+		}
+		return val
 	case pyReturnTag:
 		return p.callVal(c, rest, depth+1)
 	case pyFixtureTag:
@@ -662,8 +706,8 @@ func (p *pyTyper) returnVal(q, recv string, recvExact bool, depth int) pyVal {
 	} else {
 		v = p.typeVal(fc, r, depth+1)
 	}
-	if v.kind == pyInst {
-		v.exact = false // a function's return: its class or a subclass
+	if v.kind == pyInst && !(strings.HasPrefix(r, pyDeclTag) && strings.Contains(r, "|"+pyNewTag)) {
+		v.exact = false // a function's return: its class or a subclass (unless every return constructs it)
 	}
 	delete(p.busy, q)
 	if !p.cut {
@@ -938,8 +982,10 @@ func (p *pyTyper) inferredSite(c pyCtx, qc QualifiedCall) (CallSite, bool) {
 		recv = p.pathVal(c, path, 0)
 	}
 	p.cut = false
+	p.lastDecl = ""
 	switch recv.kind {
 	case pyInst:
+		p.lastDecl = recv.decl
 		return p.instanceSite(recv.cls, recv.exact, qc.Name), true
 	case pyClassV:
 		if recv.exact {

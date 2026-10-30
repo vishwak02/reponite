@@ -141,7 +141,7 @@ var jsxElementTypes = []string{"jsx_opening_element", "jsx_self_closing_element"
 var TypeScriptRules = LangRules{
 	Name: "typescript", Exts: []string{".ts", ".tsx"},
 	FuncDecl:      []string{"function_declaration", "generator_function_declaration"},
-	MethodDecl:    []string{"method_definition", "method_signature"},
+	MethodDecl:    []string{"method_definition", "method_signature", "abstract_method_signature"},
 	TypeDecl:      []string{"class_declaration", "abstract_class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
 	NameTypes:     []string{"identifier", "property_identifier", "type_identifier"},
 	CallNameTypes: []string{"identifier", "property_identifier", "type_identifier", "this", "super"},

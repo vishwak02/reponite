@@ -36,6 +36,9 @@ type Symbol struct {
 	CallSites []CallSite
 	// Bases are the base classes a class names (Python, JS/TS), as written.
 	Bases []QualifiedCall
+	// Implements are the interfaces a TypeScript class names in its
+	// implements clause, as written: it implements them, inherits nothing
+	Implements []QualifiedCall
 	// Vars are a Java method's parameters and locals with their declared
 	// types, for typing the receivers of its calls; for Python, a function's
 	// (pytypes.go encoding) or, on a class, the fields it sets on self.
@@ -57,7 +60,8 @@ type Symbol struct {
 	// or a fixture): its parameters are the fixtures of their names. Any
 	// other function's parameters hold what its caller passes.
 	PyFixtureParams bool
-	// PyStub: what a Python function's definition says of its body
+	// PyStub: what a Python function's definition says of its body (and
+	// pyAbstractMethod for a TypeScript abstract method)
 	// (pyabstract.go): @abstractmethod, or a stub (only ..., pass, raise
 	// NotImplementedError or a docstring); 0 for code of its own.
 	PyStub uint8
@@ -156,7 +160,13 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 					outers = outers[:len(outers)-1]
 				}
 			case containsStr(r.MethodDecl, t):
-				appendNamed(&out, extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n)))
+				ms := extractCallable(child, "method", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n))
+				if t == "abstract_method_signature" || t == "method_signature" && (n.Type() == "interface_body" || n.Type() == "object_type") {
+					// a TS abstract method, an interface's method: no body,
+					// an implementation's runs
+					ms.PyStub = pyAbstractMethod
+				}
+				appendNamed(&out, ms)
 			case containsStr(r.VarFuncDecl, t):
 				if s, ok := extractVarFunc(child, r, normVer, joinDoc(doc), enclosing); ok {
 					out = append(out, s)
@@ -506,6 +516,13 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 	}
 	if r.Name == "python" {
 		sym.PyClass = pyClassKind(decl)
+	}
+	if langFamily(r.Name) == "js" {
+		sym.Implements = classImplements(decl)
+		if decl.Type() == "interface_declaration" {
+			// structural: any object of its shape implements it, named or not
+			sym.PyClass = pyClassProtocol
+		}
 	}
 	if classBodyCalls[r.Name] {
 		// calls in the class body itself — a Django field, a serializer, a

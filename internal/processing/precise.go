@@ -354,7 +354,12 @@ func mergePrecise(inferred []query.Callee, pc *PreciseCaller, nodeSet map[string
 				repo = true
 				if recvs, virt := pc.Virtual[q]; virt && overridesOf != nil {
 					// the call runs whichever override the object's class has
+					// (an abstract method's own edge comes back a declaration)
 					for _, o := range overridesOf(q, recvs) {
+						if o.Name == q {
+							out[at[q]] = o
+							continue
+						}
 						add(o)
 					}
 				}

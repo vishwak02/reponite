@@ -121,8 +121,8 @@ def export(e: Exporter):
 	if m := apply["shop.pricing.Adjuster.stub"]; m != MethodAbstractDecl {
 		t.Errorf("an ABC's ... body is abstract: %q", m)
 	}
-	if m := apply["shop.pricing.Plus.stub"]; m != MethodAbstractImpl {
-		t.Errorf("the override of an ABC's stub: %q", m)
+	if m := apply["shop.pricing.Plus.stub"]; m != MethodAbstractSingle {
+		t.Errorf("the one override of an ABC's stub: %q", m)
 	}
 	if m := apply["shop.pricing.Adjuster.hook"]; m != MethodTyped {
 		t.Errorf("an ABC's pass hook runs for subclasses that keep it: %q", m)
@@ -144,7 +144,7 @@ def export(e: Exporter):
 		t.Errorf("a plain class's ... body runs (returns None): %q", m)
 	}
 	export := edges["shop.use.export"]
-	if m := export["shop.pricing.CsvExporter.write"]; m != MethodAbstractImpl {
+	if m := export["shop.pricing.CsvExporter.write"]; m != MethodAbstractSingle {
 		t.Errorf("raise NotImplementedError marks a method abstract in any class: %q in %v", m, export)
 	}
 	if m := export["shop.pricing.Exporter.write"]; m != MethodAbstractDecl {

@@ -2,7 +2,10 @@
 
 package processing
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPreciseCallsReplaceInferredOnes(t *testing.T) {
 	files := map[string]string{
@@ -182,6 +185,34 @@ int total() {
 	}
 }
 
+// A virtual call the compiler bound to a pure virtual whose class the
+// repo implements once runs that implementation: it is resolved beside the
+// bound declaration.
+func TestPreciseVirtualCallSingleImplementation(t *testing.T) {
+	files := map[string]string{
+		"core/src/shapes.cpp": `class Shape {
+public:
+    virtual int area() const = 0;
+};
+class Square : public Shape {
+public:
+    int area() const override { return 4; }
+};
+Shape* make();
+int total() {
+    return make()->area();
+}
+`,
+	}
+	units := []PreciseUnit{{Method: "clang-compdb", Conf: 1.0, Calls: []PreciseCall{
+		{CallerPath: "core/src/shapes.cpp", CallerLine: 10, Name: "area", CalleePath: "core/src/shapes.cpp", CalleeLine: 3, Virtual: true},
+	}}}
+	got := indexAndEdgesWith(t, files, units)["core/src.total"]
+	if got["core/src.Shape.area"] != "clang-compdb" || got["core/src.Square.area"] != MethodVirtualSingle {
+		t.Errorf("the bound declaration and its one implementation: %v", got)
+	}
+}
+
 // One caller proven by a unit the build's commands compiled and by a
 // synthesized one: each edge carries the provenance of the unit that bound it.
 func TestPreciseProvenancePerEdge(t *testing.T) {
@@ -327,7 +358,9 @@ class Acl:
 
 // A Python method called on an object is virtual: the method pyright bound
 // is the edge, and the overrides of the classes deriving from its class
-// stay linked as possible targets.
+// stay linked as possible targets — and when the bound method is abstract
+// and the repo implements it once, that implementation is the resolved
+// target and the bound method a declaration edge, as for inferred calls.
 func TestPreciseNameLocatedVirtualCall(t *testing.T) {
 	files := map[string]string{
 		"shop/backend.py": `class Backend:
@@ -351,7 +384,50 @@ def dispatch(b: Backend):
 	}
 	units[0].Calls[0].Virtual = true
 	got := indexAndEdgesWith(t, files, units)["shop.backend.dispatch"]
+	if got["shop.backend.Backend.send"] != MethodAbstractDecl || got["shop.backend.Printer.send"] != MethodAbstractSingle {
+		t.Errorf("the abstract bound method and its one implementation: %v", got)
+	}
+	// a second implementation: the running program picks, a list
+	files["shop/fax.py"] = `from shop.backend import Backend
+
+
+class Fax(Backend):
+    def send(self, p):
+        return p
+`
+	got = indexAndEdgesWith(t, files, units)["shop.backend.dispatch"]
+	if got["shop.backend.Backend.send"] != MethodAbstractDecl || got["shop.backend.Printer.send"] != MethodAbstractImpl ||
+		got["shop.fax.Fax.send"] != MethodAbstractImpl {
+		t.Errorf("the abstract bound method and its implementations: %v", got)
+	}
+	// a concrete bound method keeps its proof, overrides are possible
+	files["shop/backend.py"] = strings.Replace(files["shop/backend.py"], "raise NotImplementedError", "return None", 1)
+	got = indexAndEdgesWith(t, files, units)["shop.backend.dispatch"]
 	if got["shop.backend.Backend.send"] != "pyright" || got["shop.backend.Printer.send"] != MethodOverride {
 		t.Errorf("the bound method and the override: %v", got)
+	}
+}
+
+// A TypeScript call tsc binds to an abstract method is dispatched (an
+// abstract method has no body; super.f() of one does not compile): its one
+// implementation is the resolved target, the method a declaration edge.
+func TestPreciseTSAbstractCall(t *testing.T) {
+	files := map[string]string{
+		"src/shape.ts": `export abstract class Shape {
+  abstract area(): number;
+}
+export class Circle extends Shape {
+  area(): number { return 3; }
+}
+export function total(s: Shape): number {
+  return s.area();
+}
+`,
+	}
+	call := PreciseCall{CallerPath: "src/shape.ts", CallerLine: 8, Name: "area", CalleePath: "src/shape.ts", CalleeLine: 2, CalleeName: "area"}
+	units := []PreciseUnit{{Method: "tsc", Conf: 1.0, Calls: []PreciseCall{call}}}
+	got := indexAndEdgesWith(t, files, units)["src.shape.total"]
+	if got["src.shape.Shape.area"] != MethodAbstractDecl || got["src.shape.Circle.area"] != MethodAbstractSingle {
+		t.Errorf("the abstract bound method and its one implementation: %v", got)
 	}
 }

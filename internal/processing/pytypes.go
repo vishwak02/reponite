@@ -323,6 +323,10 @@ func pyVarTypes(fn content.AST, test bool) map[string]string {
 		}
 		name := left.Text()
 		if t := pyTypeEnc(typ); t != "" {
+			if v := pyExprEnc(right); strings.HasPrefix(v, pyTypeTag) && pyBindCount(fn, body, name) == 1 {
+				// x: Base = Impl(), x bound nowhere else: exactly Impl
+				t = pyDeclEnc(t, pyNewTag+v[len(pyTypeTag):])
+			}
 			vars[name] = t
 			annotated[name] = true
 		} else if v := pyExprEnc(right); v != "" && v != pyPathTag+name {
@@ -528,6 +532,12 @@ func pyReturnType(fn content.AST, fixture bool) string {
 		}
 		if afterArrow && c.Type() == "type" {
 			if t := pyTypeRef(c); t != "" {
+				if body != nil && !gen && !fixture {
+					if made := pyEveryReturnMakes(body); made != "" && made != t {
+						// -> Base, every return Impl(...): exactly Impl
+						return pyDeclTag + t + "|" + pyNewTag + made
+					}
+				}
 				return t
 			}
 			if e := pyElemRef(c); e != "" {
@@ -631,6 +641,74 @@ func pyReturnType(fn content.AST, fixture bool) string {
 		return ret[len(pyTypeTag):]
 	}
 	return ret
+}
+
+// pyEveryReturnMakes is the dotted class every return of a function body
+// constructs (return Impl(...)); "" when a return gives anything else, or
+// none does.
+func pyEveryReturnMakes(body content.AST) string {
+	made := ""
+	for _, r := range ownDescendants(body, []string{"return_statement"}) {
+		var v content.AST
+		for _, c := range r.Children() {
+			if c.IsNamed() {
+				v = c
+			}
+		}
+		if v == nil {
+			return "" // a bare return: None
+		}
+		t := pyExprEnc(v)
+		if !strings.HasPrefix(t, pyTypeTag) || made != "" && made != t[len(pyTypeTag):] {
+			return ""
+		}
+		made = t[len(pyTypeTag):]
+	}
+	if made != "" && len(ownDescendants(body, []string{"yield"})) > 0 {
+		return ""
+	}
+	return made
+}
+
+// pyBindCount is how many times a function binds name: as a parameter, an
+// assignment or augmented assignment target, a loop, with, except or :=
+// target, or names it global, nonlocal or deletes it (nested functions'
+// bindings counted too, conservatively).
+func pyBindCount(fn, body content.AST, name string) int {
+	n := 0
+	if ps := firstChildAny(fn, []string{"parameters"}); ps != nil {
+		for _, prm := range namedKids(ps) {
+			id := prm
+			if prm.Type() != "identifier" {
+				id = firstChildAny(prm, []string{"identifier"})
+			}
+			if id != nil && id.Text() == name {
+				n++
+			}
+		}
+	}
+	has := func(t content.AST) bool {
+		return t != nil && containsStr(pyTargetNames(t), name)
+	}
+	for _, a := range descendantsAny(body, []string{"assignment", "augmented_assignment"}) {
+		if k := namedKids(a); len(k) > 0 && has(k[0]) {
+			n++
+		}
+	}
+	for _, l := range descendantsAny(body, []string{"for_statement", "for_in_clause"}) {
+		if left, _ := pyLoopParts(l); has(left) {
+			n++
+		}
+	}
+	for _, t := range descendantsAny(body, []string{"as_pattern_target", "named_expression", "global_statement", "nonlocal_statement", "delete_statement", "except_clause"}) {
+		for _, id := range descendantsAny(t, []string{"identifier"}) {
+			if id.Text() == name {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 // pyCalleeName is the bare name a call calls (f of f(...)), "" otherwise.
@@ -821,7 +899,8 @@ func pyFieldAssign(fields map[string]string, declared map[string]bool, a content
 	}
 	v := ""
 	if t := pyTypeEnc(typ); t != "" {
-		v = t
+		// self.x: Base = Impl(): Impl (or a subclass, set elsewhere)
+		v = pyDeclEnc(t, pyValueType(right))
 	} else {
 		v = pyValueType(right)
 		if strings.HasPrefix(v, pyReturnTag) || strings.HasPrefix(v, pyMethodTag) {
@@ -839,6 +918,8 @@ func pyFieldAssign(fields map[string]string, declared map[string]bool, a content
 				v = mt
 			case strings.HasPrefix(mt, pyNewTag):
 				v = pyTypeTag + mt[len(pyNewTag):]
+			case strings.HasPrefix(mt, pyDeclTag):
+				v = strings.Replace(mt, "|"+pyNewTag, "|"+pyTypeTag, 1)
 			}
 		}
 	}
@@ -846,6 +927,10 @@ func pyFieldAssign(fields map[string]string, declared map[string]bool, a content
 		return
 	}
 	if old, ok := fields[parts[1]]; ok && old != v {
+		if d := pyDeclared(old); d != "" && d == pyDeclared(v) {
+			fields[parts[1]] = pyTypeTag + d // annotated alike, made of two classes: the annotation
+			return
+		}
 		fields[parts[1]] = "" // set to two different things: unknown
 		return
 	}
@@ -878,6 +963,9 @@ type pyCtx struct {
 
 // pyTyper resolves Python type names to classes of the repo, at index time.
 type pyTyper struct {
+	// lastDecl: the annotation's class of the receiver inferredSite last
+	// typed, when it is made of another class (pyVal.decl)
+	lastDecl    string
 	classes     *classGraph
 	allDefs     map[string]bool
 	isMethod    map[string]bool
@@ -995,6 +1083,9 @@ func (p *pyTyper) externalValue(c pyCtx, v string) string {
 			return ""
 		}
 		if fc, ok := p.ctx(q); ok && fc.returns != "" && !strings.HasPrefix(fc.returns, pyElemTag) {
+			if strings.HasPrefix(fc.returns, pyDeclTag) {
+				return p.externalClass(fc, pyDeclared(fc.returns))
+			}
 			return p.externalClass(fc, fc.returns)
 		}
 	}
@@ -1154,13 +1245,24 @@ const pyExtField = "\x00ext:"
 // fieldType is what attribute attr on an instance of cls holds: a repo class
 // key, or the library class it is constructed or annotated as.
 func (p *pyTyper) fieldType(cls, attr string) (key, ext string) {
+	key, _, ext = p.fieldTypeDecl(cls, attr)
+	return key, ext
+}
+
+// pyDeclSep separates a field's class key from the class its annotation
+// names (pyDeclTag) in pyTyper.fields.
+const pyDeclSep = "\x01"
+
+// fieldTypeDecl is fieldType with the class the field's annotation names
+// when the value is made of another class (self.x: Base = Impl()).
+func (p *pyTyper) fieldTypeDecl(cls, attr string) (key, decl, ext string) {
 	order, ok := p.classes.mro(cls)
 	if !ok {
-		return "", ""
+		return "", "", ""
 	}
 	for _, k := range order {
 		if isExtBase(k) {
-			return "", ""
+			return "", "", ""
 		}
 		fs := p.fields[k]
 		if fs == nil {
@@ -1176,6 +1278,9 @@ func (p *pyTyper) fieldType(cls, attr string) (key, ext string) {
 					p.cut = false
 					if val := p.eval(c, v, 0); val.kind == pyInst {
 						fk = val.cls
+						if val.decl != "" {
+							fk += pyDeclSep + val.decl
+						}
 					} else if e := p.externalValue(c, v); e != "" {
 						fk = pyExtField + e
 					}
@@ -1192,12 +1297,28 @@ func (p *pyTyper) fieldType(cls, attr string) (key, ext string) {
 			continue
 		}
 		if strings.HasPrefix(fk, pyExtField) {
-			return "", fk[len(pyExtField):]
+			return "", "", fk[len(pyExtField):]
 		}
-		return fk, ""
+		key, decl, _ = strings.Cut(fk, pyDeclSep)
+		return key, decl, ""
 	}
-	return "", ""
+	return "", "", ""
 }
+
+// declSite is the edge of a call of name on a value annotated with class
+// decl and made of class cls (pyDeclTag): the method the annotation names,
+// kept beside the value's own (who calls through the declared type).
+func declSite(decl, cls, name string) []CallSite {
+	if decl == "" || decl == cls {
+		return nil
+	}
+	return []CallSite{{Name: name, Kind: CallTyped, Scope: pyClassDecl + decl}}
+}
+
+// pyClassDecl prefixes a CallTyped scope for the class a value's
+// annotation names when the value is known to be of a subclass: the
+// method that names, as a declaration edge.
+const pyClassDecl = "\x00pyclsd:"
 
 // typedCalls splits a Python definition's calls into those whose receiver
 // has a known class (returned as typed sites) and the rest.
@@ -1209,7 +1330,7 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 	var rest []QualifiedCall
 	var typed []CallSite
 	for _, qc := range qcs {
-		cls, chain, exact := "", qc.Chain, false
+		cls, chain, exact, decl := "", qc.Chain, false, ""
 		switch {
 		case qc.Chain >= 2 && qc.Qualifier != "self" && qc.Qualifier != "cls":
 			v, ok := c.vars[qc.Qualifier]
@@ -1275,19 +1396,19 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 				continue
 			}
 			if val := p.top(c, v); val.kind == pyInst {
-				cls, exact = val.cls, val.exact
+				cls, exact, decl = val.cls, val.exact, val.decl
 			}
 			switch {
 			case cls == "" || chain == 2:
 			case chain == 3 && qc.Attr != "":
-				cls = p.fieldClass(cls, qc.Attr) // x.repo.save(): the field's class
+				cls, decl, _ = p.fieldTypeDecl(cls, qc.Attr) // x.repo.save(): the field's class
 			default:
 				cls = ""
 			}
 		case qc.Chain == 3 && qc.Qualifier == "self" && qc.Attr != "" && c.recv != "":
 			if own, ok := p.classes.has(c.pkg, c.recv); ok {
 				var ext string
-				if cls, ext = p.fieldType(own, qc.Attr); ext != "" {
+				if cls, decl, ext = p.fieldTypeDecl(own, qc.Attr); ext != "" {
 					// self._event = threading.Event(); self._event.set()
 					typed = append(typed, CallSite{Name: qc.Name, Kind: CallExternal, Scope: ext})
 					continue
@@ -1297,12 +1418,14 @@ func (p *pyTyper) typedCalls(qid string, qcs []QualifiedCall) ([]QualifiedCall, 
 		if cls == "" {
 			if site, ok := p.inferredSite(c, qc); ok {
 				typed = append(typed, site)
+				typed = append(typed, declSite(p.lastDecl, strings.TrimPrefix(strings.TrimPrefix(site.Scope, pyClassNew), pyClassScope), qc.Name)...)
 				continue
 			}
 			rest = append(rest, qc)
 			continue
 		}
 		typed = append(typed, p.instanceSite(cls, exact && chain == 2, qc.Name))
+		typed = append(typed, declSite(decl, cls, qc.Name)...)
 	}
 	return rest, typed
 }

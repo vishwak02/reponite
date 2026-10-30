@@ -60,6 +60,35 @@ func classBases(decl content.AST, lang string) []QualifiedCall {
 	return out
 }
 
+// classImplements reads the interfaces a TypeScript class declaration names
+// in its implements clause, as classBases reads bases.
+func classImplements(decl content.AST) []QualifiedCall {
+	var out []QualifiedCall
+	for _, c := range decl.Children() {
+		if c.Type() != "class_heritage" {
+			continue
+		}
+		for _, h := range c.Children() {
+			if h.Type() != "implements_clause" {
+				continue
+			}
+			for _, v := range h.Children() {
+				if !v.IsNamed() || isCommentType(v.Type()) {
+					continue
+				}
+				if parts := dottedRef(v); len(parts) > 0 {
+					qc := QualifiedCall{Name: parts[len(parts)-1], Chain: len(parts)}
+					if len(parts) > 1 {
+						qc.Qualifier = parts[0]
+					}
+					out = append(out, qc)
+				}
+			}
+		}
+	}
+	return out
+}
+
 // dottedRef is the identifiers of a name or attribute chain (a.b.C); a
 // generic's arguments are dropped (Generic[T], Base<T>). nil when the node is
 // anything else.
@@ -154,6 +183,30 @@ func (g *classGraph) link(cls string, sites []CallSite, reexport func(pkg, name 
 		}
 		g.bases[cls] = append(g.bases[cls], b)
 		if !isExtBase(b) {
+			g.derived[b] = append(g.derived[b], cls)
+		}
+	}
+}
+
+// implement records the interfaces cls implements (TypeScript): cls is
+// among their derived classes — a call through one may run its method — but
+// inherits nothing from them, so they stay out of its MRO.
+func (g *classGraph) implement(cls string, sites []CallSite, reexport func(pkg, name string) (string, string, bool)) {
+	pkg := g.pkg[cls]
+	for _, s := range sites {
+		var b string
+		switch s.Kind {
+		case CallModule:
+			b = classKey(s.Scope, s.Name)
+			if _, ok := g.bases[b]; !ok && reexport != nil {
+				if rp, rn, ok := reexport(s.Scope, s.Name); ok {
+					b = classKey(rp, rn)
+				}
+			}
+		case CallPlain:
+			b = classKey(pkg, s.Name)
+		}
+		if _, ok := g.bases[b]; ok && b != cls && !containsStr(g.derived[b], cls) {
 			g.derived[b] = append(g.derived[b], cls)
 		}
 	}
@@ -313,4 +366,63 @@ func (g *classGraph) abstractKind(cls string) uint8 {
 		}
 	}
 	return 0
+}
+
+// methodOwner is method's lookup with the class key whose definition it
+// found.
+func (g *classGraph) methodOwner(cls, name string, nodeSet map[string]bool) (q, owner string, ok bool) {
+	order, ok := g.mro(cls)
+	if !ok {
+		return "", "", false
+	}
+	for _, c := range order {
+		if isExtBase(c) {
+			return "", "", false
+		}
+		if q := memberQID(g.pkg[c], g.name[c], name, nodeSet); nodeSet[q] {
+			return q, c, true
+		}
+	}
+	return "", "", false
+}
+
+// dispatchTargets are the definitions a call of name can run on an instance
+// of cls or of any repo class deriving from it: for each such class, the one
+// its MRO reaches first (a mixin's method too, not only overrides below cls),
+// mapped to the class defining it. decided is false when the repo does not
+// say for some class: a library base comes first in its order (the library's
+// method may run), or its bases have no consistent order. A subclass outside
+// the repo (a plugin) is never seen here.
+func (g *classGraph) dispatchTargets(cls, name string, nodeSet map[string]bool) (targets map[string]string, decided bool) {
+	targets = map[string]string{}
+	seen := map[string]bool{}
+	queue := []string{cls}
+	for len(queue) > 0 {
+		c := queue[0]
+		queue = queue[1:]
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		q, owner, ok := g.methodOwner(c, name, nodeSet)
+		if !ok {
+			return nil, false
+		}
+		targets[q] = owner
+		queue = append(queue, g.derived[c]...)
+	}
+	return targets, true
+}
+
+// derives reports whether class sub is base or derives from it (its MRO
+// holds base).
+func (g *classGraph) derives(sub, base string) bool {
+	if sub == base {
+		return true
+	}
+	order, ok := g.mro(sub)
+	if !ok {
+		return false
+	}
+	return containsStr(order, base)
 }
