@@ -16,6 +16,8 @@ type site struct {
 	Member bool // called on a value (x.f()), not by a name alone
 	// Self: called on self or cls (self.f()), whose type is the class's
 	Self bool
+	// Super: called on super() (super().f()): the base's method, no other
+	Super bool
 }
 
 // token kinds of the scanner
@@ -293,7 +295,9 @@ func scanCalls(src string) []site {
 		member := i > 0 && toks[i-1].kind == tOp && toks[i-1].text == "."
 		self := member && i > 1 && toks[i-2].kind == tName && (toks[i-2].text == "self" || toks[i-2].text == "cls") &&
 			(i < 3 || toks[i-3].kind != tOp || toks[i-3].text != ".")
-		out = append(out, site{Line: t.line, Col: t.col, Name: t.text, Member: member, Self: self})
+		super := member && i > 3 && toks[i-2].kind == tOp && toks[i-2].text == ")" && toks[i-3].kind == tOp && toks[i-3].text == "(" &&
+			toks[i-4].kind == tName && toks[i-4].text == "super"
+		out = append(out, site{Line: t.line, Col: t.col, Name: t.text, Member: member, Self: self, Super: super})
 	}
 	return out
 }

@@ -238,6 +238,11 @@ func preciseEdges(units []PreciseUnit, li locIndex, isType func(string) bool) Pr
 				if p, ok := pc.Via[to]; !ok || u.Conf > p.Conf {
 					pc.Via[to] = Proof{u.Method, u.Conf}
 				}
+				if c.Virtual {
+					// a method called on an object of a class (or one deriving
+					// from it) the driver does not name: any override may run
+					pc.Virtual[to] = nil
+				}
 			case c.CalleePath != "":
 				to := li.at(c.CalleePath, c.CalleeLine, c.Name)
 				if to == from && (c.CalleePath != c.CallerPath || c.CalleeLine != c.CallerLine) {

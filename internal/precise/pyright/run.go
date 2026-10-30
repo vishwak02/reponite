@@ -35,7 +35,7 @@ const Kind = "py"
 
 // driverVersion changes whenever what a result holds, or the rules that
 // make it, change: results of an older driver are never read.
-const driverVersion = "pyright-3"
+const driverVersion = "pyright-5"
 
 // Config is how to run the driver.
 type Config struct {
@@ -73,6 +73,9 @@ type Edge struct {
 	// Alias: bound through a variable assigned once from a name (f =
 	// helper): another module may assign it again
 	Alias bool
+	// Virtual: called on an object (x.f(), self.f()), not through super():
+	// the bound method, or an override of a class deriving from its class
+	Virtual bool
 }
 
 // Output is what the driver proved for one ref.
@@ -109,6 +112,7 @@ type call struct {
 	CalleeName string
 	Ctor       bool
 	Alias      bool // bound through a variable assigned once from a name (f = helper)
+	Virtual    bool // a method called on an object: a subclass's override may run
 }
 
 // result is a ref's cache entry.
@@ -211,7 +215,7 @@ func edges(calls []call) []Edge {
 		e := Edge{CallerPath: c.File, CallerLine: c.Line, Name: c.Name}
 		switch c.Kind {
 		case 'B':
-			e.CalleePath, e.CalleeLine, e.CalleeName, e.Ctor, e.Alias = c.CalleePath, c.CalleeLine, c.CalleeName, c.Ctor, c.Alias
+			e.CalleePath, e.CalleeLine, e.CalleeName, e.Ctor, e.Alias, e.Virtual = c.CalleePath, c.CalleeLine, c.CalleeName, c.Ctor, c.Alias, c.Virtual
 		case 'E':
 			e.External = true
 		default:
@@ -380,29 +384,71 @@ func dirOf(p string) string {
 	return d
 }
 
-// envRoots are where code is run from, each an execution environment of
-// its own: every directory holding Python files that is not a package (a
-// script's directory, sys.path[0] when it runs), every source root, and the
-// root. A file belongs to the deepest one above it.
+// envRoots are where code is run from that needs an execution environment
+// of its own (the root always has one): a directory holding Python files
+// that is not a package (a script's directory, sys.path[0] when it runs) or
+// a source root, when a module it holds has the name of one the root, a
+// source root or a directory above it holds — there the directory's own
+// module is the one imported, while the server's default order would find
+// the other first. A file belongs to the deepest one above it. Few
+// environments keep the server fast: each resolves its imports anew.
 func envRoots(files map[string]string) []string {
 	init, py := map[string]bool{}, map[string]bool{}
+	mods := map[string]map[string]bool{} // directory -> the modules it holds
+	add := func(d, m string) {
+		if mods[d] == nil {
+			mods[d] = map[string]bool{}
+		}
+		mods[d][m] = true
+	}
 	for p := range files {
 		d := dirOf(p)
+		ext := strings.ToLower(path.Ext(p))
 		if path.Base(p) == "__init__.py" {
 			init[d] = true
+			if d != "" {
+				add(dirOf(d), path.Base(d)) // a package is a module of its parent
+			}
 		}
-		if strings.EqualFold(path.Ext(p), ".py") {
+		if ext == ".py" {
 			py[d] = true
 		}
-	}
-	set := map[string]bool{"": true}
-	for d := range py {
-		if !init[d] {
-			set[d] = true
+		if ext == ".py" || ext == ".pyi" {
+			add(d, strings.TrimSuffix(path.Base(p), path.Ext(p)))
 		}
 	}
-	for _, d := range sourceRoots(files) {
-		set[d] = true
+	roots := sourceRoots(files)
+	var cands []string
+	for d := range py {
+		if d != "" && !init[d] {
+			cands = append(cands, d)
+		}
+	}
+	cands = append(cands, roots...)
+	set := map[string]bool{"": true}
+	for _, d := range cands {
+		if set[d] {
+			continue
+		}
+		others := []string{""}
+		for x := d; x != ""; {
+			x = dirOf(x)
+			others = append(others, x)
+		}
+		for _, r := range roots {
+			if r != d {
+				others = append(others, r)
+			}
+		}
+	find:
+		for m := range mods[d] {
+			for _, o := range others {
+				if mods[o][m] {
+					set[d] = true
+					break find
+				}
+			}
+		}
 	}
 	out := make([]string, 0, len(set))
 	for d := range set {
@@ -424,7 +470,9 @@ func envRoots(files map[string]string) []string {
 // config is the pyrightconfig.json the ref's copy is checked with: one
 // execution environment per envRoots entry, whose imports resolve from its
 // own directory, then the directories above it (as a script run from there
-// finds them), then the source roots.
+// finds them), then the source roots; the root's from the root, then the
+// source roots (then, the server's default, the importing file's own
+// directory).
 func config(files map[string]string) ([]byte, error) {
 	roots := sourceRoots(files)
 	type env struct {
@@ -704,6 +752,11 @@ func (r *resolver) file(ctx context.Context, srv *server, rel, src string, sites
 				}, &h)
 				if err != nil || partlyUnknown(hoverText(h.Contents)) {
 					cs = []call{{File: rel, Line: s.Line + 1, Name: s.Name, Kind: 'U'}}
+				}
+			}
+			if s.Member && !s.Super {
+				for k := range cs {
+					cs[k].Virtual = cs[k].Kind == 'B' && !cs[k].Ctor
 				}
 			}
 			out[i] = cs

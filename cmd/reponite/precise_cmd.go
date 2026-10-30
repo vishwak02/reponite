@@ -291,7 +291,7 @@ func (p *preciseFlags) runTS(store *precise.Store, src processing.PreciseSource)
 		return nil
 	}
 	out, err := tsc.Run(context.Background(), tsc.Input{
-		Files: src.Files, Extra: src.Extra, Dir: src.Dir, Materialize: src.Materialize, CachedOnly: p.mode == "cached",
+		Files: src.Files, Extra: src.Extra, Dir: src.Dir, Read: src.Read, Materialize: src.Materialize, CachedOnly: p.mode == "cached",
 	}, tsc.Config{Node: p.node, TypeScript: p.typescript, Jobs: p.jobs, Store: store, Log: os.Stderr})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "reponite: compiler-exact TypeScript calls unavailable: %v\n", err)
@@ -359,7 +359,7 @@ func (p *preciseFlags) runPy(store *precise.Store, src processing.PreciseSource)
 	for _, e := range out.Edges {
 		c := processing.PreciseCall{CallerPath: e.CallerPath, CallerLine: e.CallerLine, Name: e.Name,
 			CalleePath: e.CalleePath, CalleeLine: e.CalleeLine, CalleeName: e.CalleeName, Ctor: e.Ctor,
-			External: e.External, Unbound: e.Unbound}
+			External: e.External, Unbound: e.Unbound, Virtual: e.Virtual}
 		if e.Alias {
 			alias.Calls = append(alias.Calls, c)
 		} else {

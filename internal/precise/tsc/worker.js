@@ -22,7 +22,12 @@ function loadTS(dir) {
 // gives), except node_modules directories, which are read from disk; every
 // answer is recorded by a key: "R:<rel>" under the root, else the absolute
 // path.
-function tracker(root, repoFiles) {
+//
+// A ref copied out of git (isolated) sits in a temporary directory: the
+// directories above the copy exist (and are not recorded), and anything else
+// in the temporary directory does not — so no answer depends on where the
+// copy was put.
+function tracker(root, repoFiles, isolated) {
   const files = new Set(repoFiles);
   const dirs = new Set([""]);
   for (const f of repoFiles) {
@@ -43,6 +48,16 @@ function tracker(root, repoFiles) {
     }
     return { key: abs, rel: null, abs, disk: true };
   };
+  // around: for an isolated copy, true for a directory above the root,
+  // false for anything else in the temporary directory beside it, null
+  // otherwise (an answer to record)
+  const tmp = path.dirname(root);
+  const around = (w) => {
+    if (!isolated || !w.disk || w.rel !== null) return null;
+    if (root.startsWith(w.abs + path.sep) || w.abs === path.sep) return true;
+    if (w.abs.startsWith(tmp + path.sep)) return false;
+    return null;
+  };
   const statOf = (abs) => {
     try {
       return fs.statSync(abs);
@@ -54,6 +69,8 @@ function tracker(root, repoFiles) {
     reads, probes, lists,
     fileExists(p) {
       const w = where(p);
+      const a = around(w);
+      if (a !== null) return false;
       let ok;
       if (w.disk) {
         const st = statOf(w.abs);
@@ -64,6 +81,8 @@ function tracker(root, repoFiles) {
     },
     directoryExists(p) {
       const w = where(p);
+      const a = around(w);
+      if (a !== null) return a;
       let ok;
       if (w.disk) {
         const st = statOf(w.abs);
@@ -74,6 +93,7 @@ function tracker(root, repoFiles) {
     },
     readFile(p) {
       const w = where(p);
+      if (around(w) !== null) return undefined;
       if (!w.disk && !files.has(w.rel)) {
         probes["f:" + w.key] = false;
         return undefined;
@@ -90,6 +110,7 @@ function tracker(root, repoFiles) {
     },
     getDirectories(p) {
       const w = where(p);
+      if (around(w) !== null) return [];
       let out = [];
       if (w.disk) {
         try {
@@ -170,7 +191,7 @@ function options(ts, t, root, config) {
 function analyze(req) {
   const ts = loadTS(req.ts);
   const root = req.root;
-  const t = tracker(root, req.repo);
+  const t = tracker(root, req.repo, !!req.isolated);
   // the compiler itself is part of what a result depends on
   t.readFile(path.join(req.ts, "package.json"));
   const opts = options(ts, t, root, req.config);

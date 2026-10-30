@@ -292,8 +292,13 @@ func TestPartlyUnknown(t *testing.T) {
 
 func TestConfigEnvironments(t *testing.T) {
 	files := map[string]string{
-		"run.py": "", "tools/migrate/migrate.py": "", "tools/migrate/step.py": "",
+		// tools/migrate's step shadows the root's: it needs its own
+		// environment; tools/report's names are its own alone
+		"run.py": "", "step.py": "", "tools/migrate/migrate.py": "", "tools/migrate/step.py": "",
+		"tools/report/report.py": "", "tools/report/fmt_rows.py": "",
+		// two source roots both holding a package nav
 		"pkgs/nav/src/nav/__init__.py": "", "pkgs/nav/src/nav/core.py": "",
+		"pkgs/sim/src/nav/__init__.py": "", "pkgs/sim/src/nav/fake.py": "",
 	}
 	b, err := config(files)
 	if err != nil {
@@ -313,9 +318,10 @@ func TestConfigEnvironments(t *testing.T) {
 		got = append(got, e.Root+" <- "+strings.Join(e.ExtraPaths, ","))
 	}
 	want := []string{
-		"pkgs/nav/src <- pkgs/nav,pkgs,.",
-		"tools/migrate <- tools,.,pkgs/nav/src",
-		". <- pkgs/nav/src",
+		"pkgs/nav/src <- pkgs/nav,pkgs,.,pkgs/sim/src",
+		"pkgs/sim/src <- pkgs/sim,pkgs,.,pkgs/nav/src",
+		"tools/migrate <- tools,.,pkgs/nav/src,pkgs/sim/src",
+		". <- pkgs/nav/src,pkgs/sim/src",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("environments:\n got %q\nwant %q", got, want)

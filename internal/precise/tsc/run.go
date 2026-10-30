@@ -65,6 +65,9 @@ type Input struct {
 	// Dir is the repo's directory on disk: its node_modules (and the
 	// typescript there) are read from it, for a ref read from git too.
 	Dir string
+	// Read returns a repo file's content: a file the compiler read that is
+	// not an input (a JSON module) is identified by it in the cache.
+	Read func(rel string) ([]byte, error)
 	// Materialize puts the ref's files on disk — only when a project
 	// misses the store — and returns their directory and how to remove it.
 	Materialize func() (root string, cleanup func(), err error)
@@ -316,6 +319,14 @@ func buildAll(ctx context.Context, in Input, cfg Config, prs []project, todo []i
 		return err
 	}
 	linkNodeModules(root, in.Dir, prs, runnable)
+	isolated := true
+	if in.Dir != "" {
+		if abs, err := filepath.Abs(in.Dir); err == nil {
+			if real, err := filepath.EvalSymlinks(abs); err == nil && real == root {
+				isolated = false // the working tree itself
+			}
+		}
+	}
 	repo := make([]string, 0, len(in.Files)+len(in.Extra))
 	for p := range in.Files {
 		repo = append(repo, p)
@@ -326,7 +337,7 @@ func buildAll(ctx context.Context, in Input, cfg Config, prs []project, todo []i
 	sort.Strings(repo)
 	replies := runPool(ctx, node, cfg, len(runnable), func(k int) request {
 		i := runnable[k]
-		return request{Root: root, TS: tsdirs[i], Config: prs[i].config, Files: prs[i].files, Repo: repo}
+		return request{Root: root, TS: tsdirs[i], Config: prs[i].config, Files: prs[i].files, Repo: repo, Isolated: isolated}
 	})
 	for k, rep := range replies {
 		i := runnable[k]
@@ -515,11 +526,14 @@ func linkNodeModules(root, repoDir string, prs []project, which []int) {
 
 // request is one project for a worker to build.
 type request struct {
-	Root   string   `json:"root"`
-	TS     string   `json:"ts"`
-	Config string   `json:"config"`
-	Files  []string `json:"files"`
-	Repo   []string `json:"repo"`
+	Root string `json:"root"`
+	// Isolated: Root is a ref's copy in a temporary directory, not the
+	// repo's directory (what is beside and above it is not the repo's)
+	Isolated bool     `json:"isolated"`
+	TS       string   `json:"ts"`
+	Config   string   `json:"config"`
+	Files    []string `json:"files"`
+	Repo     []string `json:"repo"`
 }
 
 // reply is a worker's answer to one request.

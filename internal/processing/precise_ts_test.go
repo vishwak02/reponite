@@ -324,3 +324,34 @@ class Acl:
 		t.Errorf("a call in a shadowed definition's body is not the last definition's: %v", got)
 	}
 }
+
+// A Python method called on an object is virtual: the method pyright bound
+// is the edge, and the overrides of the classes deriving from its class
+// stay linked as possible targets.
+func TestPreciseNameLocatedVirtualCall(t *testing.T) {
+	files := map[string]string{
+		"shop/backend.py": `class Backend:
+    def send(self, p):
+        raise NotImplementedError
+
+
+class Printer(Backend):
+    def send(self, p):
+        return p
+
+
+def dispatch(b: Backend):
+    return b.send(1)
+`,
+	}
+	call := PreciseCall{CallerPath: "shop/backend.py", CallerLine: 12, Name: "send", CalleePath: "shop/backend.py", CalleeLine: 2, CalleeName: "send"}
+	units := []PreciseUnit{{Method: "pyright", Conf: 0.97, Calls: []PreciseCall{call}}}
+	if got := indexAndEdgesWith(t, files, units)["shop.backend.dispatch"]; got["shop.backend.Printer.send"] != "" {
+		t.Errorf("a call bound without Virtual links no override: %v", got)
+	}
+	units[0].Calls[0].Virtual = true
+	got := indexAndEdgesWith(t, files, units)["shop.backend.dispatch"]
+	if got["shop.backend.Backend.send"] != "pyright" || got["shop.backend.Printer.send"] != MethodOverride {
+		t.Errorf("the bound method and the override: %v", got)
+	}
+}

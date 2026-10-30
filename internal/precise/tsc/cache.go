@@ -20,10 +20,11 @@ type validator struct {
 	in    Input
 	dirs  map[string]bool // the repo's directories ("" the root), from its files
 	stats map[string]string
+	ids   map[string]string // repo files outside Files and Extra, by content
 }
 
 func newValidator(in Input) *validator {
-	v := &validator{in: in, dirs: map[string]bool{"": true}, stats: map[string]string{}}
+	v := &validator{in: in, dirs: map[string]bool{"": true}, stats: map[string]string{}, ids: map[string]string{}}
 	for _, m := range []map[string]string{in.Files, in.Extra} {
 		for p := range m {
 			for d := path.Dir(p); d != "." && !v.dirs[d]; d = path.Dir(d) {
@@ -68,7 +69,22 @@ func (v *validator) id(key string) string {
 		if id, ok := v.in.Files[rel]; ok {
 			return id
 		}
-		return v.in.Extra[rel]
+		if id, ok := v.in.Extra[rel]; ok {
+			return id
+		}
+		// a repo file of another kind the compiler read (a JSON module):
+		// its content, read once per run
+		if id, ok := v.ids[rel]; ok {
+			return id
+		}
+		id := ""
+		if v.in.Read != nil {
+			if b, err := v.in.Read(rel); err == nil {
+				id = precise.BlobID(b)
+			}
+		}
+		v.ids[rel] = id
+		return id
 	}
 	if s, ok := v.stats[d]; ok {
 		return s
