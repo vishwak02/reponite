@@ -34,6 +34,16 @@ type PreciseCall struct {
 	Virtual    bool   // bound to a virtual method through an object: overrides may run instead
 	RecvPath   string // a virtual call's object's class definition ("" unknown)
 	RecvLine   int
+	// CalleeName is the bound definition's own name. A driver that locates
+	// a call by the line it is written on (CallerLine is the call's line,
+	// not its caller's definition: TypeScript, Python) sets it: the callee
+	// location then proves the edge only when the innermost definition
+	// there has this name — a line inside another definition (a local
+	// variable's, a nested function this index does not hold) is not it.
+	CalleeName string
+	// Ctor: the call constructs the class defined at the callee location
+	// (Python Cls(), TypeScript new Cls() or <Cls/>): the class is the edge.
+	Ctor bool
 }
 
 // PreciseUnit is one compiled unit's calls (a translation unit, a project),
@@ -146,7 +156,13 @@ func newLocIndex(units []PreciseUnit, files []ParsedFile, qidsByPath map[string]
 		}
 		// overloads share one id (mergeOverload) but each has its own span:
 		// a span no id claimed belongs to the id of its name in the file —
-		// of the class whose body holds it, when several classes have one
+		// of the class whose body holds it, when several classes have one.
+		// C/C++ only: a Python or TypeScript name defined again (a
+		// property's getter and setter) is its last definition, and the
+		// bodies before it are not that id's
+		if !preciseInput(f.Path) {
+			continue
+		}
 		for _, sp := range f.Spans {
 			qs := byName[sp.Name]
 			if len(qs) == 0 || claimed[[2]int{sp.StartLine, sp.EndLine}] {
@@ -208,6 +224,25 @@ func preciseEdges(units []PreciseUnit, li locIndex, isType func(string) bool) Pr
 				pc.Unbound[c.Name] = true
 			case c.External:
 				pc.External[c.Name] = true
+			case c.CalleePath != "" && c.CalleeName != "":
+				// located by the definition's own name: a class only when
+				// the call constructs it, a function only when it does not
+				to := li.at(c.CalleePath, c.CalleeLine, c.CalleeName)
+				if to == "" || BaseName(to) != c.CalleeName || isType != nil && isType(to) != c.Ctor {
+					pc.Unbound[c.Name] = true
+					continue
+				}
+				if !containsStr(pc.Bound[c.Name], to) {
+					pc.Bound[c.Name] = append(pc.Bound[c.Name], to)
+				}
+				if p, ok := pc.Via[to]; !ok || u.Conf > p.Conf {
+					pc.Via[to] = Proof{u.Method, u.Conf}
+				}
+				if c.Virtual {
+					// a method called on an object of a class (or one deriving
+					// from it) the driver does not name: any override may run
+					pc.Virtual[to] = nil
+				}
 			case c.CalleePath != "":
 				to := li.at(c.CalleePath, c.CalleeLine, c.Name)
 				if to == from && (c.CalleePath != c.CallerPath || c.CalleeLine != c.CallerLine) {
@@ -331,6 +366,10 @@ func mergePrecise(inferred []query.Callee, pc *PreciseCaller, nodeSet map[string
 	}
 	return out
 }
+
+// PreciseInputCxx reports the files a C/C++ precise driver reads: sources,
+// headers and the manifests that say how they build.
+func PreciseInputCxx(rel string) bool { return preciseInput(rel) }
 
 // preciseInputs are the files a C/C++ precise driver reads: sources, headers
 // and the manifests that say how they build.

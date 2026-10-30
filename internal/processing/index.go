@@ -758,6 +758,18 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		if pc := proven[qid]; pc != nil && c.lang != "go" {
 			callees = mergePrecise(callees, pc, nodeSet, func(q string, recvs []string) []query.Callee {
 				classOf := func(m string) string { return strings.SplitN(byQID[m].sym.Recv, "@", 2)[0] }
+				if m := byQID[q]; hasClassBases(m.lang) {
+					// Python, JS/TS: the overrides the class graph holds
+					var out []query.Callee
+					if cls, ok := x.classes.has(m.pkg, classOf(q)); ok {
+						for _, o := range x.classes.overriders(cls, BaseName(q), nodeSet) {
+							if x.callerTest || !x.isTest[o] {
+								out = append(out, query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
+							}
+						}
+					}
+					return out
+				}
 				all := overrides(classOf(q), BaseName(q), x)
 				if len(recvs) == 0 || x.types == nil {
 					return all

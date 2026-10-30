@@ -62,7 +62,7 @@ func IndexDirWith(w Indexer, repo, ref, dir string, normVer int, opt IndexOption
 		if !info.Mode().IsRegular() {
 			return nil // a symlink or device: its target is indexed where it lives
 		}
-		if opt.PreciseDriver != nil && preciseInput(rel) {
+		if opt.PreciseDriver != nil && opt.preciseInput(rel) {
 			if b, err := os.ReadFile(path); err == nil {
 				cfiles[rel] = blobID(b)
 			}

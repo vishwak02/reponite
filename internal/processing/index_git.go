@@ -86,7 +86,7 @@ func IndexGitRefWith(w Indexer, repo, ref, repoDir, rev string, normVer int, opt
 	err = tree.Files().ForEach(func(f *object.File) error {
 		tracked = append(tracked, f.Name)
 		blob := f.Blob.Hash
-		if opt.PreciseDriver != nil && preciseInput(f.Name) && f.Mode.IsFile() {
+		if opt.PreciseDriver != nil && opt.preciseInput(f.Name) && f.Mode.IsFile() {
 			if ig.Excluded(f.Name, false) {
 				cextra[f.Name] = blob.String()
 			} else {

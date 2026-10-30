@@ -40,7 +40,7 @@ func newSymbolParser() func(path, content string) []query.EditedSymbol {
 // it before closing st.
 func autoIndexOnMount(st *sqlite.Store, repo, dir string) (stop func()) {
 	// compiled C/C++ results are reused, as a plain `reponite index` does
-	opt := processing.IndexOptions{PreciseDriver: cachedDriver(repo)}
+	opt := cachedOptions(repo)
 	if len(st.Refs(repo)) == 0 {
 		fmt.Fprintf(os.Stderr, "reponite: no index for %q; indexing %s@HEAD on mount...\n", repo, dir)
 		if err := indexHead(context.Background(), st, repo, dir, opt); err != nil {
