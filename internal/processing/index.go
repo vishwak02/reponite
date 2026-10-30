@@ -759,8 +759,15 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			callees = mergePrecise(callees, pc, nodeSet, func(q string, recvs []string) []query.Callee {
 				classOf := func(m string) string { return strings.SplitN(byQID[m].sym.Recv, "@", 2)[0] }
 				if m := byQID[q]; hasClassBases(m.lang) {
-					// Python, JS/TS: the overrides the class graph holds
+					// Python, JS/TS: the overrides the class graph holds — and
+					// for an abstract method, its one implementation when the
+					// repo has one (pyAbstractCallees: the declaration is
+					// then a declaration edge)
 					var out []query.Callee
+					if cls, ok := x.classes.has(m.pkg, classOf(q)); ok && x.pyAbstract[q] {
+						p := pc.Via[q]
+						return pyAbstractCallees(cls, BaseName(q), q, p.Method, min(p.Conf, ConfResolved), x)
+					}
 					if cls, ok := x.classes.has(m.pkg, classOf(q)); ok {
 						for _, o := range x.classes.overriders(cls, BaseName(q), nodeSet) {
 							if x.callerTest || !x.isTest[o] {
@@ -771,6 +778,14 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					return out
 				}
 				all := overrides(classOf(q), BaseName(q), x)
+				if x.types != nil {
+					// the one implementation an abstract class's call runs,
+					// when the repo has one (pure only for a call in the
+					// class itself: while it is built, its own method runs)
+					p := pc.Via[q]
+					all = withSingleOverride(all, classOf(q), BaseName(q), strings.SplitN(c.sym.Recv, "@", 2)[0] == classOf(q),
+						min(p.Conf, ConfResolved), x)
+				}
 				if len(recvs) == 0 || x.types == nil {
 					return all
 				}

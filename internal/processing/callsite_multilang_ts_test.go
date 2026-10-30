@@ -441,7 +441,8 @@ public class ArticleApi {
 	}
 	wantMethod(t, a, "app/query.ArticleQueryService.findBySlug", MethodTyped)
 	wantMethod(t, a, "app/repo.ArticleRepository.findBySlug", MethodTyped)
-	wantMethod(t, a, "app/infra.MyBatisArticleRepository.findBySlug", MethodOverride)
+	// the interface's one implementation in the repo: the call runs it
+	wantMethod(t, a, "app/infra.MyBatisArticleRepository.findBySlug", MethodVirtualSingle)
 	wantMethod(t, a, "app/query.ArticleQueryService.format", MethodTyped)
 	wantMethod(t, a, "String::format", MethodExternal)
 	// overloads share one id, which calls what each of them calls
