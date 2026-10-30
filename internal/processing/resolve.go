@@ -220,6 +220,7 @@ type siteIndex struct {
 	precise    map[string]string   // base -> type-proven qid (Go only; nil here)
 	types      *typeTable          // C++ classes/fields/bases (nil: none in the ref)
 	classes    *classGraph         // Python/JS/TS classes by module, bases resolved through imports
+	pyAbstract map[string]bool     // qid -> a Python abstract method: called through its class, its body never runs
 	rust       *rustCrate          // Rust module tree (nil: no Rust in the ref)
 	callerPkg  string
 	callerTest bool
@@ -378,6 +379,48 @@ const (
 	ConfOverride   = 0.6
 )
 
+// A Python call that reaches an abstract method (pyabstract.go) through its
+// class never runs that method's body: the instance is of a concrete
+// subclass. The call's targets are then the concrete overrides the repo
+// defines (MethodAbstractImpl) — one of them runs, which one the code does
+// not say, so above a mere possible override yet below the resolved band —
+// and the abstract declaration stays an edge (who calls through the
+// interface) as MethodAbstractDecl, at a possible override's confidence.
+const (
+	MethodAbstractImpl = "abstract-override"
+	ConfAbstractImpl   = 0.7
+	MethodAbstractDecl = "abstract-declared"
+	ConfAbstractDecl   = ConfOverride
+)
+
+// pyAbstractCallees are the edges of a Python call of name that reaches
+// method q on class cls with the claim (method, conf): q itself and its
+// overrides, or — when q is abstract and the repo overrides it concretely —
+// those overrides and q as a declaration.
+func pyAbstractCallees(cls, name, q, method string, conf float64, x siteIndex) []query.Callee {
+	ovs := x.classes.overriders(cls, name, x.nodeSet)
+	var concrete []string
+	for _, o := range ovs {
+		if (x.callerTest || !x.isTest[o]) && !x.pyAbstract[o] {
+			concrete = append(concrete, o)
+		}
+	}
+	if !x.pyAbstract[q] || len(concrete) == 0 {
+		out := []query.Callee{{Name: q, ResolutionMethod: method, Confidence: conf}}
+		for _, o := range ovs {
+			if x.callerTest || !x.isTest[o] {
+				out = append(out, query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
+			}
+		}
+		return out
+	}
+	out := []query.Callee{{Name: q, ResolutionMethod: MethodAbstractDecl, Confidence: ConfAbstractDecl}}
+	for _, o := range concrete {
+		out = append(out, query.Callee{Name: o, ResolutionMethod: MethodAbstractImpl, Confidence: ConfAbstractImpl})
+	}
+	return out
+}
+
 // bareNameSkipsClass: languages whose unqualified call is looked up in the
 // function's and module's scope, not the enclosing class's.
 var bareNameSkipsClass = map[string]bool{"python": true, "javascript": true, "typescript": true, "vue": true, "svelte": true, "rust": true}
@@ -490,11 +533,8 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				// reaches, and any subclass's override
 				cls := strings.TrimPrefix(s.Scope, pyClassScope)
 				if q, found := x.classes.method(cls, name, false, x.nodeSet); found {
-					add(query.Callee{Name: q, ResolutionMethod: MethodTyped, Confidence: ConfTyped})
-					for _, o := range x.classes.overriders(cls, name, x.nodeSet) {
-						if x.callerTest || !x.isTest[o] {
-							add(query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
-						}
+					for _, c := range pyAbstractCallees(cls, name, q, MethodTyped, ConfTyped, x) {
+						add(c)
 					}
 				} else {
 					// a library base's method, or an attribute set at runtime
@@ -512,13 +552,12 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			if s.Kind == CallSelf && callerRecv != "" && hasClassBases(lang) {
 				if cls, ok := x.classes.has(callerPkg, callerRecv); ok {
 					if q, found := x.classes.method(cls, name, super, x.nodeSet); found {
-						add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
-						if !super { // super() names the base's method itself
-							for _, o := range x.classes.overriders(cls, name, x.nodeSet) {
-								if x.callerTest || !x.isTest[o] {
-									add(query.Callee{Name: o, ResolutionMethod: MethodOverride, Confidence: ConfOverride})
-								}
-							}
+						if super { // super() names the base's method itself
+							add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
+							continue
+						}
+						for _, c := range pyAbstractCallees(cls, name, q, MethodResolved, ConfResolved, x) {
+							add(c)
 						}
 						continue
 					}
@@ -752,6 +791,11 @@ func cPlainCallee(name string, x siteIndex) query.Callee {
 		}
 	}
 	if q, ok := pickOne(cands, x); ok {
+		if !x.argsFit(q) {
+			// toString(task.type) with a library's task: the library's
+			// toString, not the repo's toString(Reason)
+			return query.Callee{Name: name, ResolutionMethod: MethodExternal, Confidence: ConfExternal}
+		}
 		return query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved}
 	}
 	if len(x.visibleOnly(cands)) > 1 {
@@ -781,6 +825,12 @@ func typeSite(s CallSite, callerRecv string, x siteIndex) CallSite {
 		return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
 	}
 	if root, _, scoped := strings.Cut(t, "::"); scoped && !externalScopes[root] && x.types.classes[t] == nil {
+		if x.types.foreign(t) && !x.types.derivedFrom(t) {
+			// a library's class (lib::Problem) no class of the repo derives
+			// from: the call is that class's own method, never a repo
+			// method that shares its name
+			return CallSite{Name: s.Name, Kind: CallTyped, Scope: t, NArgs: s.NArgs, ArgTypes: s.ArgTypes, File: s.File}
+		}
 		return s // Cls::Alias the table cannot follow: the type is not known
 	}
 	if strings.Contains(t, "::") || x.types.classes[t] != nil {
@@ -1103,80 +1153,7 @@ var cPrimitives = map[string]string{
 // passes, preferring the one matching most argument types: toString(r) with r
 // a Reason is the Reason overload, not the UIAction one.
 func (x siteIndex) byArgTypes(cands []string) []string {
-	args := strings.Split(x.argTypes, ",")
-	callerRecv := ""
-	if x.recvOf != nil {
-		callerRecv = x.recvOf[x.caller]
-	}
-	for i, a := range args {
-		kind, expr, typed := strings.Cut(a, ":")
-		if !typed || len(kind) != 1 || !strings.Contains("qen", kind) {
-			continue
-		}
-		args[i] = ""
-		if x.types == nil {
-			continue
-		}
-		if kind == "q" {
-			expr = a // q:Cls::f is itself an expression
-		}
-		t := typeLeaf(x.types.eval(expr, callerRecv))
-		switch {
-		case t == "":
-		case kind != "n":
-			args[i] = t
-		case cPrimitives[t] == "num":
-			args[i] = "#num" // timeout * 0.9 on a number
-		}
-	}
-	known := func(t string) bool {
-		_, prim := cPrimitives[t]
-		if prim || x.types == nil {
-			return prim
-		}
-		return x.types.classes[t] != nil || x.types.enums[t]
-	}
-	score := func(params []string, cls string) (int, bool) {
-		n := 0
-		for i, a := range args {
-			if i >= len(params) || a == "" || params[i] == "" {
-				continue
-			}
-			p := params[i]
-			if cls != "" && x.types != nil {
-				p = x.types.ownNested(strings.SplitN(cls, "@", 2)[0], p) // Map::getPosition(const Tile&): Map::Tile
-			}
-			kind, prim := cPrimitives[p]
-			if (a == p || a == typeLeaf(p)) && !strings.HasPrefix(a, "#") {
-				n++ // the parameter's own type, the repo's or a library's
-				continue
-			}
-			if prim && kind == "num" && x.types != nil && a[0] >= 'A' && a[0] <= 'Z' && !x.types.enums[a] && x.types.classes[a] == nil {
-				if _, alias := x.types.aliases[a]; !alias {
-					return 0, false // a library class's object for a number
-				}
-			}
-			if !known(p) {
-				continue
-			}
-			switch {
-			case strings.HasPrefix(a, "#"):
-				switch {
-				case prim && kind == a[1:]:
-					n++
-				case prim || x.types.enums[p]:
-					return 0, false // a literal of another kind
-				}
-			case a == p:
-				n++
-			case x.types != nil && containsStr(x.types.lineage(a), p):
-				n++ // a derived class passed for its base
-			case known(a):
-				return 0, false // two different known types
-			}
-		}
-		return n, true
-	}
+	score := x.argScore()
 	best, out := -1, []string(nil)
 	var fits []string
 	for _, q := range cands {
@@ -1210,4 +1187,153 @@ func (x siteIndex) byArgTypes(cands []string) []string {
 		return fits
 	}
 	return cands
+}
+
+// argsFit: one of q's overloads (its parameter types, as written) can take
+// the call's arguments, as far as their types are known. A free function
+// picked by its name alone whose every overload has an enum parameter the
+// argument cannot be (an enum converts to no other type of enum, and no
+// number, string or library value converts to it) is not what the call
+// binds: the compiler picks a function the repo does not define. Class and
+// number parameters are not judged — a converting constructor or a
+// standard conversion may take another type.
+func (x siteIndex) argsFit(q string) bool {
+	sets := x.paramTypes[q]
+	if len(sets) == 0 || x.argTypes == "" || x.types == nil {
+		return true
+	}
+	args, foreign := x.argTypesOf()
+	cls := strings.SplitN(x.recvOf[q], "@", 2)[0]
+	for _, ps := range sets {
+		fit := true
+		for i, a := range args {
+			if i >= len(ps) || ps[i] == "" {
+				continue
+			}
+			p := ps[i]
+			if cls != "" {
+				p = x.types.ownNested(cls, p)
+			}
+			if !x.types.onlyEnum(p) {
+				continue
+			}
+			_, prim := cPrimitives[a]
+			switch {
+			case foreign[i]:
+				fit = false // a library's value
+			case a == "" || a == p || a == typeLeaf(p):
+			case strings.HasPrefix(a, "#") || prim:
+				fit = false // a literal or a variable of a built-in type
+			case x.types.enums[a]:
+				fit = false // another of the repo's enums: no enum converts to another
+			case x.types.classes[a] != nil && !x.types.converts(a):
+				fit = false // a class of the repo with no conversion function
+			}
+			if !fit {
+				break
+			}
+		}
+		if fit {
+			return true
+		}
+	}
+	return false
+}
+
+// argTypesOf is the type of each of the call's arguments (x.argTypes) by
+// its last name ("" unknown; #num/#str/#bool a literal), and whether it is
+// a library's value (task.type of a lib::Task, a value of lib::Kind).
+func (x siteIndex) argTypesOf() ([]string, []bool) {
+	args := strings.Split(x.argTypes, ",")
+	foreign := make([]bool, len(args))
+	callerRecv := ""
+	if x.recvOf != nil {
+		callerRecv = x.recvOf[x.caller]
+	}
+	for i, a := range args {
+		kind, expr, typed := strings.Cut(a, ":")
+		if !typed || len(kind) != 1 || !strings.Contains("qen", kind) {
+			continue
+		}
+		args[i] = ""
+		if x.types == nil {
+			continue
+		}
+		if kind == "q" {
+			expr = a // q:Cls::f is itself an expression
+		}
+		full, owner := x.types.evalOwner(expr, callerRecv)
+		foreign[i] = owner != "" || x.types.foreign(full)
+		t := typeLeaf(full)
+		switch {
+		case t == "":
+		case kind != "n":
+			args[i] = t
+		case cPrimitives[t] == "num":
+			args[i] = "#num" // timeout * 0.9 on a number
+		}
+	}
+	return args, foreign
+}
+
+// argScore reads the call's argument types (x.argTypes) and returns how
+// well a parameter list takes them: the number of parameters whose type an
+// argument matches, and false when an argument cannot be passed to one.
+func (x siteIndex) argScore() func(params []string, cls string) (int, bool) {
+	args, foreign := x.argTypesOf()
+	known := func(t string) bool {
+		_, prim := cPrimitives[t]
+		if prim || x.types == nil {
+			return prim
+		}
+		return x.types.classes[t] != nil || x.types.enums[t]
+	}
+	score := func(params []string, cls string) (int, bool) {
+		n := 0
+		for i, a := range args {
+			if i >= len(params) || params[i] == "" || a == "" && !foreign[i] {
+				continue
+			}
+			p := params[i]
+			if cls != "" && x.types != nil {
+				p = x.types.ownNested(strings.SplitN(cls, "@", 2)[0], p) // Map::getPosition(const Tile&): Map::Tile
+			}
+			if foreign[i] && x.types != nil && x.types.enums[p] {
+				return 0, false // a library's value is never one of the repo's enums
+			}
+			if a == "" {
+				continue
+			}
+			kind, prim := cPrimitives[p]
+			if (a == p || a == typeLeaf(p)) && !strings.HasPrefix(a, "#") {
+				n++ // the parameter's own type, the repo's or a library's
+				continue
+			}
+			if prim && kind == "num" && x.types != nil && a[0] >= 'A' && a[0] <= 'Z' && !x.types.enums[a] && x.types.classes[a] == nil {
+				if _, alias := x.types.aliases[a]; !alias {
+					return 0, false // a library class's object for a number
+				}
+			}
+			if !known(p) {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(a, "#"):
+				switch {
+				case prim && kind == a[1:]:
+					n++
+				case prim || x.types.enums[p]:
+					return 0, false // a literal of another kind
+				}
+			case a == p:
+				n++
+			case x.types != nil && containsStr(x.types.lineage(a), p):
+				n++ // a derived class passed for its base
+			case known(a):
+				return 0, false // two different known types
+			}
+		}
+		return n, true
+	}
+	return score
 }

@@ -53,6 +53,17 @@ type Symbol struct {
 	// RecvOuter: the class a C++ method's own class is nested in, as its
 	// definition writes it (void Outer::Inner::f(), or in Outer's body)
 	RecvOuter string
+	// PyFixtureParams: a Python function pytest calls with fixtures (a test
+	// or a fixture): its parameters are the fixtures of their names. Any
+	// other function's parameters hold what its caller passes.
+	PyFixtureParams bool
+	// PyStub: what a Python function's definition says of its body
+	// (pyabstract.go): @abstractmethod, or a stub (only ..., pass, raise
+	// NotImplementedError or a docstring); 0 for code of its own.
+	PyStub uint8
+	// PyClass: a Python class declared abstract — an ABC (or
+	// metaclass=ABCMeta) or a Protocol (pyabstract.go); 0 otherwise.
+	PyClass uint8
 	// symHash is SymbolHash computed when the file was parsed (sealSymbols),
 	// after which CanonBody is dropped: a large repo would otherwise hold
 	// every function's canonical body until the whole ref is resolved.
@@ -129,6 +140,9 @@ func Extract(root content.AST, r LangRules, normVer int) []Symbol {
 			switch {
 			case containsStr(r.FuncDecl, t):
 				fs := extractCallable(child, "function", r, normVer, joinDoc(doc), enclosing, isPytestFixture(n))
+				if r.Name == "python" && enclosing != "" {
+					fs.PyStub = pyStubKind(n, child)
+				}
 				if r.Name == "cpp" && fs.RecvOuter == "" && fs.Recv == enclosing && len(outers) > 0 {
 					fs.RecvOuter = outers[len(outers)-1] // a method of a nested class
 				}
@@ -299,12 +313,14 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 	}
 	var vars map[string]string
 	returns := ""
+	pyFixtureParams := false
 	switch r.Name {
 	case "java":
 		vars = javaVarTypes(fn)
 	case "python":
-		vars, returns = pyVarTypes(fn, fixture || strings.HasPrefix(nameOf(fn, r), "test")), pyReturnType(fn, fixture)
-		vars = withPyParams(fn, vars, fixture || strings.HasPrefix(nameOf(fn, r), "test"))
+		pyFixtureParams = fixture || strings.HasPrefix(nameOf(fn, r), "test")
+		vars, returns = pyVarTypes(fn, pyFixtureParams), pyReturnType(fn, fixture)
+		vars = withPyParams(fn, vars, pyFixtureParams)
 	case "javascript", "typescript":
 		vars = jsLocals(fn)
 	}
@@ -325,23 +341,24 @@ func extractCallable(fn content.AST, kind string, r LangRules, normVer int, doc 
 		}
 	}
 	return Symbol{
-		ParamMin:       pmin,
-		ParamMax:       pmax,
-		HasParams:      hasParams,
-		ParamTypes:     paramTypes,
-		Vars:           vars,
-		Returns:        returns,
-		Name:           name,
-		Recv:           recv,
-		Kind:           kind,
-		Signature:      string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
-		CanonBody:      canonBody,
-		Doc:            doc,
-		Callees:        callees,
-		QualifiedCalls: qcalls,
-		LocalImports:   localImports,
-		CallSites:      sites,
-		RecvOuter:      recvOuter,
+		ParamMin:        pmin,
+		ParamMax:        pmax,
+		HasParams:       hasParams,
+		ParamTypes:      paramTypes,
+		Vars:            vars,
+		Returns:         returns,
+		Name:            name,
+		Recv:            recv,
+		Kind:            kind,
+		Signature:       string(content.Canon(withoutChildTypes(fn, r.BodyTypes), normVer)),
+		CanonBody:       canonBody,
+		Doc:             doc,
+		Callees:         callees,
+		QualifiedCalls:  qcalls,
+		LocalImports:    localImports,
+		CallSites:       sites,
+		RecvOuter:       recvOuter,
+		PyFixtureParams: pyFixtureParams,
 	}
 }
 
@@ -486,6 +503,9 @@ func typeSymbols(decl content.AST, r LangRules, normVer int, doc []byte) []Symbo
 		Signature: string(content.Canon(shape, normVer)), Doc: doc,
 		Bases: classBases(decl, r.Name),
 		Vars:  fields,
+	}
+	if r.Name == "python" {
+		sym.PyClass = pyClassKind(decl)
 	}
 	if classBodyCalls[r.Name] {
 		// calls in the class body itself — a Django field, a serializer, a

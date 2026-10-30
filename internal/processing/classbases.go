@@ -97,6 +97,7 @@ type classGraph struct {
 	derived map[string][]string // class key -> classes naming it as a direct base
 	pkg     map[string]string   // class key -> module (package) id
 	name    map[string]string   // class key -> class name
+	kind    map[string]uint8    // class key -> declared abstract (Python: pyClassABC, pyClassProtocol)
 }
 
 // inertBases are the bases that only mark a class (abstract, generic, a
@@ -109,7 +110,8 @@ const superScope = "\x00super"
 func classKey(pkg, name string) string { return pkg + "\x00" + name }
 
 func newClassGraph() *classGraph {
-	return &classGraph{bases: map[string][]string{}, derived: map[string][]string{}, pkg: map[string]string{}, name: map[string]string{}}
+	return &classGraph{bases: map[string][]string{}, derived: map[string][]string{}, pkg: map[string]string{}, name: map[string]string{},
+		kind: map[string]uint8{}}
 }
 
 func (g *classGraph) define(pkg, name string) string {
@@ -294,4 +296,21 @@ func (g *classGraph) has(pkg, name string) (string, bool) {
 	k := classKey(pkg, name)
 	_, ok := g.bases[k]
 	return k, ok
+}
+
+// abstractKind is how abstract a Python class is: its own declaration (an
+// ABC, a Protocol), else pyClassABC when a repo class it derives from is an
+// ABC (ABCMeta is inherited; a class deriving from a Protocol without
+// naming Protocol again is a concrete implementation of it).
+func (g *classGraph) abstractKind(cls string) uint8 {
+	if k := g.kind[cls]; k != 0 {
+		return k
+	}
+	order, _ := g.mro(cls)
+	for _, c := range order {
+		if !isExtBase(c) && g.kind[c] == pyClassABC {
+			return pyClassABC
+		}
+	}
+	return 0
 }

@@ -167,9 +167,22 @@ def make_item():
 def mock_call(respx_mock):
     return respx_mock.post("x").mock
 `,
-		"tests/test_items.py": `def test_make(make_item, mock_call):
+		"tests/test_items.py": `from typing import Callable
+
+Maker = Callable[[str], str]
+
+def test_make(make_item, mock_call):
     make_item("a")
     mock_call(return_value=1)
+
+def test_typed(make_item: Maker):
+    make_item("t")
+
+def _setup(make_item: Maker):
+    make_item("c")
+
+def test_through_helper(make_item):
+    _setup(make_item)
 `,
 		"tests/helpers.py": `def run(make_item):
     make_item("b")
@@ -184,6 +197,14 @@ def mock_call(respx_mock):
 	}
 	if m := edges["tests.helpers.run"]["tests.conftest.make_item"]; m != "" {
 		t.Errorf("a plain function's parameter is its argument: %v", edges["tests.helpers.run"])
+	}
+	if _, ok := edges["tests.test_items.test_typed"]["tests.conftest.make_item"]; !ok {
+		t.Errorf("a test's annotated parameter is still its fixture: %v", edges["tests.test_items.test_typed"])
+	}
+	// pytest hands fixtures to tests and fixtures only: a helper's
+	// parameter, annotated or not, is whatever its caller passes
+	if m := edges["tests.test_items._setup"]["tests.conftest.make_item"]; m != "" {
+		t.Errorf("a test module's helper takes no fixtures: %v", edges["tests.test_items._setup"])
 	}
 }
 
