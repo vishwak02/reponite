@@ -79,13 +79,28 @@ Content is addressed by hash, so **identical code across refs is stored once**. 
 ### Confidence and provenance
 
 Every answer carries how it was derived and how certain it is. Each call-graph edge is scored
-by how it was resolved: `1.0` compiler-proven (`go-types`, `clang-compdb`) · `0.97` clang with
-include paths reponite read from the packages
-(`clang-synth`) · `0.95` SCIP symbol-resolved across repos · `0.9` uniquely name-resolved ·
-`0.85` resolved on the receiver's declared type · `0.75` import-resolved across repos · `0.6`
-external or opaque · `0.5` ambiguous. See [Compiler-exact calls](#compiler-exact-calls---precise). A verdict takes the **minimum** over its evidence, so a single weak edge caps
-the whole answer. What cannot be resolved is counted and reported, never guessed. Every JSON
-answer ends with a `_meta` block: the ref read, freshness, warnings, and coverage.
+by how it was resolved: `1.0` compiler-proven (`go-types`, `clang-compdb`, `tsc`) · `0.97`
+compiler-bound with a reconstructed setup (`clang-synth` with include paths read from the
+packages, `tsc-js` for plain JavaScript, `pyright`) · `0.95` SCIP symbol-resolved across repos ·
+`0.9` uniquely name-resolved · `0.85` resolved on the receiver's declared type · `0.75`
+import-resolved across repos · `0.7` one of several implementations an abstract call may run ·
+`0.6` external, opaque, a possible override, or the abstract declaration itself · `0.5`
+ambiguous. See [Compiler-exact calls](#compiler-exact-calls---precise). A verdict takes the
+**minimum** over its evidence, so a single weak edge caps the whole answer. What cannot be
+resolved is counted and reported, never guessed. Every JSON answer ends with a `_meta` block:
+the ref read, freshness, warnings, and coverage.
+
+**Calls through an interface.** A call through an abstract method (a Python ABC or
+`raise NotImplementedError` stub, a TypeScript abstract method, a C++ pure virtual, a Java
+abstract or interface method) never runs the declaration. When the repo has exactly one
+implementation the receiver's class can reach, that one is the answer (`abstract-single`,
+`virtual-single`, at the receiver's confidence); when the code visibly makes the value
+(`x: Base = Impl()`, a factory whose every return is `Impl()`), the made class's method is.
+Otherwise every implementation is listed at `0.7` (`abstract-override`): which one runs is
+decided by data at run time. The declaration always keeps its own `0.6` edge
+(`abstract-declared`, `declared-type`), since an implementation outside the repo could run, and
+test doubles never stand in for production callers. Go and TypeScript interfaces stay lists:
+any value of the right shape satisfies them.
 
 ---
 
@@ -751,12 +766,29 @@ compiler can read the code, reponite asks it instead:
   path built from the packages (`package.xml` dependencies, `include/` directories) plus
   `--cpp-headers DIR` trees — a ROS install, a copied `/usr/include`, generated message
   headers: `clang-synth`. `--cpp-arg` adds an argument to every unit.
+- **TypeScript and JavaScript**: each project (`tsconfig.json`/`jsconfig.json`, or the repo
+  as one) is built with the TypeScript compiler in a node worker, and every call, `new` and
+  JSX element the checker binds is an edge: `tsc` (1.0), `tsc-js` (0.97) for plain
+  JavaScript. The compiler is the repo's own `node_modules/typescript`, else `--typescript
+  DIR`/`$REPONITE_TYPESCRIPT`.
+- **Python**: the pyright language server (`--pyright`/`$REPONITE_PYRIGHT`: its package, its
+  langserver script, or a `pyright-langserver`/`basedpyright-langserver` on `$PATH`) is asked
+  where every call goes: `pyright` (0.97). A name assigned once from another (`f = helper`)
+  is followed as `pyright-alias` (0.8), since another module may assign it again. A receiver
+  pyright can only partly type (`Any | T`), a variable or a parameter keeps the inferred edges.
+
+Both need node (`--node`/`$REPONITE_NODE`, default the one on `$PATH`); `--precise-langs
+cpp,ts,py` picks the languages (default all).
+
 What the compiler bound replaces the inferred edge for that call; what it could not bind (a
 dependent call in a template, a call whose argument's type comes from a missing header, a
 call inside a function a framework macro defines) keeps the inferred edge. A call of a
 virtual method through an object also links the overrides the class hierarchy holds, since
-any of them may run. A revision's pinned submodules whose objects are on the machine are
-given to the compiler as headers, not as the repo's own code.
+any of them may run; a call the compiler binds to an abstract method follows the
+[one-implementation rule](#confidence-and-provenance), like an inferred one. A revision's
+pinned submodules whose objects are on the machine are given to the compiler as headers, not
+as the repo's own code. TypeScript and Python results are cached per project by the content
+of every file the compiler read; cached mode never starts node.
 
 **Speed.** Compiling is slow, so it is never the default. Each translation unit's result is
 stored by its source, its compile arguments, the clang version and every file it read —
@@ -780,7 +812,8 @@ proven only if no unit left out seems to define its name.
 ```sh
 reponite index --git v2.3.0 --precise on --cpp-headers /opt/ros/noetic
 reponite index --tags 'v2.*'              # cached: unchanged units reuse v2.3.0's results
-reponite precise status                   # libclang found? store size
+reponite index --precise on --precise-langs ts,py   # TypeScript and Python only
+reponite precise status                   # libclang, node, typescript, pyright found? store size
 reponite precise gc --max-size 2G         # least recently used results removed
 ```
 
@@ -889,11 +922,12 @@ and jumps to any page.
 
 | Page | What it shows |
 |---|---|
-| **Overview** | repos, versions, symbols and files across the fleet; the largest repos, the language mix, how the code is started |
+| **Overview** | an **Ask** box; what changed since the last index (per repo indexed at two or more refs, between its two newest); repos, versions, symbols and files across the fleet; the largest repos, the language mix, how the code is started |
+| **Ask** | one box for a symbol, a question ("what breaks if I change X", "who calls X", "what runs on POST /x", "where does key come from", "why does test X fail"), a route, a config key or a pasted log line; it shows which analysis it will run as you type, and answers with evidence cards — file:line, how sure the index is — linking into the view that shows each (`?as=` overrides the choice) |
 | **Fleet map** | every repo as a node sized by its code, linked by ROS topics and services, HTTP calls, imports and declared dependencies (each kind toggles); click a repo for what it uses and what uses it |
 | **Topics** | every topic, service and action: filter by kind, by "producer ↔ consumer", "cross-repo" or "one side only"; each name drawn as producers → name → consumers with the code line of every endpoint; a fleet **Map** of repos and topics |
 | **Coverage** | per repo, the files stored and skipped, by file kind and skip reason, with examples |
-| **Symbol** | one symbol in tabs — **Overview** (callers and callees with previews and confidence, tests that reach it), **Code** (highlighted, or the whole file with the symbol marked), **Call graph**, **Usages**, **Across versions** (the verdict in every indexed ref) |
+| **Symbol** | one symbol in tabs, each its own URL (`?tab=`) — **Explain**, **Callers & callees**, **Usages**, **Implementations**, **Tests** (with copyable run commands), **History** (commits, and the verdict in every indexed ref) and **Code** (highlighted, every call site marked in the gutter). Each edge carries a badge for how it was resolved — *compiler-proven*, *typed*, *name match* (the only definition of that name the caller can see), *guessed*, *ambiguous* — and the callers list filters by it |
 | **Call graph** | callers flowing in from the left, callees out to the right, 1–3 hops, tests and library calls optional; hover lights a node's calls, click opens a side panel, double-click expands a node's own neighborhood in place |
 | **Links** | every file referenced as data (paths, ids, template includes, config values naming code), drawn per file: what refers to it and what it refers to |
 | **Grep** | literal or regular-expression search of the stored source, grouped by file, linked to the enclosing symbol |
@@ -951,6 +985,29 @@ An unknown symbol is not an error: `search` and `blast_radius` answer `found: fa
 answer empty lists. `compat` answers `400` with the reason as text when the symbol is not at the
 ref, and `file` answers `404` for a path that is not stored. `verify_edit` needs a build with
 the tree-sitter parser and answers `501` without one.
+
+**`/api/v2`** holds the question-shaped analyses. Each calls the same query and JSON formatter
+as the MCP tool of that name, with its defaults, so the answer is byte for byte the tool's: a
+discovery question is fleet-wide unless `repo` is given (its note says which repos were read),
+and a symbol that resolves to nothing answers "did you mean".
+
+| Endpoint | Parameters | Same answer as |
+|---|---|---|
+| `/api/v2/explain` | `target`, `repo`, `ref`, `budget`, `no_tests=true` | `explain` |
+| `/api/v2/context` | `symbol`, `repo`, `ref`, `tests=true` | `context` (with cross-repo dispatch) |
+| `/api/v2/impls` | `base`, `repo`, `ref`, `limit` | `impls` |
+| `/api/v2/tests` | `symbol`, `repo`, `ref` | `tests` |
+| `/api/v2/why` | `symbol`, `repo`, `ref` | `why` (reads git history: no ETag) |
+| `/api/v2/errors` | `q`, `repo`, `ref`, `budget` | `errors` |
+| `/api/v2/logsite` | `line`, `repo`, `ref`, `limit` | `logsite` |
+| `/api/v2/semsearch` | `q`, `repo`, `ref`, `limit` | `semsearch` |
+| `/api/v2/investigate` | `q`, `repo`, `ref`, `budget` | `investigate` |
+| `/api/v2/config` | `key`, `kind`, `repo`, `ref`, `budget` | `config` |
+
+Answers over 1 KB are gzipped when the client accepts it. An answer that depends only on the
+index carries an `ETag` (the request, the ref's commit and manifest, and the store's data
+version), and `If-None-Match` gets `304 Not Modified` until something is re-indexed. Size
+parameters are bounded (graph and grep at 1000).
 
 
 ---

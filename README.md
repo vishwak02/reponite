@@ -25,7 +25,10 @@ reponite is a single binary that indexes your repositories — at as many branch
 commits as you like — and answers questions about the code: what it does, who calls it, how
 it changed between two versions, and what a change will break, across repository
 boundaries. It runs locally, reads git history without checking anything out, and gives
-every answer with the evidence it rests on and a confidence score.
+every answer with the evidence it rests on and a confidence score. Call edges are inferred
+from the code without building it; where a compiler can read the code — Go's type checker,
+and with `--precise on` clang for C/C++, the TypeScript compiler and pyright — its answer is
+used instead, and cached so later indexes cost nothing extra.
 
 You use it from the command line, from an AI agent through MCP, or from a local web
 dashboard.
@@ -140,8 +143,10 @@ deployed system runs. See [Working with many repos](docs/USER_GUIDE.md#working-w
 reponite serve      # http://127.0.0.1:8899 — every registered repository
 ```
 
-A single-page app embedded in the binary: a ⌘K symbol palette across the fleet, a symbol page
-(brief, highlighted source, call graph, usages, behaviour across versions), an expandable
+A single-page app embedded in the binary: an Ask box that takes a question, a symbol, a
+route or a pasted log line and answers with linked evidence, a ⌘K symbol palette across the
+fleet, a symbol page (explain, callers and callees badged by how each was resolved, usages,
+implementations, tests, history, code with every call site marked), an expandable
 call-graph workspace, a WebGL fleet map, ROS topic flows, file links, diff & impact, grep,
 edit verification and index coverage — deep-linkable, light and dark, with no external
 requests. `--refs repo=ref,…` shows each repository at the version a system runs.

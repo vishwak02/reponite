@@ -118,7 +118,16 @@ const (
 	//      module-level aliases of imported attributes only. JS/TS: a class named like its file
 	//      keeps its methods apart. A ref read from git takes the monikers
 	//      of the index.scip committed at its root, as a working tree does.
-	IndexVer = 18
+	//  19: a call through an abstract method (Python ABC or NotImplementedError
+	//      stub, TS abstract, C++ pure virtual, Java abstract/interface)
+	//      resolves to the one implementation the repo has (abstract-single,
+	//      virtual-single), else each override at 0.7, the declaration kept
+	//      at 0.6; a value visibly made of a subclass runs its method. Python
+	//      unions, Annotated, tuples, properties, callable parameters and
+	//      module instances; JS/TS receiver typing; C++ pimpls, local and
+	//      CRTP classes, macros in function bodies, googletest mocks; Go
+	//      test-build variants and explicit generic instantiations.
+	IndexVer = 19
 
 	// GoTarget documents the intended production Go toolchain. The build
 	// sandbox uses 1.18 for stdlib-only verification; external-dependency

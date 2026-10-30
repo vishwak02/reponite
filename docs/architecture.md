@@ -121,12 +121,18 @@ confidence and is part of the edge's identity:
 | Method | Confidence | Basis |
 |---|:---:|---|
 | `go-types` | 1.0 | proven by the Go type checker |
+| `clang-compdb`, `tsc` | 1.0 | bound by clang with the build's own command; by the TypeScript compiler (`--precise`) |
+| `clang-synth`, `tsc-js`, `pyright` | 0.97 | bound by clang with include paths read from the packages; by tsc in plain JavaScript; by pyright |
 | `scip-resolved` | 0.95 | a SCIP moniker two indexers agree on |
 | `name-resolved` | 0.9 | exactly one definition in scope |
-| `receiver-typed` | 0.85 | a C++ member call whose receiver's declared type is known |
+| `receiver-typed` | 0.85 | a member call whose receiver's declared type is known |
+| `abstract-single`, `virtual-single` | the receiver's | the one implementation an abstract-method (or pure virtual) call can run in the repo |
+| `pyright-alias` | 0.8 | pyright followed a name assigned once from another (`f = helper`) |
 | `import-resolved` | 0.75 | the caller's import binding resolves to the target's module root |
 | member call | 0.7 | `obj.f()` with the receiver's type unknown |
+| `abstract-override` | 0.7 | one of several implementations an abstract-method call may run |
 | `virtual-override`, `unresolved-external` | 0.6 | a base-class call reaching overrides; a name defined outside the repo |
+| `abstract-declared`, `declared-type` | 0.6 | the abstract declaration (or annotated base method) a dispatched call names: it never runs, but an implementation outside the repo could |
 | `ambiguous` | 0.5 | several definitions, no way to choose |
 
 **Scale.** Parse trees live in C memory the Go collector cannot see, so each is freed

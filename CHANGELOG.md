@@ -24,6 +24,35 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   newly find, so later indexes of other refs reuse them; the default `--precise cached`
   (also used by `watch` and an MCP server's refresh) never compiles and costs nothing for a
   repo that was never compiled. `precise status` / `precise gc`.
+- **Compiler-exact TypeScript/JavaScript and Python calls**: `--precise on` also builds each
+  TypeScript or JavaScript project with the TypeScript compiler in a node worker (`tsc` 1.0,
+  `tsc-js` 0.97 for plain JavaScript) — the repo's own `node_modules/typescript`, else
+  `--typescript DIR` — and asks the pyright language server where every Python call goes
+  (`pyright` 0.97; a name assigned once from another, `f = helper`, is followed at 0.8 as
+  `pyright-alias`, since another module may assign it again). A call the compiler cannot bind
+  — a variable, a parameter, a receiver whose type is partly unknown — keeps the inferred
+  edge. Results are cached per project by the content of every file read, and cached mode
+  never starts node. `--node`, `--pyright` and `--precise-langs cpp,ts,py` choose the engines
+  and the languages; `precise status` reports every driver.
+- **One answer when the code decides which method runs**: a call through an abstract method
+  (a Python ABC or `raise NotImplementedError` stub, a TypeScript abstract method, a C++ pure
+  virtual, a Java abstract or interface method) whose repo has exactly one concrete
+  implementation the receiver's class can reach resolves to that implementation
+  (`abstract-single`, `virtual-single`) at the receiver's confidence; with several, each is a
+  target at 0.7 (`abstract-override`). The declaration keeps an edge of its own at 0.6
+  (`abstract-declared`) for whoever works on the interface, since an implementation outside
+  the repo (a plugin) could run. A value the code visibly makes of a subclass
+  (`x: Base = Impl()`, a field annotated `Base` set to `Impl()`, a factory whose every return
+  is `Impl()`, a TypeScript `const x: Base = new Impl()`) runs the subclass's method, with the
+  annotation's method kept as `declared-type` 0.6. Compiler-bound calls (clang, tsc, pyright)
+  follow the same rule. Left as a list on purpose: Go and TypeScript interfaces (any object of
+  the right shape satisfies them), Java interfaces a lambda can implement, a concrete C++ base
+  that may itself be created, and a lineage that stops at a library base.
+- **`reponite serve` answers the question-shaped analyses**: `/api/v2/explain`, `context`,
+  `impls`, `tests`, `why`, `errors`, `logsite`, `semsearch`, `investigate` and `config` call
+  the same query and JSON formatter as the MCP tool of that name, byte for byte.
+- **Golden CLI and MCP answers**: a small fixture repo is indexed at two refs and every JSON
+  command and MCP tool is compared byte for byte with `cmd/reponite/testdata/golden`.
 - **Faster answers from a long-running server**: a ref's call graph is decoded once and kept
   (a few refs at a time), symbol lookups and test discovery are indexed, and the store's
   caches are safe across concurrent tool calls and see another process's re-index.
@@ -119,6 +148,28 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   like its file keeps its methods apart from the module's functions. A revision read from git
   takes the monikers of an `index.scip` committed at its root, as a working tree does.
   Reindex to pick it up.
+- **Call edges (IndexVer 19)**: calls through abstract methods resolve as described above
+  (one implementation, or a list). Python: a method whose body only raises
+  `NotImplementedError` is abstract in any class (`...` only in an ABC or Protocol), and an
+  override that only raises it is a target; `Annotated[X, …]`, unions (each member's method),
+  tuple unpacking of a function's return, properties (their getter's return), fields holding
+  a class, `Callable[..., R]` parameters and aliases, `return self` / `return cls(...)`,
+  module-level instances (also imported), fields set from annotated parameters, yield and
+  factory fixtures, `pytest_plugins` fixtures; a test module's helper takes no fixtures; an
+  absolute import no source root resolves is looked up beside the importing script.
+  JS/TS: receivers are typed from annotations, constructed locals, typed collections
+  (`for…of`, `map` callbacks, `Object.values`), class fields and constructor parameter
+  properties, module-level instances and what a function constructs; namespaces passed on
+  through barrels, `export { f as default } from`, `Promise.all([import(…)])`, wrapped
+  components with type arguments, `<_Row>` as a component, `//` inside JSX text.
+  C++: pimpls and out-of-line nested classes, classes defined in a function body, CRTP and
+  template bases with bound arguments, conversion functions, namespace aliases, repo macros
+  used in function bodies (their calls are the function's), googletest `MOCK_METHOD`,
+  `EXPECT_CALL`/`ON_CALL` (a call of the mock's `gmock_f`), `NiceMock<T>`, `MATCHER`; a free
+  function picked by name must take the call's arguments (an argument of a library type never
+  fits a repo enum parameter); a member call on a library class no repo class derives from is
+  external, not a guess by name. Go: generated mocks imported by an external test package are
+  type-checked as test-build variants, and `F[T](x)` is a call. Reindex to pick it up.
 - **`usages`** finds a call made under a renamed import (`import Header from './x'`, a
   barrel's `export { a as b }`): the call graph says the caller calls the target, and the
   one imported name the caller calls that no other callee explains is that call.
@@ -133,6 +184,12 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
   four fifths; library declarations are skipped (parsing cost), test bodies written after a
   googletest macro are read by their braces, and a call clang binds to a definition the run
   did not record (an uninstantiated template member) is undetermined, not counted.
+- **Benchmark truth, round two**: the Python truth adds dispatch edges (a call Jedi resolves
+  to an abstract method runs the concrete overrides of the receiver's class, never through
+  `super()`), retries a call the shared inference state gave up on with a fresh project, and
+  no longer reads a goto onto a parameter as a call; the C++ truth names multi-line
+  `TEST_F` cases and calls through parentheses, and ranks a submodule's include directories by
+  nearness. The scorer reports dispatch-edge recall.
 - **`ximpact`** takes a qualified library target (`requests.get`, `std::move`) and counts
   only that module's calls; a bare name also finds calls stored as `module::name`, which it
   missed. `--format text` added.
@@ -145,6 +202,14 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 
 #### Fixed
 
+- **An index is replaced in one transaction**: `reponite index`, `watch` and an MCP server's
+  background refresh cleared a ref and wrote it back one commit at a time, so a reader saw it
+  half-written, and a refresh the client cut short (the session closing) left the ref empty
+  for good — no files, ruleset 0. Each run now writes in one transaction: readers keep the
+  previous complete index until the new one commits, and an interrupted run changes nothing.
+- **`--precise`**: a submodule directory holding a header named like the C library's
+  (`limits.h`) is never an include path (it hid the system's); members one macro writes on a
+  single line are told apart by name; `((obj).f)(…)`, as `EXPECT_CALL` expands, calls `f`.
 - **Python bare calls keep to the module**: `f()` reaches the module's own `f`, an import
   or a star import (`from m import *`) — never another module's same-named function. A
   module-level alias of an imported module's attribute (`_n, _pct = text.n, text.pct`)
@@ -273,6 +338,21 @@ For the full session-by-session build log, see [PROGRESS.md](PROGRESS.md).
 - **`/api/file`** returns one stored file; **`/api/links`** with no target returns every link
   of the repo.
 - **`make web`** rebuilds the dashboard.
+- **Ask**: the home page's one box takes a symbol, a question ("what breaks if I change X",
+  "who calls X", "what runs on POST /x", "where does key come from"), a route, a config key or
+  a pasted log line, shows which analysis it will run as you type, and answers with evidence
+  cards (file:line, how sure the index is) that link into the view showing them. The home
+  also shows, per repo indexed at two or more refs, what changed between its two newest.
+- **Symbol hub**: Explain, Callers & callees, Usages, Implementations, Tests (with copyable
+  run commands), History and Code tabs, each its own URL. Every edge carries a badge for how
+  it was resolved — compiler-proven, typed, name match, guessed, ambiguous — that filters the
+  list and marks each call site in the code's gutter.
+- **Speed**: every page and heavy library is its own chunk loaded only where used (the shell
+  is about 108 KB gzip); graph layouts run in Web Workers and expanding a node keeps the
+  others in place; assets are served precompressed (brotli/gzip), API answers gzipped,
+  single-line and with ETags (304 when the index has not changed); `serve` has timeouts and
+  bounded limits. CI rebuilds the dashboard and fails when the committed build differs or a
+  page exceeds its size budget; Playwright drives every route in both themes.
 
 ### Large repositories, runtime names, more file types (IndexVer 9–10)
 
