@@ -92,6 +92,24 @@ class FakeClock(Clock):
 class WallClock(Clock):
     def now(self):
         return 1
+
+
+class Model:
+    def update(self):
+        raise NotImplementedError
+
+    def apply(self):
+        self.update()
+
+
+class Disk(Model):
+    def update(self):
+        return 1
+
+
+class Secret(Model):
+    def update(self):
+        raise NotImplementedError("a secret is never updated")
 `,
 		"shop/use.py": `from shop.store import Store, Cache, Feed, Sink, Clock
 
@@ -147,6 +165,12 @@ def test_load(s: Store):
 	if m := use["shop.store.WallClock.now"]; m == MethodAbstractSingle {
 		t.Errorf("a production file's Fake class is a possible target: %v", use)
 	}
+	// an override that only raises NotImplementedError runs (and raises):
+	// two implementations
+	apply := edges["shop.store.Model.apply"]
+	wantMethod(t, apply, "shop.store.Disk.update", MethodAbstractImpl)
+	wantMethod(t, apply, "shop.store.Secret.update", MethodAbstractImpl)
+	wantMethod(t, apply, "shop.store.Model.update", MethodAbstractDecl)
 	// the test caller sees its own double too
 	tl := edges["tests.test_use.test_load"]
 	wantMethod(t, tl, "tests.fakes.MemStore.load", MethodAbstractImpl)

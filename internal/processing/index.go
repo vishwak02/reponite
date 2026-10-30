@@ -363,6 +363,12 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 					x.pyAbstract = map[string]bool{}
 				}
 				x.pyAbstract[qid] = true
+				if c.lang == "python" && c.sym.PyStub == pyStubNotImpl {
+					if x.pyRaises == nil {
+						x.pyRaises = map[string]bool{}
+					}
+					x.pyRaises[qid] = true
+				}
 			}
 		}
 	}

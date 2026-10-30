@@ -225,6 +225,7 @@ type siteIndex struct {
 	types                *typeTable        // C++ classes/fields/bases (nil: none in the ref)
 	classes              *classGraph       // Python/JS/TS classes by module, bases resolved through imports
 	pyAbstract           map[string]bool   // qid -> a Python abstract method: called through its class, its body never runs
+	pyRaises             map[string]bool   // qid -> a Python method whose body only raises NotImplementedError
 	rust                 *rustCrate        // Rust module tree (nil: no Rust in the ref)
 	callerPkg            string
 	callerTest           bool
@@ -415,12 +416,12 @@ func pyAbstractCallees(cls, name, q, method string, conf float64, x siteIndex) [
 	ovs := x.classes.overriders(cls, name, x.nodeSet)
 	var concrete []string
 	for _, o := range ovs {
-		if (x.callerTest || !x.isTest[o]) && !x.pyAbstract[o] {
+		if (x.callerTest || !x.isTest[o]) && x.runs(o) {
 			concrete = append(concrete, o)
 		}
 	}
 	if x.pyAbstract[q] {
-		if impl, ok := pyAbstractSingle(cls, name, x); ok {
+		if impl, ok := pyAbstractSingle(cls, name, q, x); ok {
 			return []query.Callee{
 				{Name: q, ResolutionMethod: MethodAbstractDecl, Confidence: ConfAbstractDecl},
 				{Name: impl, ResolutionMethod: MethodAbstractSingle, Confidence: conf},
@@ -443,15 +444,24 @@ func pyAbstractCallees(cls, name, q, method string, conf float64, x siteIndex) [
 	return out
 }
 
-// pyAbstractSingle is the one concrete method a call of name on an instance
-// of cls (or of a subclass) can run, computed over every class of the repo
+// runs reports whether override o of an abstract method can be what a
+// call runs: not an abstract declaration of its own (@abstractmethod, an
+// ABC's ... stub), though a body that only raises NotImplementedError does
+// run in a subclass that overrides the method with it ("not supported
+// here": the call raises).
+func (x siteIndex) runs(o string) bool {
+	return !x.pyAbstract[o] || x.pyRaises[o]
+}
+
+// pyAbstractSingle is the one concrete method a call of name (declared
+// abstract as q) on an instance of cls (or of a subclass) can run, computed over every class of the repo
 // deriving from cls: each class's own lookup (its MRO), abstract stubs left
 // out (their body never runs), and — for a production caller — test code's
 // classes left out. ok is false when several can run, when a class's lookup
 // is not decided by the repo, when cls is a Protocol (a class implements it
 // without naming it), or when a production file's Mock/Fake/Stub class could
 // be the one (it may well run in production).
-func pyAbstractSingle(cls, name string, x siteIndex) (string, bool) {
+func pyAbstractSingle(cls, name, q string, x siteIndex) (string, bool) {
 	if x.classes.kind[cls] == pyClassProtocol {
 		return "", false
 	}
@@ -461,8 +471,8 @@ func pyAbstractSingle(cls, name string, x siteIndex) (string, bool) {
 	}
 	one := ""
 	for t := range targets {
-		if x.pyAbstract[t] {
-			continue
+		if t == q || !x.runs(t) {
+			continue // the declaration the call names never runs
 		}
 		if !x.callerTest && x.isTest[t] {
 			if !x.testCode[t] {
