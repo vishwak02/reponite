@@ -285,6 +285,7 @@ type jsBinder struct {
 	alts      map[string][]string // values of its unannotated declarations
 	annotated map[string][]string // its annotations
 	assigns   map[string][]string // values assigned to it later ("" unknown)
+	inConst   bool                // walking a const declaration's declarators
 }
 
 func newJSBinder() *jsBinder {
@@ -472,10 +473,25 @@ func (b *jsBinder) node(c content.AST, thisOK bool) {
 	t := c.Type()
 	switch {
 	case jsFunctionNode(t):
+		saved := b.inConst
+		b.inConst = false // its var declarations are not the const's
 		b.function(c, thisOK, "", false)
+		b.inConst = saved
+		return
+	case t == "variable_declaration":
+		saved := b.inConst
+		b.inConst = false
+		b.walk(c, thisOK)
+		b.inConst = saved
 		return
 	case jsBindsThis(t): // a nested class
 		b.walk(c, false)
+		return
+	case t == "lexical_declaration":
+		saved := b.inConst
+		b.inConst = jsIsConst(c)
+		b.walk(c, thisOK)
+		b.inConst = saved
 		return
 	case t == "variable_declarator":
 		b.declarator(c, thisOK)
@@ -517,12 +533,30 @@ func (b *jsBinder) declarator(d content.AST, thisOK bool) {
 	}
 	switch name := k[0].Text(); {
 	case ann != nil:
-		b.annotate(name, jsTypeEnc(ann))
+		enc := jsTypeEnc(ann)
+		if val != nil && strings.HasPrefix(enc, "t:") && b.inConst {
+			if made := jsValueEnc(val, thisOK); strings.HasPrefix(made, "n:") && made[2:] != enc[2:] {
+				// const x: Base = new Impl(): exactly Impl, annotated Base
+				enc = "d:" + enc[2:] + ">" + made[2:]
+			}
+		}
+		b.annotate(name, enc)
 	case val != nil:
 		b.bind(name, jsValueEnc(val, thisOK))
 	default:
 		b.bind(name, jsSkip) // let x; — its assignments say
 	}
+}
+
+// jsIsConst: a const declaration (its names bound once).
+func jsIsConst(decl content.AST) bool {
+	if decl.Type() != "lexical_declaration" {
+		return false
+	}
+	for _, c := range decl.Children() {
+		return c.Type() == "const"
+	}
+	return false
 }
 
 func (b *jsBinder) forIn(f content.AST, thisOK bool) {
@@ -811,6 +845,7 @@ type jsCtx struct {
 type jsVal struct {
 	cls         string
 	exact, coll bool
+	decl        string // the class its annotation names when made of a subclass ("d:")
 }
 
 // jsTyper evaluates receiver expressions against the repo's classes.
@@ -936,6 +971,14 @@ func (t *jsTyper) value(ctx jsCtx, enc string, depth int) (jsVal, bool) {
 			v = jsVal{cls: t.classIn(ctx, alt[2:])}
 		case strings.HasPrefix(alt, "n:"):
 			v = jsVal{cls: t.classIn(ctx, alt[2:]), exact: true}
+		case strings.HasPrefix(alt, "d:"):
+			decl, made, _ := strings.Cut(alt[2:], ">")
+			dk, mk := t.classIn(ctx, decl), t.classIn(ctx, made)
+			if mk != "" && dk != "" && mk != dk && t.classes.derives(mk, dk) {
+				v = jsVal{cls: mk, exact: true, decl: dk}
+			} else {
+				v = jsVal{cls: dk} // not a subclass the repo knows: the annotation
+			}
 		case strings.HasPrefix(alt, "e:"):
 			v = jsVal{cls: t.classIn(ctx, alt[2:]), coll: true}
 		case strings.HasPrefix(alt, "x:"):
@@ -949,6 +992,9 @@ func (t *jsTyper) value(ctx jsCtx, enc string, depth int) (jsVal, bool) {
 		}
 		if i > 0 {
 			v.exact = v.exact && out.exact
+			if v.decl != out.decl {
+				v.decl = ""
+			}
 		}
 		out = v
 	}
@@ -1052,6 +1098,7 @@ func (t *jsTyper) typedSites(ctx jsCtx, qcs []QualifiedCall) ([]CallSite, map[st
 			out = append(out, CallSite{Name: qc.Name, Kind: CallExternal, Scope: "Array"})
 		case v.exact:
 			out = append(out, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassNew + v.cls})
+			out = append(out, declSite(v.decl, v.cls, qc.Name)...)
 		default:
 			out = append(out, CallSite{Name: qc.Name, Kind: CallTyped, Scope: pyClassScope + v.cls})
 		}

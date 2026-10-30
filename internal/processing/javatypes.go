@@ -13,10 +13,20 @@ var javaClassNodes = []string{"class_declaration", "interface_declaration", "enu
 // JavaTypeFacts collects a Java file's classes with their field types and
 // bases, and their methods' return types.
 func JavaTypeFacts(root content.AST) *TypeFacts {
-	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{}}
+	tf := &TypeFacts{Classes: map[string]*ClassFact{}, Aliases: map[string]string{}, Returns: map[string]string{},
+		Members: map[string]bool{}, Pure: map[string]bool{}, Abstract: map[string]bool{}, Anon: map[string]bool{}}
 	var walk func(n content.AST)
 	walk = func(n content.AST) {
 		for _, c := range n.Children() {
+			if c.Type() == "object_creation_expression" && firstChildAny(c, []string{"class_body"}) != nil {
+				// new T() {…}: an anonymous class implementing T
+				if t := javaDeclType(c); t != "" {
+					tf.Anon[t] = true
+				}
+			}
+			if c.Type() == "lambda_expression" || c.Type() == "method_reference" {
+				tf.Anon[javaLambdaMark] = true
+			}
 			if !containsStr(javaClassNodes, c.Type()) {
 				walk(c)
 				continue
@@ -32,6 +42,9 @@ func JavaTypeFacts(root content.AST) *TypeFacts {
 			if cf == nil {
 				cf = &ClassFact{Fields: map[string]string{}}
 				tf.Classes[name] = cf
+			}
+			if c.Type() == "interface_declaration" || javaHasModifier(c, "abstract") {
+				tf.Abstract[name] = true // never an object's own class
 			}
 			for _, k := range c.Children() {
 				switch k.Type() {
@@ -58,6 +71,13 @@ func JavaTypeFacts(root content.AST) *TypeFacts {
 								if t := javaDeclType(m); t != "" {
 									tf.Returns[name+"."+mn.Text()] = t
 								}
+								k := name + "." + mn.Text()
+								tf.Members[k] = true
+								// abstract: declared abstract, or an interface's
+								// method with no body (not default, not static)
+								pure := javaHasModifier(m, "abstract") ||
+									c.Type() == "interface_declaration" && firstChildAny(m, []string{"block"}) == nil && !javaHasModifier(m, "static")
+								setPure(tf, k, pure)
 							}
 						}
 					}
@@ -147,4 +167,20 @@ func javaVarTypes(fn content.AST) map[string]string {
 		}
 	}
 	return vars
+}
+
+// javaLambdaMark in TypeFacts.Anon: the file writes a lambda or a method
+// reference, which implements some functional interface.
+const javaLambdaMark = "\x00lambda"
+
+// javaHasModifier: a declaration's modifiers include mod (abstract, static).
+func javaHasModifier(n content.AST, mod string) bool {
+	if ms := firstChildAny(n, []string{"modifiers"}); ms != nil {
+		for _, m := range ms.Children() {
+			if m.Text() == mod {
+				return true
+			}
+		}
+	}
+	return false
 }

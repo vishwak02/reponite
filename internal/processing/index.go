@@ -115,7 +115,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 	classes := newClassGraph()
 	type classDecl struct {
 		key, path, lang string
-		bases           []QualifiedCall
+		bases, impls    []QualifiedCall
 		byLocal         map[string]ImportBinding
 	}
 	var classDecls []classDecl
@@ -240,7 +240,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 				if s.PyClass != 0 {
 					classes.kind[k] = s.PyClass
 				}
-				classDecls = append(classDecls, classDecl{key: k, path: f.Path, lang: lang, bases: s.Bases, byLocal: byLocal})
+				classDecls = append(classDecls, classDecl{key: k, path: f.Path, lang: lang, bases: s.Bases, impls: s.Implements, byLocal: byLocal})
 			}
 		}
 		// SCIP references are symbol-resolved: the moniker IS the target's
@@ -255,7 +255,7 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 
 	nodeSet := make(map[string]bool, len(order))
 	x := siteIndex{nodeSet: nodeSet, byBase: byBase, byRecv: map[string][]string{},
-		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
+		methods: map[string][]string{}, pkgOfQID: map[string]string{}, isTest: map[string]bool{}, testCode: map[string]bool{}, isMethod: map[string]bool{}, types: newTypeTable(files)}
 	x.arity = arity
 	x.vis = newCppVisibility(files)
 	x.paramTypes = map[string][][]string{}
@@ -306,6 +306,18 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		}
 		x.pkgOfQID[qid] = c.pkg
 		x.isTest[qid] = testish(c.isTest, c.pkg, c.sym.Recv)
+		x.testCode[qid] = testish(c.isTest && !doubleFile(c.path), c.pkg, "")
+		if r := strings.SplitN(c.sym.Recv, "@", 2)[0]; r != "" {
+			if x.classTest == nil {
+				x.classTest, x.classMock = map[string]bool{}, map[string]bool{}
+			}
+			if t, seen := x.classTest[r]; !seen || t {
+				x.classTest[r] = x.testCode[qid]
+			}
+			if x.isTest[qid] && !x.testCode[qid] {
+				x.classMock[r] = true
+			}
+		}
 		if c.sym.Recv != "" && c.sym.Kind != "type" {
 			key := c.sym.Recv + "." + c.sym.Name
 			x.byRecv[key] = append(x.byRecv[key], qid)
@@ -337,12 +349,16 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 		d := d
 		modPkg := func(module string) (string, bool) { return mods.resolve(d.lang, d.path, module) }
 		classes.link(d.key, sitesFromQualified(d.bases, d.byLocal, d.lang, inRepoFor(d.lang, d.path), modPkg), linkReexport)
+		if len(d.impls) > 0 {
+			classes.implement(d.key, sitesFromQualified(d.impls, d.byLocal, d.lang, inRepoFor(d.lang, d.path), modPkg), linkReexport)
+		}
 	}
 	x.classes = classes
 	for _, qid := range order {
-		// a Python method that never runs when called through its class
-		if c := byQID[qid]; c.lang == "python" && c.sym.PyStub != 0 && c.sym.Recv != "" {
-			if k, ok := classes.has(c.pkg, c.sym.Recv); ok && pyAbstract(c.sym.PyStub, classes.abstractKind(k)) {
+		// a Python (or TypeScript abstract) method that never runs when
+		// called through its class
+		if c := byQID[qid]; (c.lang == "python" || langFamily(c.lang) == "js") && c.sym.PyStub != 0 && c.sym.Recv != "" {
+			if k, ok := classes.has(c.pkg, c.sym.Recv); ok && (c.lang != "python" || pyAbstract(c.sym.PyStub, classes.abstractKind(k))) {
 				if x.pyAbstract == nil {
 					x.pyAbstract = map[string]bool{}
 				}

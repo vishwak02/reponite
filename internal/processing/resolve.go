@@ -195,21 +195,25 @@ const (
 
 // siteIndex is what call-site resolution needs about a ref's symbols.
 type siteIndex struct {
-	nodeSet    map[string]bool
-	byBase     map[string][]string // bare name -> qids
-	byRecv     map[string][]string // "Recv.name" -> qids (methods and scoped definitions)
-	methods    map[string][]string // bare name -> qids that are methods (have a receiver)
-	pkgOfQID   map[string]string   // qid -> package (directory)
-	isTest     map[string]bool     // qid -> defined in test code
-	isMethod   map[string]bool     // qid -> defined with a receiver (a method, an associated function)
-	precise    map[string]string   // base -> type-proven qid (Go only; nil here)
-	types      *typeTable          // C++ classes/fields/bases (nil: none in the ref)
-	classes    *classGraph         // Python/JS/TS classes by module, bases resolved through imports
-	pyAbstract map[string]bool     // qid -> a Python abstract method: called through its class, its body never runs
-	rust       *rustCrate          // Rust module tree (nil: no Rust in the ref)
-	callerPkg  string
-	callerTest bool
-	caller     string // the calling definition's qid
+	nodeSet  map[string]bool
+	byBase   map[string][]string // bare name -> qids
+	byRecv   map[string][]string // "Recv.name" -> qids (methods and scoped definitions)
+	methods  map[string][]string // bare name -> qids that are methods (have a receiver)
+	pkgOfQID map[string]string   // qid -> package (directory)
+	isTest   map[string]bool     // qid -> defined in test code (or a Mock/Fake/Stub class's)
+	testCode map[string]bool     // qid -> defined in a test file or directory
+	// classTest: a class (by name) whose every method is in test code;
+	// classMock: one named Mock/Fake/Stub outside test code
+	classTest, classMock map[string]bool
+	isMethod             map[string]bool   // qid -> defined with a receiver (a method, an associated function)
+	precise              map[string]string // base -> type-proven qid (Go only; nil here)
+	types                *typeTable        // C++ classes/fields/bases (nil: none in the ref)
+	classes              *classGraph       // Python/JS/TS classes by module, bases resolved through imports
+	pyAbstract           map[string]bool   // qid -> a Python abstract method: called through its class, its body never runs
+	rust                 *rustCrate        // Rust module tree (nil: no Rust in the ref)
+	callerPkg            string
+	callerTest           bool
+	caller               string // the calling definition's qid
 	// arity: a C/C++ definition's parameter range (min, max; max -1:
 	// variadic); nargs: the call being resolved's argument count plus one
 	arity map[string][2]int
@@ -366,28 +370,46 @@ const (
 
 // A Python call that reaches an abstract method (pyabstract.go) through its
 // class never runs that method's body: the instance is of a concrete
-// subclass. The call's targets are then the concrete overrides the repo
-// defines (MethodAbstractImpl) — one of them runs, which one the code does
-// not say, so above a mere possible override yet below the resolved band —
-// and the abstract declaration stays an edge (who calls through the
-// interface) as MethodAbstractDecl, at a possible override's confidence.
+// subclass. When the repo has exactly one concrete implementation that call
+// can run (abstractSingle), the program text decides it: that method is the
+// target at the receiver's own confidence (MethodAbstractSingle). Otherwise
+// the call's targets are the concrete overrides the repo defines
+// (MethodAbstractImpl) — one of them runs, which one the running program
+// decides, so above a mere possible override yet below the resolved band.
+// Either way the abstract declaration stays an edge (who calls through the
+// interface) as MethodAbstractDecl, at a possible override's confidence: an
+// implementation outside the repo (a plugin) could be the one that runs.
 const (
-	MethodAbstractImpl = "abstract-override"
-	ConfAbstractImpl   = 0.7
-	MethodAbstractDecl = "abstract-declared"
-	ConfAbstractDecl   = ConfOverride
+	MethodAbstractImpl   = "abstract-override"
+	ConfAbstractImpl     = 0.7
+	MethodAbstractDecl   = "abstract-declared"
+	ConfAbstractDecl     = ConfOverride
+	MethodAbstractSingle = "abstract-single"
+	// MethodDeclaredType: the method a value's annotation names when the
+	// code makes the value of a subclass (x: Base = Impl()) whose own
+	// method is the target; kept as a declaration edge
+	MethodDeclaredType = "declared-type"
 )
 
 // pyAbstractCallees are the edges of a Python call of name that reaches
 // method q on class cls with the claim (method, conf): q itself and its
 // overrides, or — when q is abstract and the repo overrides it concretely —
-// those overrides and q as a declaration.
+// those overrides (the one implementation, when only one can run) and q as a
+// declaration.
 func pyAbstractCallees(cls, name, q, method string, conf float64, x siteIndex) []query.Callee {
 	ovs := x.classes.overriders(cls, name, x.nodeSet)
 	var concrete []string
 	for _, o := range ovs {
 		if (x.callerTest || !x.isTest[o]) && !x.pyAbstract[o] {
 			concrete = append(concrete, o)
+		}
+	}
+	if x.pyAbstract[q] {
+		if impl, ok := pyAbstractSingle(cls, name, x); ok {
+			return []query.Callee{
+				{Name: q, ResolutionMethod: MethodAbstractDecl, Confidence: ConfAbstractDecl},
+				{Name: impl, ResolutionMethod: MethodAbstractSingle, Confidence: conf},
+			}
 		}
 	}
 	if !x.pyAbstract[q] || len(concrete) == 0 {
@@ -404,6 +426,41 @@ func pyAbstractCallees(cls, name, q, method string, conf float64, x siteIndex) [
 		out = append(out, query.Callee{Name: o, ResolutionMethod: MethodAbstractImpl, Confidence: ConfAbstractImpl})
 	}
 	return out
+}
+
+// pyAbstractSingle is the one concrete method a call of name on an instance
+// of cls (or of a subclass) can run, computed over every class of the repo
+// deriving from cls: each class's own lookup (its MRO), abstract stubs left
+// out (their body never runs), and — for a production caller — test code's
+// classes left out. ok is false when several can run, when a class's lookup
+// is not decided by the repo, when cls is a Protocol (a class implements it
+// without naming it), or when a production file's Mock/Fake/Stub class could
+// be the one (it may well run in production).
+func pyAbstractSingle(cls, name string, x siteIndex) (string, bool) {
+	if x.classes.kind[cls] == pyClassProtocol {
+		return "", false
+	}
+	targets, decided := x.classes.dispatchTargets(cls, name, x.nodeSet)
+	if !decided {
+		return "", false
+	}
+	one := ""
+	for t := range targets {
+		if x.pyAbstract[t] {
+			continue
+		}
+		if !x.callerTest && x.isTest[t] {
+			if !x.testCode[t] {
+				return "", false // a double defined beside production code
+			}
+			continue
+		}
+		if one != "" && one != t {
+			return "", false
+		}
+		one = t
+	}
+	return one, one != ""
 }
 
 // bareNameSkipsClass: languages whose unqualified call is looked up in the
@@ -513,6 +570,18 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 				}
 				continue
 			}
+			if strings.HasPrefix(s.Scope, pyClassDecl) {
+				// the annotation's method of a value made of a subclass: a
+				// declaration edge (the value's own method is the target)
+				if q, found := x.classes.method(strings.TrimPrefix(s.Scope, pyClassDecl), name, false, x.nodeSet); found {
+					m := MethodDeclaredType
+					if x.pyAbstract[q] {
+						m = MethodAbstractDecl
+					}
+					add(query.Callee{Name: q, ResolutionMethod: m, Confidence: ConfAbstractDecl})
+				}
+				continue
+			}
 			if strings.HasPrefix(s.Scope, pyClassScope) {
 				// a Python value whose class is known: the method its MRO
 				// reaches, and any subclass's override
@@ -563,9 +632,14 @@ func resolveSiteEdgesLang(callerPkg, callerRecv, lang string, sites []CallSite, 
 			// Python or JavaScript: those need self. / this.
 			if callerRecv != "" && (s.Kind == CallSelf || !bareNameSkipsClass[lang]) {
 				if q, ok := pickOne(x.recvDefs(callerRecv, name), x); ok {
-					add(query.Callee{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved})
-					for _, o := range overrides(callerRecv, name, x) {
-						add(o) // this->f() in a base: a subclass's f may run instead
+					cs := append([]query.Callee{{Name: q, ResolutionMethod: MethodResolved, Confidence: ConfResolved}},
+						overrides(callerRecv, name, x)...) // this->f() in a base: a subclass's f may run instead
+					if x.types != nil {
+						// a pure f: the one implementation, when the repo decides it
+						cs = withSingleOverride(cs, typeRecv, name, true, ConfResolved, x)
+					}
+					for _, c := range cs {
+						add(c)
 					}
 					continue
 				}
@@ -870,6 +944,9 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 		}
 	}
 	out = append(out, overrides(cls, name, x)...)
+	if len(out) > 0 && !several {
+		out = withSingleOverride(out, cls, name, false, ConfTyped, x)
+	}
 	if len(out) == 0 && !several && langFamily(lang) == "c" && x.types.open(written) {
 		// a base the class template takes as a parameter may define it
 		return []query.Callee{memberCalleeLang(name, lang, x)}
@@ -880,6 +957,25 @@ func typedCallees(cls, name, lang string, x siteIndex) []query.Callee {
 		out = append(out, query.Callee{Name: cls + "::" + name, ResolutionMethod: MethodExternal, Confidence: ConfExternal})
 	}
 	return out
+}
+
+// withSingleOverride marks, among a virtual call's edges, the one
+// implementation it runs when the repo decides it (singleOverride), at
+// conf; the declared method keeps its edge.
+func withSingleOverride(out []query.Callee, cls, name string, pureOnly bool, conf float64, x siteIndex) []query.Callee {
+	q, ok := singleOverride(cls, name, pureOnly, x)
+	if !ok {
+		return out
+	}
+	for i, c := range out {
+		if c.Name == q {
+			if c.Confidence < conf {
+				out[i] = query.Callee{Name: q, ResolutionMethod: MethodVirtualSingle, Confidence: conf}
+			}
+			return out
+		}
+	}
+	return append(out, query.Callee{Name: q, ResolutionMethod: MethodVirtualSingle, Confidence: conf})
 }
 
 // overrides are the definitions of name on classes deriving from cls.
@@ -895,6 +991,172 @@ func overrides(cls, name string, x siteIndex) []query.Callee {
 		}
 	}
 	return out
+}
+
+// MethodVirtualSingle: the one implementation a C++ virtual (or Java)
+// call through a class can run — the class is abstract, or the method is
+// pure there, and of every class of the repo deriving from it that can be an
+// object's own class, all run the same definition. The declared method
+// keeps its own edge: a subclass outside the repo (a plugin) could run
+// another.
+const MethodVirtualSingle = "virtual-single"
+
+// singleOverride is the one definition a virtual call of name through cls
+// runs (see MethodVirtualSingle); pureOnly asks that name be pure in cls's
+// lineage (a call on this inside the class: the class itself may be the
+// object's while it is constructed). ok is false whenever the repo does not
+// decide it: several definitions, a class whose own class is not known, a
+// class name defined twice, a definition not found, a class a Java lambda or
+// anonymous class may implement, or a production file's Mock/Fake/Stub.
+func singleOverride(cls, name string, pureOnly bool, x siteIndex) (string, bool) {
+	tt := x.types
+	if tt == nil || tt.pure == nil {
+		return "", false // no class declares a pure method: nothing is abstract
+	}
+	cls = tt.canon(cls)
+	if tt.classes[cls] == nil {
+		return "", false
+	}
+	key := func(c string) string {
+		if i := strings.LastIndex(c, "::"); i > 0 && tt.nested[c] {
+			c = c[i+2:]
+		}
+		return c
+	}
+	// the declaration the call names: the first class of cls's lineage
+	// declaring name
+	declPure, found := false, false
+	for _, c := range tt.lineage(cls) {
+		if tt.classes[c] == nil {
+			return "", false // a library base may declare it
+		}
+		if tt.members[key(c)+"."+name] {
+			declPure, found = tt.pure[key(c)+"."+name], true
+			break
+		}
+	}
+	if !found || pureOnly && !declPure {
+		return "", false
+	}
+	inS := map[string]bool{cls: true}
+	all := append([]string{cls}, tt.descendants(cls)...)
+	for _, c := range all {
+		inS[c] = true
+	}
+	one := ""
+	for _, d := range all {
+		leaf := key(d)
+		if len(x.splits[leaf]) > 0 || tt.nestedIn[leaf] > 1 || tt.anon[d] || tt.anon[leaf] {
+			return "", false
+		}
+		if tt.abstractClass(d) {
+			continue // never an object's own class
+		}
+		if !x.callerTest && x.classMock[leaf] {
+			return "", false // a double defined beside production code may run there
+		}
+		if !x.callerTest && x.classTest[leaf] {
+			continue // a test's class: no production object is one
+		}
+		// d's final overrider: the nearest class from d up to cls that
+		// declares name, else the declaration cls inherits
+		owner := ""
+		for _, c := range tt.lineage(d) {
+			if inS[c] && tt.members[key(c)+"."+name] {
+				owner = c
+				break
+			}
+		}
+		if owner == "" {
+			if !declPure {
+				return "", false // cls's own lineage's method runs: see above
+			}
+			continue // the pure declaration is d's: d is abstract
+		}
+		if tt.pure[key(owner)+"."+name] {
+			continue // pure in d: d is abstract
+		}
+		q, ok := pickOne(x.recvDefs(key(owner), name), x)
+		if !ok {
+			return "", false
+		}
+		if !x.callerTest && x.isTest[q] {
+			if !x.testCode[q] {
+				return "", false // a double defined beside production code
+			}
+			continue
+		}
+		if one != "" && one != q {
+			return "", false
+		}
+		one = q
+	}
+	if one != "" && tt.lambdaTarget(cls) {
+		return "", false
+	}
+	return one, one != ""
+}
+
+// abstractClass: no object is of class c itself — a Java interface or
+// abstract class, or a class with a pure method its lineage does not
+// define otherwise nearer to it. A library base's pure methods are not
+// known: such a class counts as concrete (the call then stays a list).
+func (tt *typeTable) abstractClass(c string) bool {
+	if tt.abstract[c] {
+		return true
+	}
+	defined := map[string]bool{} // methods a nearer class defines
+	for _, l := range tt.lineage(c) {
+		k := l
+		if i := strings.LastIndex(k, "::"); i > 0 && tt.nested[k] {
+			k = k[i+2:]
+		}
+		for _, m := range tt.methodsOf(k) {
+			if defined[m] {
+				continue
+			}
+			defined[m] = true
+			if tt.pure[k+"."+m] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// methodsOf are the methods class k declares in its body.
+func (tt *typeTable) methodsOf(k string) []string {
+	if tt.declared == nil {
+		tt.declared = map[string][]string{}
+		for km := range tt.pure {
+			if i := strings.LastIndex(km, "."); i > 0 {
+				tt.declared[km[:i]] = append(tt.declared[km[:i]], km[i+1:])
+			}
+		}
+	}
+	return tt.declared[k]
+}
+
+// lambdaTarget: cls is a Java interface (or abstract class) with one
+// abstract method, and the repo writes lambdas or method references — one
+// of them may implement it without any class naming it.
+func (tt *typeTable) lambdaTarget(cls string) bool {
+	if !tt.abstract[cls] || !tt.anon[javaLambdaMark] {
+		return false
+	}
+	n := 0
+	seen := map[string]bool{}
+	for _, l := range tt.lineage(cls) {
+		for _, m := range tt.methodsOf(l) {
+			if !seen[m] {
+				seen[m] = true
+				if tt.pure[l+"."+m] {
+					n++
+				}
+			}
+		}
+	}
+	return n <= 1
 }
 
 // memberCalleeLang resolves obj.name() with the object's type unknown.
@@ -943,6 +1205,19 @@ func testish(isTest bool, pkg, recv string) bool {
 	}
 	for _, p := range []string{"Mock", "Fake", "Stub"} {
 		if strings.HasPrefix(recv, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// doubleFile: a file named for a test double (mock_x.cpp, fake_x.py,
+// x_stub.h) outside a test directory — its classes may be built by
+// production code (a simulation's stand-in), so they are no test's own.
+func doubleFile(p string) bool {
+	stem := strings.ToLower(strings.TrimSuffix(path.Base(p), path.Ext(p)))
+	for _, w := range []string{"mock", "fake", "stub"} {
+		if strings.Contains(stem, w) {
 			return true
 		}
 	}

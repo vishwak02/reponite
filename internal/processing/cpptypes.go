@@ -72,6 +72,17 @@ type TypeFacts struct {
 	// arguments such a declaration takes: their out-of-line definitions take
 	// fewer than they list, down to that.
 	Defaults map[string]int
+	// Pure are the methods each class declares in its body ("Cls.m"): true
+	// for a pure virtual (virtual f() = 0; a Java abstract or interface
+	// method without a body), false for one declared or defined otherwise
+	Pure map[string]bool
+	// Abstract are the classes that are never an object's own class: a
+	// Java interface or abstract class (a C++ class is abstract by its pure
+	// virtuals, from Pure)
+	Abstract map[string]bool
+	// Anon are the classes and interfaces a Java anonymous class (new T()
+	// {…}) or a lambda may implement where no class names them
+	Anon map[string]bool
 }
 
 // ClassFact is a class's member fields (name -> declared type) and bases.
@@ -381,6 +392,7 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 							cf.Fields[f] = arrayOf(d, t)
 						} else if m := methodDeclName(d); m != "" {
 							tf.Members[name+"."+m] = true
+							setPure(tf, name+"."+m, false)
 							if t != "" {
 								tf.Returns[name+"."+m] = t // in-class method declaration
 							}
@@ -431,6 +443,10 @@ func CppTypeFacts(root content.AST, r LangRules) *TypeFacts {
 					}
 					if cls != "" && m != "" {
 						tf.Members[cls+"."+m] = true
+						if cls == class && firstDescBefore(d, "qualified_identifier", "parameter") == nil {
+							// declared in the class body: virtual f() = 0; is pure
+							setPure(tf, cls+"."+m, firstChildAny(c, []string{"pure_virtual_clause"}) != nil)
+						}
 						if t != "" {
 							tf.Returns[cls+"."+m] = t
 						}
@@ -1337,6 +1353,13 @@ type typeTable struct {
 	// derivedLeaves: every base a repo class names, by its last name
 	// (derivedFrom)
 	derivedLeaves map[string]bool
+	// pure: "Cls.m" declared in Cls's body, true when pure virtual (or a
+	// Java abstract method); abstract: Java interfaces and abstract classes;
+	// anon: Java types an anonymous class or lambda may implement
+	pure     map[string]bool
+	abstract map[string]bool
+	anon     map[string]bool
+	declared map[string][]string // class -> the methods its body declares (methodsOf)
 }
 
 // oneReturn is the return type the declarations of one Cls.m agree on: a
@@ -1372,6 +1395,18 @@ func (tt *typeTable) oneReturn(vs []string) string {
 		return deduced
 	}
 	return out
+}
+
+// setPure records whether a class body's declaration of method k ("Cls.m")
+// is pure: an overload declared otherwise makes it not.
+func setPure(tf *TypeFacts, k string, pure bool) {
+	if tf.Pure == nil {
+		tf.Pure = map[string]bool{}
+	}
+	if prev, ok := tf.Pure[k]; ok && !prev {
+		return
+	}
+	tf.Pure[k] = pure
 }
 
 func newTypeTable(files []ParsedFile) *typeTable {
@@ -1429,6 +1464,27 @@ func newTypeTable(files []ParsedFile) *typeTable {
 		}
 		for k := range f.Types.Members {
 			tt.members[k] = true
+		}
+		for k, v := range f.Types.Pure {
+			if prev, ok := tt.pure[k]; ok && !prev {
+				continue // declared otherwise somewhere: not pure
+			}
+			if tt.pure == nil {
+				tt.pure = map[string]bool{}
+			}
+			tt.pure[k] = v
+		}
+		for k := range f.Types.Abstract {
+			if tt.abstract == nil {
+				tt.abstract = map[string]bool{}
+			}
+			tt.abstract[k] = true
+		}
+		for k := range f.Types.Anon {
+			if tt.anon == nil {
+				tt.anon = map[string]bool{}
+			}
+			tt.anon[k] = true
 		}
 		if isCSource(f.Path) && len(f.Types.Aliases) > 0 {
 			tt.fileAliases[f.Path] = f.Types.Aliases
