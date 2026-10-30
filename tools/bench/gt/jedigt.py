@@ -166,6 +166,7 @@ def main():
     # class's bases.
     classes = {}  # (rel, class line) -> {"kind", "methods": name -> (line, stub), "bases": [place]}
     method_at = {}  # (rel, def line) -> (class place, name)
+    base_projects = {}
     for rel in sorted(defs_by_path):
         full = os.path.join(root, rel)
         try:
@@ -197,7 +198,12 @@ def main():
                 else:
                     continue
                 if script is None:
-                    script = jedi.Script(src, path=full, project=project_for(rel))
+                    # a project of its own: this pass's queries must not
+                    # change what the call pass's shared project resolves
+                    d = os.path.dirname(full)
+                    if d not in base_projects:
+                        base_projects[d] = fresh_project(project_for(rel))
+                    script = jedi.Script(src, path=full, project=base_projects[d])
                 try:
                     bts = script.goto(bl, bc, follow_imports=True)
                 except Exception:
@@ -347,7 +353,12 @@ def main():
                 if hit is None or not is_abstract(*hit):
                     continue
                 if recv is False:
-                    recv = receiver(script, f)
+                    # a script of its own: these queries must not change
+                    # what the shared script resolves for later calls
+                    d = os.path.dirname(full)
+                    if d not in base_projects:
+                        base_projects[d] = fresh_project(project)
+                    recv = receiver(jedi.Script(src, path=full, project=base_projects[d]), f)
                 if recv == "bound":
                     continue  # super().m(), Cls.m(obj): that body runs
                 for op in concrete_overrides(tp, t.line, recv):
