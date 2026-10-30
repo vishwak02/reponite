@@ -407,3 +407,27 @@ class Fax(Backend):
 		t.Errorf("the bound method and the override: %v", got)
 	}
 }
+
+// A TypeScript call tsc binds to an abstract method is dispatched (an
+// abstract method has no body; super.f() of one does not compile): its one
+// implementation is the resolved target, the method a declaration edge.
+func TestPreciseTSAbstractCall(t *testing.T) {
+	files := map[string]string{
+		"src/shape.ts": `export abstract class Shape {
+  abstract area(): number;
+}
+export class Circle extends Shape {
+  area(): number { return 3; }
+}
+export function total(s: Shape): number {
+  return s.area();
+}
+`,
+	}
+	call := PreciseCall{CallerPath: "src/shape.ts", CallerLine: 8, Name: "area", CalleePath: "src/shape.ts", CalleeLine: 2, CalleeName: "area"}
+	units := []PreciseUnit{{Method: "tsc", Conf: 1.0, Calls: []PreciseCall{call}}}
+	got := indexAndEdgesWith(t, files, units)["src.shape.total"]
+	if got["src.shape.Shape.area"] != MethodAbstractDecl || got["src.shape.Circle.area"] != MethodAbstractSingle {
+		t.Errorf("the abstract bound method and its one implementation: %v", got)
+	}
+}

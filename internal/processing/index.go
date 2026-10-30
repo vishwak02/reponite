@@ -756,6 +756,18 @@ func indexFiles(w Indexer, repo, ref string, normVer int, files []ParsedFile, pr
 			callees = resolveEdges(c.pkg, c.sym.Callees, nodeSet, byBase, nil)
 		}
 		if pc := proven[qid]; pc != nil && c.lang != "go" {
+			for _, qs := range pc.Bound {
+				for _, q := range qs {
+					if _, virt := pc.Virtual[q]; !virt && x.pyAbstract[q] && langFamily(byQID[q].lang) == "js" {
+						// a TS abstract or interface method has no body: a call
+						// bound to it is dispatched (super.f() of one does not compile)
+						if pc.Virtual == nil {
+							pc.Virtual = map[string][]string{}
+						}
+						pc.Virtual[q] = nil
+					}
+				}
+			}
 			callees = mergePrecise(callees, pc, nodeSet, func(q string, recvs []string) []query.Callee {
 				classOf := func(m string) string { return strings.SplitN(byQID[m].sym.Recv, "@", 2)[0] }
 				if m := byQID[q]; hasClassBases(m.lang) {
